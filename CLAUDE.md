@@ -8,14 +8,15 @@ M0 (scaffold) and M1 (deterministic OpenAlex retrieval) are done. M2 onwards is 
 
 Layout:
 - `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`).
-- `src/research_agent/cli.py`: Typer app (`show-config`, `search`).
+- `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`).
+- `src/research_agent/credentials.py`: loads and validates `OPENALEX_API_KEY` / `OPENAI_API_KEY` (see Credentials).
 - `src/research_agent/retrieval/`: no-LLM retrieval. `openalex.py` (pure `build_params`/`parse_work`/`parse_response` plus `OpenAlexClient`), `abstract.py`, `cache.py`, `models.py` (`Work`, `SearchResult`), `errors.py` (all derive from `RetrievalError`).
 - `configs/base.toml`, `tests/` (with `tests/fixtures/openalex_search.json`, a trimmed recorded response).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
 
 Retrieval facts (verified against the live API on 2026-11-01):
-- The API key is optional. Set `OPENALEX_API_KEY` to use one; it is sent as an `Authorization: Bearer` header and never put in URLs or cache keys. Without a key the daily budget is small ($0.10, shared per IP).
+- The OpenAlex key is optional (small anonymous budget without it: $0.10/day shared per IP). It is sent as an `Authorization: Bearer` header and never put in URLs or cache keys; the client also redacts it from server error text.
 - Searches use `search.title_and_abstract`, so every match is on text we can show as evidence.
 - Retry only on 429/500/502/503/504 and network errors. A `Retry-After` longer than `max_backoff_seconds` fails fast.
 - `SearchResult` carries `total_count`, `missing_abstract_count`, `skipped_records` and `from_cache` so later milestones can report limitations.
@@ -61,6 +62,13 @@ Ask the user before the milestone that needs each one. Do not assume.
 - Deployment platform (not needed before M5 is done).
 - Whether to get a free OpenAlex API key (recommended before heavy use; needed for the larger daily budget). The code works without one.
 - The evaluation question set and who curates it (needed for M4).
+
+## Credentials
+
+- Keys come from the process environment first, then a local `.env` (copy `.env.example`; `.env` is git-ignored, `.env.example` is tracked and holds placeholders only). Use `--env-file` or `RESEARCH_AGENT_ENV_FILE` to point at a file elsewhere.
+- `load_credentials` never mutates `os.environ`. Keys are held in `Secret`, whose `repr`/`str`/format are redacted; call `.reveal()` only at the point of use. Errors name the variable, never the value.
+- Never read, print or commit `.env`. To check configuration use `uv run research-agent check-credentials` (offline: presence and format only; it cannot tell if a provider accepts the key).
+- `OPENAI_API_KEY` is validated but not used until M2. Which OpenAI model to use is still an open decision.
 
 ## Architecture
 
@@ -142,6 +150,7 @@ uv run ruff check .
 uv run research-agent --help
 uv run research-agent show-config                       # reads configs/base.toml from the cwd
 uv run research-agent search "land cover" --year-from 2022 -n 3 --abstracts
+uv run research-agent check-credentials                 # never prints key values
 uv run pytest -m live                                   # opt-in: one real OpenAlex call
 ```
 

@@ -14,7 +14,6 @@ from research_agent.retrieval import (
     OpenAlexClient,
     RateLimitError,
 )
-from research_agent.retrieval.openalex import api_key_from_env
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "openalex_search.json"
@@ -266,10 +265,9 @@ def test_non_json_200_is_api_error(cfg):
         make_client(cfg, server).search("q")
 
 
-def test_api_key_from_env(monkeypatch):
-    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
-    assert api_key_from_env() is None
-    monkeypatch.setenv("OPENALEX_API_KEY", "  ")
-    assert api_key_from_env() is None
-    monkeypatch.setenv("OPENALEX_API_KEY", " abc ")
-    assert api_key_from_env() == "abc"
+def test_server_echoing_the_api_key_is_redacted_from_errors(cfg):
+    server = FakeServer(httpx.Response(401, json={"error": "invalid key secret-key-123"}))
+    with pytest.raises(AuthError) as excinfo:
+        make_client(cfg, server, api_key="secret-key-123").search("q")
+    assert "secret-key-123" not in str(excinfo.value)
+    assert "<redacted>" in str(excinfo.value)

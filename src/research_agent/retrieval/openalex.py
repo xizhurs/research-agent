@@ -7,7 +7,6 @@ I/O in ``OpenAlexClient`` so they can be tested without a network.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 from collections.abc import Callable
@@ -29,7 +28,6 @@ from research_agent.retrieval.models import SearchResult, Work
 
 log = logging.getLogger(__name__)
 
-API_KEY_ENV_VAR = "OPENALEX_API_KEY"
 MAX_QUERY_CHARS = 500
 MIN_YEAR, MAX_YEAR = 1500, 2100
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -41,11 +39,6 @@ SELECT_FIELDS = (
     "id,doi,title,publication_year,publication_date,cited_by_count,"
     "authorships,primary_location,type,language,abstract_inverted_index"
 )
-
-
-def api_key_from_env() -> str | None:
-    key = os.environ.get(API_KEY_ENV_VAR, "").strip()
-    return key or None
 
 
 def build_params(query: str, year_from: int | None, per_page: int) -> dict[str, str]:
@@ -190,6 +183,7 @@ class OpenAlexClient:
         self._limits = limits
         self._http = http_client or httpx.Client(timeout=config.timeout_seconds)
         self._owns_http = http_client is None
+        self._api_key = api_key
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._sleep = sleep
         self._cache = ResponseCache(config.cache_dir, config.cache_ttl_days, now=now)
@@ -266,11 +260,11 @@ class OpenAlexClient:
                         raise ApiError("OpenAlex returned a non-JSON 200 response") from exc
                 if status in AUTH_STATUS:
                     raise AuthError(f"OpenAlex rejected the request ({status}): "
-                                    f"{_error_detail(response)}")
+                                    f"{self._detail(response)}")
                 if status not in RETRYABLE_STATUS:
-                    raise ApiError(f"OpenAlex returned {status}: {_error_detail(response)}")
+                    raise ApiError(f"OpenAlex returned {status}: {self._detail(response)}")
 
-                last_failure = f"HTTP {status}: {_error_detail(response)}"
+                last_failure = f"HTTP {status}: {self._detail(response)}"
                 retry_after = _retry_after_seconds(response)
                 if retry_after is not None and retry_after > cfg.max_backoff_seconds:
                     # E.g. daily budget exhausted: waiting is pointless, fail fast.
@@ -293,6 +287,11 @@ class OpenAlexClient:
             )
             self._sleep(wait)
         raise ApiError(f"OpenAlex request failed: {last_failure}")  # pragma: no cover
+
+    def _detail(self, response: httpx.Response) -> str:
+        """Server-provided error text, with the API key removed in case the server echoes it."""
+        detail = _error_detail(response)
+        return detail.replace(self._api_key, "<redacted>") if self._api_key else detail
 
     def _backoff(self, attempt: int) -> float:
         cfg = self._config

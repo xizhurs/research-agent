@@ -9,7 +9,7 @@ from research_agent.retrieval.errors import (
     RetrievalError,
 )
 from research_agent.retrieval.models import SearchResult, Work
-from research_agent.retrieval.openalex import OpenAlexClient, api_key_from_env
+from research_agent.retrieval.openalex import OpenAlexClient
 
 __all__ = [
     "ApiError",
@@ -21,5 +21,4 @@ __all__ = [
     "RetrievalError",
     "SearchResult",
     "Work",
-    "api_key_from_env",
 ]

@@ -21,6 +21,10 @@ def test_show_config_prints_limits():
     assert "max_iterations = 5" in result.output
 
 
+def search_args(tmp_path):
+    return ["search", "q", "--config", str(BASE), "--env-file", str(tmp_path / "none")]
+
+
 class FakeClient:
     """Stands in for OpenAlexClient so CLI tests make no network calls."""
 
@@ -41,7 +45,7 @@ class FakeClient:
         return self.outcome
 
 
-def test_search_prints_results(monkeypatch):
+def test_search_prints_results(monkeypatch, tmp_path):
     work = Work(
         id="W1", url="https://openalex.org/W1", title="A title", year=2024, date=None,
         authors=("A", "B", "C", "D"), venue=None, doi=None, type=None, language=None,
@@ -49,17 +53,17 @@ def test_search_prints_results(monkeypatch):
     )
     FakeClient.outcome = SearchResult("q", None, (work,), 10, 0, from_cache=True)
     monkeypatch.setattr("research_agent.cli.OpenAlexClient", FakeClient)
-    result = runner.invoke(app, ["search", "q", "--config", str(BASE)])
+    result = runner.invoke(app, search_args(tmp_path))
     assert result.exit_code == 0
     assert "1 of 10 matches (cache)" in result.output
     assert "[W1] A title (2024) - A, B, C et al." in result.output
     assert "1 result(s) have no abstract" in result.output
 
 
-def test_search_retrieval_error_exits_nonzero(monkeypatch):
+def test_search_retrieval_error_exits_nonzero(monkeypatch, tmp_path):
     FakeClient.outcome = RateLimitError("budget exhausted")
     monkeypatch.setattr("research_agent.cli.OpenAlexClient", FakeClient)
-    result = runner.invoke(app, ["search", "q", "--config", str(BASE)])
+    result = runner.invoke(app, search_args(tmp_path))
     assert result.exit_code == 1
     assert "budget exhausted" in result.output
 

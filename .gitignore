@@ -10,3 +10,5 @@ dist/
 # Never commit secrets or local env files
 secrets/
 .env
+.env.*
+!.env.example
