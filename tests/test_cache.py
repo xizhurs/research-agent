@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+
+import pytest
 
 from research_agent.retrieval.cache import ResponseCache, cache_key
 
@@ -40,3 +43,26 @@ def test_corrupt_entry_is_a_miss_and_logged(tmp_path, caplog):
     with caplog.at_level("WARNING"):
         assert cache.get("k") is None
     assert "unreadable cache entry" in caplog.text
+
+
+@pytest.mark.parametrize("error", [NotADirectoryError, PermissionError, OSError])
+def test_unexpected_os_errors_on_lookup_are_a_logged_miss(tmp_path, monkeypatch, caplog, error):
+    """Linux raises NotADirectoryError (not FileNotFoundError) when a parent path is a file.
+
+    Simulated here so the behaviour is checked on every OS, not only on Linux CI.
+    """
+    cache = ResponseCache(tmp_path, ttl_days=1)
+
+    def failing_stat(self, *args, **kwargs):
+        raise error(20, "simulated")
+
+    monkeypatch.setattr(Path, "stat", failing_stat)
+    with caplog.at_level("WARNING"):
+        assert cache.get("k") is None
+    assert "cannot read cache entry" in caplog.text
+
+
+def test_plain_missing_entry_is_a_silent_miss(tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        assert ResponseCache(tmp_path, ttl_days=1).get("absent") is None
+    assert caplog.text == ""
