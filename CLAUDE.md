@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Planning only. No code exists yet, and the repository is not under git. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
+M0 (scaffold) is done. M1 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
 
-Folders currently present, all empty: `memory/`, `projects/`, `scripts/`, `secrets/`. Never read, print or commit anything in `secrets/`.
+Layout: `src/research_agent/` (`config.py` typed TOML config, `cli.py` Typer app), `configs/base.toml` (resource limits), `tests/`. `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
 
 ## Working principles
 
@@ -122,13 +122,13 @@ Behavioural contract for answers:
 
 ## Commands
 
-No code exists yet, so these are the intended commands and have not been run.
-
 ```bash
 uv sync
 uv run pytest
-uv run pytest path/to/test_file.py::test_name   # single test
+uv run pytest tests/test_config.py::test_missing_file   # single test
 uv run ruff check .
+uv run research-agent --help
+uv run research-agent show-config                       # reads configs/base.toml from the cwd
 ```
 
 ## Milestones

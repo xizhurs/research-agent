@@ -1,0 +1,10 @@
+# Single source of truth for resource limits. Do not hardcode these values in code.
+
+[limits]
+max_iterations = 5
+max_search_calls = 3
+results_per_search = 8
+abstract_max_chars = 1200
+max_context_tokens = 6000
+max_output_tokens = 800
+max_total_tokens = 20000
