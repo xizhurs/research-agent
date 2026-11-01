@@ -41,6 +41,11 @@ class ResponseCache:
             age = self._now() - path.stat().st_mtime
         except FileNotFoundError:
             return None
+        except OSError as exc:
+            # The cache is best-effort: NotADirectoryError (Linux, when a parent of the cache
+            # path is a file), PermissionError, etc. are a miss, never a crash.
+            log.warning("cannot read cache entry %s: %s", path.name, exc)
+            return None
         if age > self._ttl_seconds:
             log.info("cache entry expired: %s", path.name)
             return None
