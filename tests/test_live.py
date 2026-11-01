@@ -71,3 +71,27 @@ def test_openai_tool_calling_round_trip():
     assert second.stop_reason == "stop"
     assert second.tool_calls == ()
     assert "4217" in (second.text or "")
+
+
+def test_agent_end_to_end_stays_within_limits(tmp_path):
+    """Real model + real OpenAlex: one question answered within every configured limit."""
+    from research_agent.agent import ResearchAgent
+
+    root = Path(__file__).resolve().parents[1]
+    base = load_config(root / "configs" / "base.toml")
+    cfg = replace(base, openalex=replace(base.openalex, cache_dir=tmp_path))
+    creds = load_credentials(root / ".env")
+    if creds.openai_api_key is None:
+        pytest.skip("OPENAI_API_KEY is not set")
+    key = creds.openalex_api_key
+    llm = OpenAIClient.from_credentials(cfg.llm, creds)
+    with OpenAlexClient(cfg.openalex, cfg.limits, api_key=key.reveal() if key else None) as search:
+        result = ResearchAgent(llm, search, cfg.limits).run(
+            "Which deep learning methods are used for crop type mapping from Sentinel-2?"
+        )
+    stats, limits = result.stats, cfg.limits
+    assert 1 <= stats.iterations <= limits.max_iterations
+    assert stats.search_calls <= limits.max_search_calls
+    assert result.answer.claims
+    assert result.answer.limitations
+    print(result.answer, stats)

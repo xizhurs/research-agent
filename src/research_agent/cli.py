@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import TextIO
 
 import typer
 
+from research_agent.agent import AgentResult, ResearchAgent
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.credentials import (
     DEFAULT_ENV_FILE,
@@ -17,6 +20,7 @@ from research_agent.credentials import (
     Credentials,
     load_credentials,
 )
+from research_agent.llm import LLMError, OpenAIClient
 from research_agent.retrieval import OpenAlexClient, RetrievalError
 
 DEFAULT_CONFIG = Path("configs/base.toml")
@@ -42,9 +46,21 @@ def _credentials_or_exit(env_file: Path) -> Credentials:
 app = typer.Typer(help="GeoAI / remote-sensing literature research agent.", no_args_is_help=True)
 
 
+def make_output_safe(*streams: TextIO) -> None:
+    """Never crash on characters the console cannot encode (paper titles contain many).
+
+    Windows consoles often use a legacy code page; unencodable characters become '?'.
+    """
+    for stream in streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")
+
+
 @app.callback()
 def main() -> None:
     """GeoAI / remote-sensing literature research agent."""
+    make_output_safe(sys.stdout, sys.stderr)
 
 
 @app.command("show-config")
@@ -117,8 +133,62 @@ def check_credentials(
         + ("set" if creds.openalex_api_key else "not set (optional; small anonymous budget)")
     )
     typer.echo(
-        f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed from M2)")
+        f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed for ask)")
     )
     if require_openai and creds.openai_api_key is None:
         typer.echo(f"error: {OPENAI_VAR} is required but not set", err=True)
         raise typer.Exit(code=1)
+
+
+def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
+    """Build the real clients and answer one question. Patched out in CLI tests."""
+    key = creds.openalex_api_key
+    llm = OpenAIClient.from_credentials(cfg.llm, creds)
+    with OpenAlexClient(
+        cfg.openalex, cfg.limits, api_key=key.reveal() if key else None
+    ) as search:
+        return ResearchAgent(llm, search, cfg.limits).run(question)
+
+
+@app.command("ask")
+def ask(
+    question: str = typer.Argument(..., help="A GeoAI / remote-sensing literature question."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Answer a question from OpenAlex literature, within the configured resource limits."""
+    if not question.strip():
+        typer.echo("error: question must not be empty", err=True)
+        raise typer.Exit(code=1)
+    cfg = _load_or_exit(config)
+    creds = _credentials_or_exit(env_file)
+    try:
+        creds.require_openai_key()
+        result = _run_agent(cfg, creds, question)
+    except (CredentialError, LLMError, RetrievalError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    answer = result.answer
+    typer.echo("Answer")
+    for claim in answer.claims:
+        cites = f" [{', '.join(claim.sources)}]" if claim.sources else ""
+        typer.echo(f"- ({claim.kind}) {claim.text}{cites}")
+    if answer.references:
+        typer.echo("\nReferences")
+        for w in answer.references:
+            authors = ", ".join(w.authors[:3]) + (" et al." if len(w.authors) > 3 else "")
+            title = w.title or "(no title)"
+            typer.echo(f"[{w.id}] {authors or 'n/a'} ({w.year or 'n.d.'}). {title}.")
+            typer.echo(f"    {w.venue + '. ' if w.venue else ''}{w.doi or w.url}")
+    typer.echo("\nLimitations")
+    for limitation in answer.limitations or ("(none reported)",):
+        typer.echo(f"- {limitation}")
+    stats = result.stats
+    typer.echo(
+        f"\nrun: {stats.iterations} model turn(s), {stats.search_calls} search(es), "
+        f"{stats.total_tokens} tokens ({stats.input_tokens} in / {stats.output_tokens} out)",
+        err=True,
+    )

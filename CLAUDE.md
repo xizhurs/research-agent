@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-M0 (scaffold), M1 (deterministic OpenAlex retrieval) and M2 (LLM interface, stub, OpenAI adapter) are done. M3 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
+M0 (scaffold), M1 (deterministic OpenAlex retrieval), M2 (LLM interface, stub, OpenAI adapter) and M3 (agent loop, budgets, structured answer) are done. M4 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
 
 Layout:
 - `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`, `[llm]`).
-- `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`).
+- `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`, `ask`).
 - `src/research_agent/credentials.py`: loads and validates `OPENALEX_API_KEY` / `OPENAI_API_KEY` (see Credentials).
 - `src/research_agent/retrieval/`: no-LLM retrieval. `openalex.py` (pure `build_params`/`parse_work`/`parse_response` plus `OpenAlexClient`), `abstract.py`, `cache.py`, `models.py` (`Work`, `SearchResult`), `errors.py` (all derive from `RetrievalError`).
 - `src/research_agent/llm/`: `types.py` (provider-agnostic `LLMClient` protocol, messages, `ToolSpec`/`ToolCall`, `LLMResponse`, `Usage`), `stub.py` (`StubLLMClient`, `text_response`, `tool_call_response`), `openai_client.py` (Responses-API adapter), `errors.py` (all derive from `LLMError`).
+- `src/research_agent/agent/`: `loop.py` (`ResearchAgent`), `budget.py` (`Budget`, `estimate_tokens`), `tools.py` (`search_literature` schema, argument parsing, result formatting), `answer.py` (`Answer`, `Claim`, JSON parsing, fallback), `prompt.py`.
 - `configs/base.toml`, `tests/` (with `tests/fixtures/openalex_search.json`, a trimmed recorded response).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -25,6 +26,15 @@ LLM facts (verified live on 2026-11-01):
 - Auth errors deliberately omit the server text (it can contain a masked key fragment). Invalid tool-call JSON raises `LLMResponseError`; the M3 loop decides how to handle it.
 - Use `StubLLMClient` for all agent-loop tests; it raises `AssertionError` if called more often than scripted.
 - The OpenAI SDK (3.x) uses `httpx2`, not `httpx`; mock the SDK object (`responses.create`), not the transport.
+
+Agent facts (M3):
+- `ResearchAgent(llm, search, limits).run(question)` returns `AgentResult(answer, stats)`. It depends only on the `LLMClient` protocol and a `LiteratureSearch` (anything with `OpenAlexClient.search`'s signature), so tests use `StubLLMClient` and a fake search.
+- Caps enforced in code: at most `max_iterations` model calls; the last allowed call (or any call once searches or tokens run out) is made with `allow_tools=False`; searches beyond `max_search_calls` are refused (every tool call ID still gets a result); retrieved text is cut to `max_context_tokens` (estimated at 4 chars per token) in relevance order, and works the model never saw are not citable. Every limit hit adds a sentence to `Answer.limitations`.
+- The token cap is predictive: a tool turn runs only if there is room for it and for a final call of similar size. The final call is always made, so actual usage can exceed `max_total_tokens`; that is reported as a limitation.
+- The final answer is JSON text (`claims` with `kind` evidence/interpretation and `sources`, plus `limitations`). If the model ignores the format, `build_answer` returns an unstructured interpretation with an explicit limitation instead of crashing.
+- References are built from retrieved works, never from model text. Cited IDs that were not retrieved are kept as given in `Claim.sources` and are NOT rejected yet (M4).
+- Failures: `InvalidQueryError` and bad tool arguments go back to the model and cost no search; other `RetrievalError`s cost a search and add a limitation; `AuthError` and `LLMError` abort the run.
+- Terminal output can contain characters the console cannot encode; the CLI replaces them with `?` instead of crashing.
 
 Retrieval facts (verified against the live API on 2026-11-01):
 - The OpenAlex key is optional (small anonymous budget without it: $0.10/day shared per IP). It is sent as an `Authorization: Bearer` header and never put in URLs or cache keys; the client also redacts it from server error text.
@@ -160,6 +170,7 @@ uv run ruff check .
 uv run research-agent --help
 uv run research-agent show-config                       # reads configs/base.toml from the cwd
 uv run research-agent search "land cover" --year-from 2022 -n 3 --abstracts
+uv run research-agent ask "Which deep learning methods are used for crop type mapping?"
 uv run research-agent check-credentials                 # never prints key values
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
@@ -173,7 +184,7 @@ Each milestone is done only when its success criteria are met and verified by ru
 | M0 | Scaffold: `pyproject.toml`, config loading, CLI skeleton | `uv sync`, `uv run pytest` and `uv run ruff check .` pass; CLI `--help` runs |
 | M1 | OpenAlex `search_literature` tool with disk cache | Fixture-based tests pass; abstracts reconstructed and truncated correctly; a cache hit makes no network call |
 | M2 (done) | `LLMClient` interface, stub client, first real adapter | Stub-based tests pass; the adapter makes one tool-calling round trip (live, opt-in) |
-| M3 | Agent loop with budgets and structured `Answer` | Iteration and search caps are enforced in tests; forced finalisation works |
+| M3 (done) | Agent loop with budgets and structured `Answer` | Iteration and search caps are enforced in tests; forced finalisation works |
 | M4 | Citation validation, limitations reporting, evaluation set | Unretrieved citations are rejected; every answer carries limitations; the evaluation set runs |
 | M5 | Hardening: logging, cost reporting, error handling | Failures give clear messages and non-zero exit codes; token and search counts are reported per run |
 
