@@ -1,0 +1,2603 @@
+{
+ "meta": {
+  "count": 2057,
+  "page": 1,
+  "per_page": 3,
+  "cost_usd": 0.001
+ },
+ "results": [
+  {
+   "id": "https://openalex.org/W4388333579",
+   "doi": "https://doi.org/10.3390/s23218966",
+   "title": "Land Use and Land Cover Classification Meets Deep Learning: A Review",
+   "publication_year": 2023,
+   "publication_date": "2023-11-03",
+   "cited_by_count": 127,
+   "authorships": [
+    {
+     "author_position": "first",
+     "author": {
+      "id": "https://openalex.org/A5018898809",
+      "display_name": "Shengyu Zhao",
+      "orcid": "https://orcid.org/0000-0001-9850-823X",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-9850-823X"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I167027274",
+       "display_name": "Nanjing Forestry University",
+       "ror": "https://ror.org/03m96p165",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Shengyu Zhao",
+     "raw_affiliation_strings": [
+      "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5102575615",
+      "display_name": "Kaiwen Tu",
+      "orcid": null,
+      "observed_orcids": []
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I167027274",
+       "display_name": "Nanjing Forestry University",
+       "ror": "https://ror.org/03m96p165",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Kaiwen Tu",
+     "raw_affiliation_strings": [
+      "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5104193183",
+      "display_name": "Shutong Ye",
+      "orcid": null,
+      "observed_orcids": []
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I167027274",
+       "display_name": "Nanjing Forestry University",
+       "ror": "https://ror.org/03m96p165",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Shutong Ye",
+     "raw_affiliation_strings": [
+      "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": null,
+      "display_name": "Hao Tang",
+      "orcid": null,
+      "observed_orcids": []
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I167027274",
+       "display_name": "Nanjing Forestry University",
+       "ror": "https://ror.org/03m96p165",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Hao Tang",
+     "raw_affiliation_strings": [
+      "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5026093524",
+      "display_name": "Yaocong Hu",
+      "orcid": "https://orcid.org/0000-0001-9332-7528",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-9332-7528",
+       "https://orcid.org/0009-0007-2328-3049"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I70908550",
+       "display_name": "Anhui Polytechnic University",
+       "ror": "https://ror.org/041sj0284",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I70908550"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Yaocong Hu",
+     "raw_affiliation_strings": [
+      "School of Electrical Engineering, Anhui Polytechnic University, Wuhu 241000, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Electrical Engineering, Anhui Polytechnic University, Wuhu 241000, China",
+       "institution_ids": [
+        "https://openalex.org/I70908550"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "last",
+     "author": {
+      "id": "https://openalex.org/A5045231545",
+      "display_name": "Chao Xie",
+      "orcid": "https://orcid.org/0000-0001-7542-1270",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-7542-1270",
+       "https://orcid.org/0000-0001-9314-6946"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I167027274",
+       "display_name": "Nanjing Forestry University",
+       "ror": "https://ror.org/03m96p165",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": true,
+     "raw_author_name": "Chao Xie",
+     "raw_affiliation_strings": [
+      "College of Landscape Architecture, Nanjing Forestry University, Nanjing 210037, China",
+      "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0001-7542-1270",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "College of Landscape Architecture, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      },
+      {
+       "raw_affiliation_string": "College of Mechanical and Electronic Engineering, Nanjing Forestry University, Nanjing 210037, China",
+       "institution_ids": [
+        "https://openalex.org/I167027274"
+       ]
+      }
+     ]
+    }
+   ],
+   "primary_location": {
+    "id": "doi:10.3390/s23218966",
+    "doi": "https://doi.org/10.3390/s23218966",
+    "is_oa": true,
+    "landing_page_url": "https://doi.org/10.3390/s23218966",
+    "pdf_url": "https://www.mdpi.com/1424-8220/23/21/8966/pdf?version=1699091888",
+    "source": {
+     "id": "https://openalex.org/S101949793",
+     "display_name": "Sensors",
+     "issn_l": "1424-8220",
+     "issn": [
+      "1424-8220"
+     ],
+     "is_oa": true,
+     "is_in_doaj": true,
+     "is_core": true,
+     "listed_in": [
+      "anvur-scientific",
+      "cwts-core",
+      "doaj",
+      "jufo-1",
+      "medline",
+      "norway-1",
+      "poland-100",
+      "russia-white-list-1",
+      "vabb-shw"
+     ],
+     "host_organization": "https://openalex.org/P4310310987",
+     "host_organization_name": "Multidisciplinary Digital Publishing Institute",
+     "host_organization_lineage": [
+      "https://openalex.org/P4310310987"
+     ],
+     "host_organization_lineage_names": [
+      "Multidisciplinary Digital Publishing Institute"
+     ],
+     "type": "journal"
+    },
+    "license": "cc-by",
+    "license_id": "https://openalex.org/licenses/cc-by",
+    "version": "publishedVersion",
+    "is_accepted": true,
+    "is_published": true,
+    "raw_source_name": "Sensors",
+    "raw_type": "journal-article"
+   },
+   "type": "review",
+   "language": "en",
+   "abstract_inverted_index": {
+    "As": [
+     0
+    ],
+    "one": [
+     1
+    ],
+    "of": [
+     2,
+     6,
+     31,
+     37,
+     44,
+     51,
+     99,
+     124,
+     135,
+     147,
+     151,
+     166,
+     189,
+     232
+    ],
+    "the": [
+     3,
+     41,
+     45,
+     49,
+     85,
+     97,
+     120,
+     141,
+     148,
+     229
+    ],
+    "important": [
+     4,
+     56
+    ],
+    "components": [
+     5,
+     150
+    ],
+    "Earth": [
+     7
+    ],
+    "observation": [
+     8
+    ],
+    "technology,": [
+     9,
+     102
+    ],
+    "land": [
+     10,
+     13,
+     52,
+     66
+    ],
+    "use": [
+     11
+    ],
+    "and": [
+     12,
+     39,
+     48,
+     65,
+     77,
+     122,
+     160,
+     175,
+     185,
+     208,
+     219
+    ],
+    "cover": [
+     14,
+     33
+    ],
+    "(LULC)": [
+     15
+    ],
+    "image": [
+     16
+    ],
+    "classification": [
+     17,
+     87,
+     172,
+     195,
+     218
+    ],
+    "plays": [
+     18
+    ],
+    "an": [
+     19
+    ],
+    "essential": [
+     20
+    ],
+    "role.": [
+     21
+    ],
+    "It": [
+     22,
+     54
+    ],
+    "uses": [
+     23
+    ],
+    "remote": [
+     24,
+     70,
+     103
+    ],
+    "sensing": [
+     25,
+     71,
+     104
+    ],
+    "techniques": [
+     26
+    ],
+    "to": [
+     27,
+     96
+    ],
+    "classify": [
+     28
+    ],
+    "specific": [
+     29
+    ],
+    "categories": [
+     30
+    ],
+    "ground": [
+     32
+    ],
+    "as": [
+     34
+    ],
+    "a": [
+     35,
+     132
+    ],
+    "means": [
+     36
+    ],
+    "analyzing": [
+     38
+    ],
+    "understanding": [
+     40
+    ],
+    "natural": [
+     42
+    ],
+    "attributes": [
+     43
+    ],
+    "Earth's": [
+     46
+    ],
+    "surface": [
+     47
+    ],
+    "state": [
+     50
+    ],
+    "use.": [
+     53
+    ],
+    "provides": [
+     55
+    ],
+    "information": [
+     57
+    ],
+    "for": [
+     58,
+     119,
+     170,
+     178
+    ],
+    "applications": [
+     59
+    ],
+    "in": [
+     60,
+     193
+    ],
+    "environmental": [
+     61
+    ],
+    "protection,": [
+     62
+    ],
+    "urban": [
+     63
+    ],
+    "planning,": [
+     64
+    ],
+    "resource": [
+     67
+    ],
+    "management.": [
+     68
+    ],
+    "However,": [
+     69
+    ],
+    "images": [
+     72
+    ],
+    "are": [
+     73
+    ],
+    "usually": [
+     74
+    ],
+    "high-dimensional": [
+     75
+    ],
+    "data": [
+     76,
+     105
+    ],
+    "have": [
+     78,
+     112
+    ],
+    "limited": [
+     79,
+     223
+    ],
+    "available": [
+     80
+    ],
+    "labeled": [
+     81
+    ],
+    "samples,": [
+     82
+    ],
+    "so": [
+     83
+    ],
+    "performing": [
+     84
+    ],
+    "LULC": [
+     86,
+     125,
+     137,
+     171,
+     194,
+     217,
+     234
+    ],
+    "task": [
+     88
+    ],
+    "faces": [
+     89
+    ],
+    "great": [
+     90
+    ],
+    "challenges.": [
+     91
+    ],
+    "In": [
+     92,
+     127
+    ],
+    "recent": [
+     93
+    ],
+    "years,": [
+     94
+    ],
+    "due": [
+     95
+    ],
+    "emergence": [
+     98
+    ],
+    "deep": [
+     100,
+     110,
+     154,
+     190
+    ],
+    "learning": [
+     101,
+     111,
+     155,
+     191
+    ],
+    "processing": [
+     106,
+     220
+    ],
+    "methods": [
+     107
+    ],
+    "based": [
+     108
+    ],
+    "on": [
+     109,
+     228
+    ],
+    "achieved": [
+     113
+    ],
+    "remarkable": [
+     114
+    ],
+    "results,": [
+     115
+    ],
+    "bringing": [
+     116
+    ],
+    "new": [
+     117
+    ],
+    "possibilities": [
+     118
+    ],
+    "research": [
+     121
+    ],
+    "development": [
+     123,
+     231
+    ],
+    "classification.": [
+     126,
+     235
+    ],
+    "this": [
+     128
+    ],
+    "paper,": [
+     129
+    ],
+    "we": [
+     130
+    ],
+    "present": [
+     131
+    ],
+    "systematic": [
+     133
+    ],
+    "review": [
+     134,
+     188
+    ],
+    "deep-learning-based": [
+     136,
+     233
+    ],
+    "classification,": [
+     138
+    ],
+    "mainly": [
+     139
+    ],
+    "covering": [
+     140
+    ],
+    "following": [
+     142
+    ],
+    "five": [
+     143,
+     152
+    ],
+    "aspects:": [
+     144
+    ],
+    "(1)": [
+     145
+    ],
+    "introduction": [
+     146
+    ],
+    "main": [
+     149
+    ],
+    "typical": [
+     153
+    ],
+    "networks,": [
+     156
+    ],
+    "how": [
+     157
+    ],
+    "they": [
+     158
+    ],
+    "work,": [
+     159
+    ],
+    "their": [
+     161
+    ],
+    "unique": [
+     162
+    ],
+    "benefits;": [
+     163
+    ],
+    "(2)": [
+     164
+    ],
+    "summary": [
+     165
+    ],
+    "two": [
+     167
+    ],
+    "baseline": [
+     168
+    ],
+    "datasets": [
+     169
+    ],
+    "(pixel-level,": [
+     173
+    ],
+    "patch-level)": [
+     174
+    ],
+    "performance": [
+     176
+    ],
+    "metrics": [
+     177
+    ],
+    "evaluating": [
+     179
+    ],
+    "different": [
+     180
+    ],
+    "models": [
+     181
+    ],
+    "(OA,": [
+     182
+    ],
+    "AA,": [
+     183
+    ],
+    "F1,": [
+     184
+    ],
+    "MIOU);": [
+     186
+    ],
+    "(3)": [
+     187
+    ],
+    "strategies": [
+     192
+    ],
+    "studies,": [
+     196
+    ],
+    "including": [
+     197
+    ],
+    "convolutional": [
+     198
+    ],
+    "neural": [
+     199,
+     210
+    ],
+    "networks": [
+     200,
+     206,
+     211
+    ],
+    "(CNNs),": [
+     201
+    ],
+    "autoencoders": [
+     202
+    ],
+    "(AEs),": [
+     203
+    ],
+    "generative": [
+     204
+    ],
+    "adversarial": [
+     205
+    ],
+    "(GANs),": [
+     207
+    ],
+    "recurrent": [
+     209
+    ],
+    "(RNNs);": [
+     212
+    ],
+    "(4)": [
+     213
+    ],
+    "challenges": [
+     214
+    ],
+    "faced": [
+     215
+    ],
+    "by": [
+     216
+    ],
+    "schemes": [
+     221
+    ],
+    "under": [
+     222
+    ],
+    "training": [
+     224
+    ],
+    "samples;": [
+     225
+    ],
+    "(5)": [
+     226
+    ],
+    "outlooks": [
+     227
+    ],
+    "future": [
+     230
+    ]
+   }
+  },
+  {
+   "id": "https://openalex.org/W4379984088",
+   "doi": "https://doi.org/10.1109/tgrs.2023.3284671",
+   "title": "Extended Vision Transformer (ExViT) for Land Use and Land Cover Classification: A Multimodal Deep Learning Framework",
+   "publication_year": 2023,
+   "publication_date": "2023-01-01",
+   "cited_by_count": 399,
+   "authorships": [
+    {
+     "author_position": "first",
+     "author": {
+      "id": "https://openalex.org/A5013885739",
+      "display_name": "Jing Tao Yao",
+      "orcid": "https://orcid.org/0000-0003-1301-9758",
+      "observed_orcids": [
+       "https://orcid.org/0000-0003-1301-9758",
+       "https://orcid.org/0000-0002-8936-2600"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I19820366",
+       "display_name": "Chinese Academy of Sciences",
+       "ror": "https://ror.org/034t30j35",
+       "country_code": "CN",
+       "type": "government",
+       "lineage": [
+        "https://openalex.org/I19820366"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210137199",
+       "display_name": "Aerospace Information Research Institute",
+       "ror": "https://ror.org/0419fj215",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Jing Yao",
+     "raw_affiliation_strings": [
+      "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0003-1301-9758",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China",
+       "institution_ids": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5100389658",
+      "display_name": "Bing Zhang",
+      "orcid": "https://orcid.org/0000-0001-7311-9844",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-7311-9844"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I19820366",
+       "display_name": "Chinese Academy of Sciences",
+       "ror": "https://ror.org/034t30j35",
+       "country_code": "CN",
+       "type": "government",
+       "lineage": [
+        "https://openalex.org/I19820366"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210137199",
+       "display_name": "Aerospace Information Research Institute",
+       "ror": "https://ror.org/0419fj215",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210165038",
+       "display_name": "University of Chinese Academy of Sciences",
+       "ror": "https://ror.org/05qbk4x57",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210165038"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Bing Zhang",
+     "raw_affiliation_strings": [
+      "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China",
+      "College of Resources and Environment, University of Chinese Academy of Sciences, Beijing, China"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0001-7311-9844",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China",
+       "institution_ids": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      },
+      {
+       "raw_affiliation_string": "College of Resources and Environment, University of Chinese Academy of Sciences, Beijing, China",
+       "institution_ids": [
+        "https://openalex.org/I4210165038"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5100354331",
+      "display_name": "Chenyu Li",
+      "orcid": "https://orcid.org/0000-0002-1687-9676",
+      "observed_orcids": [
+       "https://orcid.org/0000-0002-1687-9676"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I76569877",
+       "display_name": "Southeast University",
+       "ror": "https://ror.org/04ct4d772",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I76569877"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Chenyu Li",
+     "raw_affiliation_strings": [
+      "School of Mathematics, Southeast University, Nanjing, China"
+     ],
+     "raw_orcid": null,
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Mathematics, Southeast University, Nanjing, China",
+       "institution_ids": [
+        "https://openalex.org/I76569877"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5075013625",
+      "display_name": "Danfeng Hong",
+      "orcid": "https://orcid.org/0000-0002-3212-9584",
+      "observed_orcids": [
+       "https://orcid.org/0000-0002-3212-9584"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I19820366",
+       "display_name": "Chinese Academy of Sciences",
+       "ror": "https://ror.org/034t30j35",
+       "country_code": "CN",
+       "type": "government",
+       "lineage": [
+        "https://openalex.org/I19820366"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210137199",
+       "display_name": "Aerospace Information Research Institute",
+       "ror": "https://ror.org/0419fj215",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ],
+     "countries": [
+      "CN"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Danfeng Hong",
+     "raw_affiliation_strings": [
+      "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0002-3212-9584",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China",
+       "institution_ids": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "last",
+     "author": {
+      "id": "https://openalex.org/A5106124934",
+      "display_name": "Jocelyn Chanussot",
+      "orcid": "https://orcid.org/0000-0003-4817-2875",
+      "observed_orcids": [
+       "https://orcid.org/0000-0003-4817-2875"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I106785703",
+       "display_name": "Institut polytechnique de Grenoble",
+       "ror": "https://ror.org/05sbt2524",
+       "country_code": "FR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I106785703",
+        "https://openalex.org/I899635006"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I1294671590",
+       "display_name": "Centre National de la Recherche Scientifique",
+       "ror": "https://ror.org/02feahw73",
+       "country_code": "FR",
+       "type": "government",
+       "lineage": [
+        "https://openalex.org/I1294671590"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I19820366",
+       "display_name": "Chinese Academy of Sciences",
+       "ror": "https://ror.org/034t30j35",
+       "country_code": "CN",
+       "type": "government",
+       "lineage": [
+        "https://openalex.org/I19820366"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210124956",
+       "display_name": "GIPSA-Lab",
+       "ror": "https://ror.org/02wrme198",
+       "country_code": "FR",
+       "type": "facility",
+       "lineage": [
+        "https://openalex.org/I106785703",
+        "https://openalex.org/I1294671590",
+        "https://openalex.org/I4210124956",
+        "https://openalex.org/I899635006"
+       ]
+      },
+      {
+       "id": "https://openalex.org/I4210137199",
+       "display_name": "Aerospace Information Research Institute",
+       "ror": "https://ror.org/0419fj215",
+       "country_code": "CN",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ],
+     "countries": [
+      "CN",
+      "FR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Jocelyn Chanussot",
+     "raw_affiliation_strings": [
+      "CNRS, Grenoble INP, GIPSA-Laboratory, Universit&#x00E9; Grenoble Alpes, Grenoble, France",
+      "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0003-4817-2875",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "CNRS, Grenoble INP, GIPSA-Laboratory, Universit&#x00E9; Grenoble Alpes, Grenoble, France",
+       "institution_ids": [
+        "https://openalex.org/I106785703",
+        "https://openalex.org/I1294671590",
+        "https://openalex.org/I4210124956"
+       ]
+      },
+      {
+       "raw_affiliation_string": "Aerospace Information Research Institute, Chinese Academy of Sciences, Beijing, China",
+       "institution_ids": [
+        "https://openalex.org/I19820366",
+        "https://openalex.org/I4210137199"
+       ]
+      }
+     ]
+    }
+   ],
+   "primary_location": {
+    "id": "doi:10.1109/tgrs.2023.3284671",
+    "doi": "https://doi.org/10.1109/tgrs.2023.3284671",
+    "is_oa": false,
+    "landing_page_url": "https://doi.org/10.1109/tgrs.2023.3284671",
+    "pdf_url": null,
+    "source": {
+     "id": "https://openalex.org/S111326731",
+     "display_name": "IEEE Transactions on Geoscience and Remote Sensing",
+     "issn_l": "0196-2892",
+     "issn": [
+      "0196-2892",
+      "1558-0644"
+     ],
+     "is_oa": false,
+     "is_in_doaj": false,
+     "is_core": true,
+     "listed_in": [
+      "anvur-scientific",
+      "ccf-b",
+      "cwts-core",
+      "dongbi-b",
+      "jufo-3",
+      "norway-2",
+      "poland-200",
+      "russia-white-list-1",
+      "vabb-shw"
+     ],
+     "host_organization": "https://openalex.org/P4310319808",
+     "host_organization_name": "Institute of Electrical and Electronics Engineers",
+     "host_organization_lineage": [
+      "https://openalex.org/P4310319808"
+     ],
+     "host_organization_lineage_names": [
+      "Institute of Electrical and Electronics Engineers"
+     ],
+     "type": "journal"
+    },
+    "license": null,
+    "license_id": null,
+    "version": "publishedVersion",
+    "is_accepted": true,
+    "is_published": true,
+    "raw_source_name": "IEEE Transactions on Geoscience and Remote Sensing",
+    "raw_type": "journal-article"
+   },
+   "type": "article",
+   "language": "en",
+   "abstract_inverted_index": {
+    "The": [
+     0,
+     256
+    ],
+    "recent": [
+     1
+    ],
+    "success": [
+     2
+    ],
+    "of": [
+     3,
+     14,
+     22,
+     56,
+     88,
+     118,
+     167,
+     175,
+     262
+    ],
+    "attention": [
+     4,
+     44,
+     156
+    ],
+    "mechanism-driven": [
+     5
+    ],
+    "deep": [
+     6,
+     71,
+     105
+    ],
+    "models,": [
+     7
+    ],
+    "like": [
+     8
+    ],
+    "Vision": [
+     9
+    ],
+    "Transformer": [
+     10,
+     241
+    ],
+    "(ViT)": [
+     11
+    ],
+    "as": [
+     12,
+     82
+    ],
+    "one": [
+     13
+    ],
+    "the": [
+     15,
+     37,
+     57,
+     86,
+     172,
+     208
+    ],
+    "most": [
+     16
+    ],
+    "representative,": [
+     17
+    ],
+    "has": [
+     18
+    ],
+    "intrigued": [
+     19
+    ],
+    "a": [
+     20,
+     68,
+     154,
+     191
+    ],
+    "wave": [
+     21
+    ],
+    "advanced": [
+     23
+    ],
+    "research": [
+     24
+    ],
+    "to": [
+     25,
+     29,
+     45,
+     131,
+     140,
+     231,
+     250
+    ],
+    "explore": [
+     26
+    ],
+    "their": [
+     27,
+     147
+    ],
+    "adaptation": [
+     28
+    ],
+    "broader": [
+     30
+    ],
+    "domains.": [
+     31
+    ],
+    "However,": [
+     32
+    ],
+    "current": [
+     33
+    ],
+    "Transformer-based": [
+     34
+    ],
+    "approaches": [
+     35
+    ],
+    "in": [
+     36,
+     52,
+     163,
+     178,
+     248
+    ],
+    "remote": [
+     38
+    ],
+    "sensing": [
+     39
+    ],
+    "(RS)": [
+     40
+    ],
+    "community": [
+     41
+    ],
+    "pay": [
+     42
+    ],
+    "more": [
+     43
+    ],
+    "single-modality": [
+     46
+    ],
+    "data,": [
+     47,
+     219,
+     230
+    ],
+    "which": [
+     48,
+     126
+    ],
+    "might": [
+     49
+    ],
+    "lose": [
+     50
+    ],
+    "expandability": [
+     51
+    ],
+    "making": [
+     53
+    ],
+    "full": [
+     54,
+     192
+    ],
+    "use": [
+     55,
+     90
+    ],
+    "ever-growing": [
+     58
+    ],
+    "multimodal": [
+     59,
+     70,
+     111,
+     203
+    ],
+    "Earth": [
+     60
+    ],
+    "observation": [
+     61
+    ],
+    "data.": [
+     62
+    ],
+    "To": [
+     63
+    ],
+    "this": [
+     64,
+     263
+    ],
+    "end,": [
+     65
+    ],
+    "we": [
+     66
+    ],
+    "propose": [
+     67
+    ],
+    "novel": [
+     69
+    ],
+    "learning": [
+     72
+    ],
+    "framework": [
+     73
+    ],
+    "by": [
+     74,
+     158,
+     190
+    ],
+    "extending": [
+     75
+    ],
+    "conventional": [
+     76
+    ],
+    "ViT": [
+     77
+    ],
+    "with": [
+     78,
+     115,
+     122,
+     223
+    ],
+    "minimal": [
+     79
+    ],
+    "modifications,": [
+     80
+    ],
+    "abbreviated": [
+     81
+    ],
+    "ExViT,": [
+     83
+    ],
+    "aiming": [
+     84
+    ],
+    "at": [
+     85,
+     270
+    ],
+    "task": [
+     87
+    ],
+    "land": [
+     89,
+     92
+    ],
+    "and": [
+     91,
+     135,
+     181,
+     213,
+     216,
+     220,
+     225,
+     259
+    ],
+    "cover": [
+     93
+    ],
+    "classification.": [
+     94
+    ],
+    "Unlike": [
+     95
+    ],
+    "common": [
+     96
+    ],
+    "stems": [
+     97
+    ],
+    "that": [
+     98,
+     233
+    ],
+    "adopt": [
+     99
+    ],
+    "either": [
+     100
+    ],
+    "linear": [
+     101
+    ],
+    "patch": [
+     102
+    ],
+    "projection": [
+     103
+    ],
+    "or": [
+     104,
+     242
+    ],
+    "regional": [
+     106
+    ],
+    "embedder,": [
+     107
+    ],
+    "our": [
+     108,
+     234
+    ],
+    "approach": [
+     109
+    ],
+    "processes": [
+     110
+    ],
+    "RS": [
+     112,
+     164,
+     204
+    ],
+    "image": [
+     113
+    ],
+    "patches": [
+     114
+    ],
+    "parallel": [
+     116
+    ],
+    "branches": [
+     117
+    ],
+    "position-shared": [
+     119
+    ],
+    "ViTs": [
+     120
+    ],
+    "extended": [
+     121
+    ],
+    "separable": [
+     123
+    ],
+    "convolution": [
+     124
+    ],
+    "modules,": [
+     125
+    ],
+    "offers": [
+     127
+    ],
+    "an": [
+     128
+    ],
+    "economical": [
+     129
+    ],
+    "solution": [
+     130
+    ],
+    "leverage": [
+     132
+    ],
+    "both": [
+     133
+    ],
+    "spatial": [
+     134,
+     161
+    ],
+    "modality-specific": [
+     136
+    ],
+    "channel": [
+     137
+    ],
+    "information.": [
+     138
+    ],
+    "Furthermore,": [
+     139
+    ],
+    "promote": [
+     141
+    ],
+    "information": [
+     142
+    ],
+    "exchange": [
+     143
+    ],
+    "across": [
+     144
+    ],
+    "heterogeneous": [
+     145
+    ],
+    "modalities,": [
+     146
+    ],
+    "tokenized": [
+     148
+    ],
+    "embeddings": [
+     149
+    ],
+    "are": [
+     150
+    ],
+    "then": [
+     151
+    ],
+    "fused": [
+     152
+    ],
+    "through": [
+     153
+    ],
+    "cross-modality": [
+     155
+    ],
+    "module": [
+     157
+    ],
+    "exploiting": [
+     159
+    ],
+    "pixel-level": [
+     160
+    ],
+    "correlation": [
+     162
+    ],
+    "scenes.": [
+     165
+    ],
+    "Both": [
+     166
+    ],
+    "these": [
+     168
+    ],
+    "modifications": [
+     169
+    ],
+    "significantly": [
+     170
+    ],
+    "improve": [
+     171
+    ],
+    "discriminative": [
+     173
+    ],
+    "ability": [
+     174
+    ],
+    "classification": [
+     176
+    ],
+    "tokens": [
+     177
+    ],
+    "each": [
+     179
+    ],
+    "modality": [
+     180
+    ],
+    "thus": [
+     182
+    ],
+    "further": [
+     183
+    ],
+    "performance": [
+     184
+    ],
+    "increase": [
+     185
+    ],
+    "can": [
+     186
+    ],
+    "be": [
+     187,
+     266
+    ],
+    "finally": [
+     188
+    ],
+    "attained": [
+     189
+    ],
+    "tokens-based": [
+     193
+    ],
+    "decision-level": [
+     194
+    ],
+    "fusion": [
+     195
+    ],
+    "module.": [
+     196
+    ],
+    "We": [
+     197
+    ],
+    "conduct": [
+     198
+    ],
+    "extensive": [
+     199
+    ],
+    "experiments": [
+     200
+    ],
+    "on": [
+     201,
+     240
+    ],
+    "two": [
+     202
+    ],
+    "benchmark": [
+     205
+    ],
+    "datasets,": [
+     206
+    ],
+    "i.e.,": [
+     207
+    ],
+    "Houston2013": [
+     209
+    ],
+    "dataset": [
+     210,
+     222
+    ],
+    "containing": [
+     211
+    ],
+    "hyperspectral": [
+     212,
+     224
+    ],
+    "light": [
+     214
+    ],
+    "detection": [
+     215
+    ],
+    "ranging": [
+     217
+    ],
+    "(LiDAR)": [
+     218
+    ],
+    "Berlin": [
+     221
+    ],
+    "synthetic": [
+     226
+    ],
+    "aperture": [
+     227
+    ],
+    "radar": [
+     228
+    ],
+    "(SAR)": [
+     229
+    ],
+    "demonstrate": [
+     232
+    ],
+    "ExViT": [
+     235
+    ],
+    "outperforms": [
+     236
+    ],
+    "concurrent": [
+     237
+    ],
+    "competitors": [
+     238
+    ],
+    "based": [
+     239
+    ],
+    "convolutional": [
+     243
+    ],
+    "neural": [
+     244
+    ],
+    "network": [
+     245
+    ],
+    "(CNN)": [
+     246
+    ],
+    "backbones,": [
+     247
+    ],
+    "addition": [
+     249
+    ],
+    "several": [
+     251
+    ],
+    "competitive": [
+     252
+    ],
+    "machine": [
+     253
+    ],
+    "learning-based": [
+     254
+    ],
+    "models.": [
+     255
+    ],
+    "source": [
+     257
+    ],
+    "codes": [
+     258
+    ],
+    "investigated": [
+     260
+    ],
+    "datasets": [
+     261
+    ],
+    "work": [
+     264
+    ],
+    "will": [
+     265
+    ],
+    "made": [
+     267
+    ],
+    "publicly": [
+     268
+    ],
+    "available": [
+     269
+    ],
+    "https://github.com/jingyao16/ExViT.": [
+     271
+    ]
+   }
+  },
+  {
+   "id": "https://openalex.org/W4323022345",
+   "doi": "https://doi.org/10.1109/lgrs.2023.3251652",
+   "title": "Interpretable Deep Learning Framework for Land Use and Land Cover Classification in Remote Sensing Using SHAP",
+   "publication_year": 2023,
+   "publication_date": "2023-01-01",
+   "cited_by_count": 224,
+   "authorships": [
+    {
+     "author_position": "first",
+     "author": {
+      "id": "https://openalex.org/A5025477678",
+      "display_name": "Αναστάσιος Τέμενος",
+      "orcid": "https://orcid.org/0000-0001-8027-4471",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-8027-4471"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I174458059",
+       "display_name": "National Technical University of Athens",
+       "ror": "https://ror.org/03cx6bg69",
+       "country_code": "GR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ],
+     "countries": [
+      "GR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Anastasios Temenos",
+     "raw_affiliation_strings": [
+      "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0001-8027-4471",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece",
+       "institution_ids": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5030451270",
+      "display_name": "Nikos Temenos",
+      "orcid": "https://orcid.org/0000-0002-1763-9930",
+      "observed_orcids": [
+       "https://orcid.org/0000-0002-1763-9930"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I174458059",
+       "display_name": "National Technical University of Athens",
+       "ror": "https://ror.org/03cx6bg69",
+       "country_code": "GR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ],
+     "countries": [
+      "GR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Nikos Temenos",
+     "raw_affiliation_strings": [
+      "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0002-1763-9930",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece",
+       "institution_ids": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5075548646",
+      "display_name": "Maria Kaselimi",
+      "orcid": "https://orcid.org/0000-0001-5944-0455",
+      "observed_orcids": [
+       "https://orcid.org/0000-0001-5944-0455"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I174458059",
+       "display_name": "National Technical University of Athens",
+       "ror": "https://ror.org/03cx6bg69",
+       "country_code": "GR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ],
+     "countries": [
+      "GR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Maria Kaselimi",
+     "raw_affiliation_strings": [
+      "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0001-5944-0455",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece",
+       "institution_ids": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "middle",
+     "author": {
+      "id": "https://openalex.org/A5102914203",
+      "display_name": "Anastasios D. Doulamis",
+      "orcid": "https://orcid.org/0000-0002-0612-5889",
+      "observed_orcids": [
+       "https://orcid.org/0000-0002-0612-5889"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I174458059",
+       "display_name": "National Technical University of Athens",
+       "ror": "https://ror.org/03cx6bg69",
+       "country_code": "GR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ],
+     "countries": [
+      "GR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Anastasios Doulamis",
+     "raw_affiliation_strings": [
+      "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0002-0612-5889",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece",
+       "institution_ids": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ]
+    },
+    {
+     "author_position": "last",
+     "author": {
+      "id": "https://openalex.org/A5033117805",
+      "display_name": "Nikolaos D. Doulamis",
+      "orcid": "https://orcid.org/0000-0002-4064-8990",
+      "observed_orcids": [
+       "https://orcid.org/0000-0002-4064-8990"
+      ]
+     },
+     "institutions": [
+      {
+       "id": "https://openalex.org/I174458059",
+       "display_name": "National Technical University of Athens",
+       "ror": "https://ror.org/03cx6bg69",
+       "country_code": "GR",
+       "type": "education",
+       "lineage": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ],
+     "countries": [
+      "GR"
+     ],
+     "is_corresponding": false,
+     "raw_author_name": "Nikolaos Doulamis",
+     "raw_affiliation_strings": [
+      "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece"
+     ],
+     "raw_orcid": "https://orcid.org/0000-0002-4064-8990",
+     "affiliations": [
+      {
+       "raw_affiliation_string": "School of Rural Surveying and Geoinformatics Engineering, National Technical University of Athens, Athens, Greece",
+       "institution_ids": [
+        "https://openalex.org/I174458059"
+       ]
+      }
+     ]
+    }
+   ],
+   "primary_location": {
+    "id": "doi:10.1109/lgrs.2023.3251652",
+    "doi": "https://doi.org/10.1109/lgrs.2023.3251652",
+    "is_oa": true,
+    "landing_page_url": "https://doi.org/10.1109/lgrs.2023.3251652",
+    "pdf_url": "https://ieeexplore.ieee.org/ielx7/8859/4357975/10057399.pdf",
+    "source": {
+     "id": "https://openalex.org/S126920919",
+     "display_name": "IEEE Geoscience and Remote Sensing Letters",
+     "issn_l": "1545-598X",
+     "issn": [
+      "1545-598X",
+      "1558-0571"
+     ],
+     "is_oa": false,
+     "is_in_doaj": false,
+     "is_core": true,
+     "listed_in": [
+      "anvur-scientific",
+      "ccf-c",
+      "cwts-core",
+      "dongbi-b",
+      "jufo-1",
+      "norway-1",
+      "poland-140",
+      "russia-white-list-1",
+      "vabb-shw"
+     ],
+     "host_organization": "https://openalex.org/P4310319808",
+     "host_organization_name": "Institute of Electrical and Electronics Engineers",
+     "host_organization_lineage": [
+      "https://openalex.org/P4310319808"
+     ],
+     "host_organization_lineage_names": [
+      "Institute of Electrical and Electronics Engineers"
+     ],
+     "type": "journal"
+    },
+    "license": "cc-by",
+    "license_id": "https://openalex.org/licenses/cc-by",
+    "version": "publishedVersion",
+    "is_accepted": true,
+    "is_published": true,
+    "raw_source_name": "IEEE Geoscience and Remote Sensing Letters",
+    "raw_type": "journal-article"
+   },
+   "type": "article",
+   "language": "en",
+   "abstract_inverted_index": {
+    "An": [
+     0
+    ],
+    "interpretable": [
+     1
+    ],
+    "deep": [
+     2,
+     40
+    ],
+    "learning": [
+     3
+    ],
+    "framework": [
+     4,
+     51,
+     153
+    ],
+    "for": [
+     5,
+     26
+    ],
+    "land": [
+     6,
+     9,
+     181
+    ],
+    "use": [
+     7
+    ],
+    "and": [
+     8,
+     32,
+     67,
+     176
+    ],
+    "cover": [
+     10
+    ],
+    "classification": [
+     11,
+     28,
+     47,
+     112,
+     121
+    ],
+    "(LULC)": [
+     12
+    ],
+    "in": [
+     13,
+     174,
+     183
+    ],
+    "remote": [
+     14
+    ],
+    "sensing": [
+     15
+    ],
+    "using": [
+     16
+    ],
+    "SHAP": [
+     17,
+     39,
+     147
+    ],
+    "is": [
+     18,
+     52
+    ],
+    "introduced.": [
+     19
+    ],
+    "It": [
+     20
+    ],
+    "utilizes": [
+     21
+    ],
+    "a": [
+     22,
+     38
+    ],
+    "compact": [
+     23
+    ],
+    "CNN": [
+     24
+    ],
+    "model": [
+     25
+    ],
+    "the": [
+     27,
+     35,
+     46,
+     73,
+     87,
+     99,
+     105,
+     109,
+     120,
+     129,
+     151,
+     155,
+     166,
+     171,
+     184
+    ],
+    "of": [
+     29,
+     61,
+     117,
+     128,
+     143,
+     150
+    ],
+    "satellite": [
+     30,
+     56
+    ],
+    "images": [
+     31,
+     57,
+     60
+    ],
+    "then": [
+     33
+    ],
+    "feeds": [
+     34
+    ],
+    "results": [
+     36,
+     103,
+     149
+    ],
+    "to": [
+     37,
+     44,
+     54,
+     137,
+     165
+    ],
+    "explainer": [
+     41
+    ],
+    "so": [
+     42
+    ],
+    "as": [
+     43
+    ],
+    "strengthen": [
+     45
+    ],
+    "results.": [
+     48
+    ],
+    "The": [
+     49,
+     146
+    ],
+    "proposed": [
+     50,
+     152
+    ],
+    "applied": [
+     53
+    ],
+    "Sentinel-2": [
+     55
+    ],
+    "containing": [
+     58
+    ],
+    "27000": [
+     59
+    ],
+    "pixel": [
+     62
+    ],
+    "size": [
+     63
+    ],
+    "64": [
+     64,
+     66
+    ],
+    "×": [
+     65
+    ],
+    "operates": [
+     68
+    ],
+    "on": [
+     69,
+     91,
+     98,
+     104,
+     123,
+     126
+    ],
+    "three-band": [
+     70,
+     124
+    ],
+    "combinations,": [
+     71
+    ],
+    "reducing": [
+     72
+    ],
+    "model’s": [
+     74
+    ],
+    "input": [
+     75
+    ],
+    "data": [
+     76
+    ],
+    "by": [
+     77,
+     158
+    ],
+    "77%": [
+     78
+    ],
+    "considering": [
+     79
+    ],
+    "that": [
+     80,
+     162
+    ],
+    "13": [
+     81
+    ],
+    "channels": [
+     82
+    ],
+    "are": [
+     83,
+     163
+    ],
+    "available,": [
+     84
+    ],
+    "while": [
+     85
+    ],
+    "at": [
+     86
+    ],
+    "same": [
+     88,
+     185
+    ],
+    "time": [
+     89
+    ],
+    "investigating": [
+     90
+    ],
+    "how": [
+     92
+    ],
+    "different": [
+     93,
+     180
+    ],
+    "spectrum": [
+     94
+    ],
+    "bands": [
+     95
+    ],
+    "affect": [
+     96
+    ],
+    "predictions": [
+     97,
+     157
+    ],
+    "dataset’s": [
+     100,
+     130
+    ],
+    "classes.": [
+     101
+    ],
+    "Experimental": [
+     102
+    ],
+    "EuroSAT": [
+     106
+    ],
+    "dataset": [
+     107
+    ],
+    "demonstrate": [
+     108
+    ],
+    "CNN’s": [
+     110
+    ],
+    "accurate": [
+     111
+    ],
+    "with": [
+     113,
+     140,
+     179
+    ],
+    "an": [
+     114
+    ],
+    "overall": [
+     115
+    ],
+    "accuracy": [
+     116,
+     122
+    ],
+    "94.72%,": [
+     118
+    ],
+    "whereas": [
+     119
+    ],
+    "combinations": [
+     125
+    ],
+    "each": [
+     127
+    ],
+    "classes": [
+     131
+    ],
+    "highlights": [
+     132
+    ],
+    "its": [
+     133
+    ],
+    "improvement": [
+     134
+    ],
+    "when": [
+     135
+    ],
+    "compared": [
+     136
+    ],
+    "standard": [
+     138
+    ],
+    "approaches": [
+     139
+    ],
+    "larger": [
+     141
+    ],
+    "number": [
+     142
+    ],
+    "trainable": [
+     144
+    ],
+    "parameters.": [
+     145
+    ],
+    "explainable": [
+     148
+    ],
+    "shield": [
+     154
+    ],
+    "network’s": [
+     156
+    ],
+    "showing": [
+     159
+    ],
+    "correlation": [
+     160
+    ],
+    "values": [
+     161
+    ],
+    "relevant": [
+     164
+    ],
+    "predicted": [
+     167
+    ],
+    "class,": [
+     168
+    ],
+    "thereby": [
+     169
+    ],
+    "improving": [
+     170
+    ],
+    "classifications": [
+     172
+    ],
+    "occurring": [
+     173
+    ],
+    "urban": [
+     175
+    ],
+    "rural": [
+     177
+    ],
+    "areas": [
+     178
+    ],
+    "uses": [
+     182
+    ],
+    "scene.": [
+     186
+    ]
+   }
+  }
+ ],
+ "group_by": []
+}

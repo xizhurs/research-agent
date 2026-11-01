@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.cache/
+dist/
+*.egg-info/
+
+# Never commit secrets or local env files
+secrets/
+.env
+.env.*
+!.env.example
