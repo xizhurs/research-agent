@@ -18,3 +18,11 @@ backoff_base_seconds = 1.0
 max_backoff_seconds = 30.0
 cache_dir = ".cache/openalex"
 cache_ttl_days = 30
+
+# The API key is read from the OPENAI_API_KEY environment variable, never from here.
+# max_retries is handled inside the OpenAI SDK (429 / 5xx / connection errors).
+[llm]
+model = "gpt-6-luna"
+reasoning_effort = "none"
+timeout_seconds = 60
+max_retries = 2

@@ -4,16 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-M0 (scaffold) and M1 (deterministic OpenAlex retrieval) are done. M2 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
+M0 (scaffold), M1 (deterministic OpenAlex retrieval) and M2 (LLM interface, stub, OpenAI adapter) are done. M3 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
 
 Layout:
-- `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`).
+- `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`, `[llm]`).
 - `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`).
 - `src/research_agent/credentials.py`: loads and validates `OPENALEX_API_KEY` / `OPENAI_API_KEY` (see Credentials).
 - `src/research_agent/retrieval/`: no-LLM retrieval. `openalex.py` (pure `build_params`/`parse_work`/`parse_response` plus `OpenAlexClient`), `abstract.py`, `cache.py`, `models.py` (`Work`, `SearchResult`), `errors.py` (all derive from `RetrievalError`).
+- `src/research_agent/llm/`: `types.py` (provider-agnostic `LLMClient` protocol, messages, `ToolSpec`/`ToolCall`, `LLMResponse`, `Usage`), `stub.py` (`StubLLMClient`, `text_response`, `tool_call_response`), `openai_client.py` (Responses-API adapter), `errors.py` (all derive from `LLMError`).
 - `configs/base.toml`, `tests/` (with `tests/fixtures/openalex_search.json`, a trimmed recorded response).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
+
+LLM facts (verified live on 2026-11-01):
+- First adapter: OpenAI Responses API, model `gpt-6-luna`, `reasoning_effort = "none"` (both in `configs/base.toml`). Chat Completions is not used: some current models only support function calling on Responses.
+- The agent loop must use only `LLMClient` and the types in `llm/types.py`. Pass `LLMResponse.to_message()` back unchanged: its `provider_state` holds the model's output items, which the adapter replays verbatim.
+- `allow_tools=False` sets `tool_choice="none"`; use it to force a final answer when a budget is exhausted.
+- No `temperature` is sent (reasoning-capable models reject it). Retries (429/5xx/connection) are done by the OpenAI SDK, configured by `llm.max_retries`; the adapter adds none.
+- Reasoning tokens count against `max_output_tokens`, so keep reasoning at `none`/low or answers can be cut off (`stop_reason == "length"`).
+- Auth errors deliberately omit the server text (it can contain a masked key fragment). Invalid tool-call JSON raises `LLMResponseError`; the M3 loop decides how to handle it.
+- Use `StubLLMClient` for all agent-loop tests; it raises `AssertionError` if called more often than scripted.
+- The OpenAI SDK (3.x) uses `httpx2`, not `httpx`; mock the SDK object (`responses.create`), not the transport.
 
 Retrieval facts (verified against the live API on 2026-11-01):
 - The OpenAlex key is optional (small anonymous budget without it: $0.10/day shared per IP). It is sent as an `Authorization: Bearer` header and never put in URLs or cache keys; the client also redacts it from server error text.
@@ -58,7 +69,6 @@ A research agent that answers questions about GeoAI and remote-sensing literatur
 
 Ask the user before the milestone that needs each one. Do not assume.
 
-- Which provider and model the first adapter targets (needed for M2).
 - Deployment platform (not needed before M5 is done).
 - Whether to get a free OpenAlex API key (recommended before heavy use; needed for the larger daily budget). The code works without one.
 - The evaluation question set and who curates it (needed for M4).
@@ -68,7 +78,7 @@ Ask the user before the milestone that needs each one. Do not assume.
 - Keys come from the process environment first, then a local `.env` (copy `.env.example`; `.env` is git-ignored, `.env.example` is tracked and holds placeholders only). Use `--env-file` or `RESEARCH_AGENT_ENV_FILE` to point at a file elsewhere.
 - `load_credentials` never mutates `os.environ`. Keys are held in `Secret`, whose `repr`/`str`/format are redacted; call `.reveal()` only at the point of use. Errors name the variable, never the value.
 - Never read, print or commit `.env`. To check configuration use `uv run research-agent check-credentials` (offline: presence and format only; it cannot tell if a provider accepts the key).
-- `OPENAI_API_KEY` is validated but not used until M2. Which OpenAI model to use is still an open decision.
+- `OPENAI_API_KEY` is used by `OpenAIClient.from_credentials`, which raises `CredentialError` if it is missing.
 
 ## Architecture
 
@@ -151,7 +161,7 @@ uv run research-agent --help
 uv run research-agent show-config                       # reads configs/base.toml from the cwd
 uv run research-agent search "land cover" --year-from 2022 -n 3 --abstracts
 uv run research-agent check-credentials                 # never prints key values
-uv run pytest -m live                                   # opt-in: one real OpenAlex call
+uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 
 ## Milestones
@@ -162,7 +172,7 @@ Each milestone is done only when its success criteria are met and verified by ru
 |---|---|---|
 | M0 | Scaffold: `pyproject.toml`, config loading, CLI skeleton | `uv sync`, `uv run pytest` and `uv run ruff check .` pass; CLI `--help` runs |
 | M1 | OpenAlex `search_literature` tool with disk cache | Fixture-based tests pass; abstracts reconstructed and truncated correctly; a cache hit makes no network call |
-| M2 | `LLMClient` interface, stub client, first real adapter | Stub-based tests pass; the adapter makes one tool-calling round trip (live, opt-in) |
+| M2 (done) | `LLMClient` interface, stub client, first real adapter | Stub-based tests pass; the adapter makes one tool-calling round trip (live, opt-in) |
 | M3 | Agent loop with budgets and structured `Answer` | Iteration and search caps are enforced in tests; forced finalisation works |
 | M4 | Citation validation, limitations reporting, evaluation set | Unretrieved citations are rejected; every answer carries limitations; the evaluation set runs |
 | M5 | Hardening: logging, cost reporting, error handling | Failures give clear messages and non-zero exit codes; token and search counts are reported per run |

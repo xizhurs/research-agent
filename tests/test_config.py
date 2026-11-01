@@ -24,6 +24,12 @@ backoff_base_seconds = 1.0
 max_backoff_seconds = 30.0
 cache_dir = ".cache/openalex"
 cache_ttl_days = 30
+
+[llm]
+model = "gpt-6-luna"
+reasoning_effort = "none"
+timeout_seconds = 60
+max_retries = 2
 """
 
 
@@ -68,6 +74,33 @@ def test_zero_retries_allowed(tmp_path):
     assert cfg.openalex.max_retries == 0
 
 
+def test_base_config_llm_section():
+    llm = load_config(BASE).llm
+    assert llm.model == "gpt-6-luna"
+    assert llm.reasoning_effort == "none"
+    assert llm.max_retries == 2
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "match"),
+    [
+        ('model = "gpt-6-luna"', 'model = ""', "llm.model"),
+        ('reasoning_effort = "none"', "reasoning_effort = 3", "llm.reasoning_effort"),
+        ("timeout_seconds = 60", "timeout_seconds = -1", "llm.timeout_seconds"),
+        ("max_retries = 2", "max_retries = 1.5", "llm.max_retries"),
+    ],
+)
+def test_invalid_llm_values_rejected(tmp_path, old, new, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(write(tmp_path, VALID.replace(old, new)))
+
+
+def test_missing_llm_table(tmp_path):
+    text = VALID.split("[llm]")[0]
+    with pytest.raises(ConfigError, match=r"missing \[llm\]"):
+        load_config(write(tmp_path, text))
+
+
 def test_missing_openalex_table(tmp_path):
     text = VALID.split("[openalex]")[0]
     with pytest.raises(ConfigError, match=r"missing \[openalex\]"):
@@ -101,7 +134,13 @@ def test_unknown_key(tmp_path):
 
 
 def test_unknown_openalex_key(tmp_path):
+    text = VALID.replace("[openalex]\n", "[openalex]\ntypo = 1\n")
     with pytest.raises(ConfigError, match="unknown openalex keys"):
+        load_config(write(tmp_path, text))
+
+
+def test_unknown_llm_key(tmp_path):
+    with pytest.raises(ConfigError, match="unknown llm keys"):
         load_config(write(tmp_path, VALID + "typo = 1\n"))
 
 

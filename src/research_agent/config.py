@@ -70,9 +70,33 @@ class OpenAlexConfig:
 
 
 @dataclass(frozen=True)
+class LLMConfig:
+    """LLM settings for the OpenAI adapter. The API key is never stored here (env var only)."""
+
+    model: str
+    reasoning_effort: str
+    timeout_seconds: float
+    max_retries: int
+
+    def __post_init__(self) -> None:
+        for name in ("model", "reasoning_effort"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"llm.{name} must be a non-empty string, got {value!r}")
+        if not _is_number(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise ConfigError(
+                f"llm.timeout_seconds must be a positive number, got {self.timeout_seconds!r}"
+            )
+        retries = self.max_retries
+        if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+            raise ConfigError(f"llm.max_retries must be an integer >= 0, got {retries!r}")
+
+
+@dataclass(frozen=True)
 class Config:
     limits: Limits
     openalex: OpenAlexConfig
+    llm: LLMConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -102,4 +126,5 @@ def load_config(path: Path) -> Config:
     return Config(
         limits=_build_section(Limits, raw, "limits", path),
         openalex=_build_section(OpenAlexConfig, raw, "openalex", path),
+        llm=_build_section(LLMConfig, raw, "llm", path),
     )
