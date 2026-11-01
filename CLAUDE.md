@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-M0 (scaffold), M1 (deterministic OpenAlex retrieval), M2 (LLM interface, stub, OpenAI adapter) M3 (agent loop, budgets, structured answer) and M4 (citation validation, limitations, evaluation set) are done. M5 is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
+M0 (scaffold), M1 (deterministic OpenAlex retrieval), M2 (LLM interface, stub, OpenAI adapter), M3 (agent loop, budgets, structured answer), M4 (citation validation, limitations, evaluation set) and M5 (hardening) are done. All planned milestones are complete. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
 
 Layout:
 - `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`, `[llm]`, `[reporting]`).
-- `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`, `ask`, `eval`).
+- `src/research_agent/cli.py`: Typer app (`show-config`, `search`, `check-credentials`, `ask`, `eval`; global `-v`/`-vv`). The console script calls `cli.run`, which wraps `app`.
+- `src/research_agent/logging_setup.py`: log levels, stderr handler, secret redaction.
 - `src/research_agent/credentials.py`: loads and validates `OPENALEX_API_KEY` / `OPENAI_API_KEY` (see Credentials).
 - `src/research_agent/retrieval/`: no-LLM retrieval. `openalex.py` (pure `build_params`/`parse_work`/`parse_response` plus `OpenAlexClient`), `abstract.py`, `cache.py`, `models.py` (`Work`, `SearchResult`), `errors.py` (all derive from `RetrievalError`).
 - `src/research_agent/llm/`: `types.py` (provider-agnostic `LLMClient` protocol, messages, `ToolSpec`/`ToolCall`, `LLMResponse`, `Usage`), `stub.py` (`StubLLMClient`, `text_response`, `tool_call_response`), `openai_client.py` (Responses-API adapter), `errors.py` (all derive from `LLMError`).
@@ -24,7 +25,7 @@ LLM facts (verified live on 2026-11-01):
 - `allow_tools=False` sets `tool_choice="none"`; use it to force a final answer when a budget is exhausted.
 - No `temperature` is sent (reasoning-capable models reject it). Retries (429/5xx/connection) are done by the OpenAI SDK, configured by `llm.max_retries`; the adapter adds none.
 - Reasoning tokens count against `max_output_tokens`, so keep reasoning at `none`/low or answers can be cut off (`stop_reason == "length"`).
-- Auth errors deliberately omit the server text (it can contain a masked key fragment). Invalid tool-call JSON raises `LLMResponseError`; the M3 loop decides how to handle it.
+- Auth errors deliberately omit the server text (it can contain a masked key fragment). Invalid tool-call JSON does not raise: the adapter returns a `ToolCall` with empty `arguments` and an `error` string, and the loop sends that error back to the model (no search charged).
 - Use `StubLLMClient` for all agent-loop tests; it raises `AssertionError` if called more often than scripted.
 - The OpenAI SDK (3.x) uses `httpx2`, not `httpx`; mock the SDK object (`responses.create`), not the transport.
 
@@ -34,7 +35,10 @@ Agent facts (M3):
 - The token cap is predictive: a tool turn runs only if there is room for it and for a final call of similar size. The final call is always made, so actual usage can exceed `max_total_tokens`; that is reported as a limitation.
 - The final answer is JSON text (`claims` with `kind` evidence/interpretation and `sources`, plus `limitations`). If the model ignores the format, `build_answer` returns an unstructured interpretation with an explicit limitation instead of crashing.
 - References are built from retrieved works, never from model text. "Retrieved" means shown to the model in full; a work hidden by the context budget is not citable.
-- Failures: `InvalidQueryError` and bad tool arguments go back to the model and cost no search; other `RetrievalError`s cost a search and add a limitation; `AuthError` and `LLMError` abort the run.
+- Failures: `InvalidQueryError`, bad tool arguments and malformed tool-call JSON go back to the model and cost no search; other `RetrievalError`s cost a search and add a limitation; `AuthError` and `LLMError` abort the run.
+- Questions longer than `limits.max_question_chars` (or empty) raise `InvalidQuestionError` before any model call, so an oversized input cannot cause an uncapped first call.
+- A cache write failure (disk full, read-only folder, OneDrive lock) is logged and ignored; the cache is only an optimisation.
+- `RunStats.cached_searches` counts searches answered from the local cache (no OpenAlex cost); `ask` prints it in its stderr footer.
 - Terminal output can contain characters the console cannot encode; the CLI replaces them with `?` instead of crashing.
 
 Citations and limitations (M4):
@@ -92,9 +96,17 @@ A research agent that answers questions about GeoAI and remote-sensing literatur
 
 Ask the user before the milestone that needs each one. Do not assume.
 
-- Deployment platform (not needed before M5 is done).
+- Deployment platform (nothing is built for it; decide before packaging or scheduling runs).
 - Whether to get a free OpenAlex API key (recommended before heavy use; needed for the larger daily budget). The code works without one.
 - Who reviews and extends `evals/cases.toml` (a draft exists), and whether to add a GeoAI scope guard for off-topic questions.
+
+## Logging, errors and exit codes (M5)
+
+- Logs go to stderr; answers go to stdout. Default level is WARNING. `research-agent -v ...` logs each model turn, token counts and each search; `-vv` adds debug details. The flag goes before the command: `research-agent -v ask "..."`.
+- Only `research_agent.*` loggers follow the flag. `httpx`, `openai` and friends stay at WARNING because their debug output can contain full prompts. The question text is never logged.
+- `REDACTOR` (`logging_setup.py`) replaces any loaded API key with `<redacted>` in log messages and tracebacks. It is fed by `_credentials_or_exit`; any new code path that loads credentials must go through that function.
+- Typer is configured with `pretty_exceptions_enable=False` and `pretty_exceptions_show_locals=False`: Typer's default crash output prints local variables, which can include API keys (verified). Do not turn this back on.
+- Exit codes: 0 success; 1 any failure (expected failures print one `error: ...` line; unexpected exceptions print one redacted `error: unexpected failure (...)` line, with a traceback only under `-vv`); 2 command-line usage error (Click). `eval` exits 1 if any case fails.
 
 ## Credentials
 
@@ -184,6 +196,7 @@ uv run research-agent --help
 uv run research-agent show-config                       # reads configs/base.toml from the cwd
 uv run research-agent search "land cover" --year-from 2022 -n 3 --abstracts
 uv run research-agent ask "Which deep learning methods are used for crop type mapping?"
+uv run research-agent -v ask "..."                      # progress log on stderr
 uv run research-agent check-credentials                 # never prints key values
 uv run research-agent eval                              # real model + OpenAlex; costs tokens
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
@@ -200,6 +213,6 @@ Each milestone is done only when its success criteria are met and verified by ru
 | M2 (done) | `LLMClient` interface, stub client, first real adapter | Stub-based tests pass; the adapter makes one tool-calling round trip (live, opt-in) |
 | M3 (done) | Agent loop with budgets and structured `Answer` | Iteration and search caps are enforced in tests; forced finalisation works |
 | M4 (done) | Citation validation, limitations reporting, evaluation set | Unretrieved citations are rejected; every answer carries limitations; the evaluation set runs |
-| M5 | Hardening: logging, cost reporting, error handling | Failures give clear messages and non-zero exit codes; token and search counts are reported per run |
+| M5 (done) | Hardening: logging, cost reporting, error handling | Failures give clear messages and non-zero exit codes; token and search counts are reported per run |
 
 Priorities, in order: correct citations, budget enforcement, tests, clarity, simplicity.

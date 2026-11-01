@@ -8,6 +8,7 @@ replay and error mapping. Retries on 429/5xx/connection errors are done by the S
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -35,6 +36,8 @@ from research_agent.llm.types import (
 )
 
 MAX_ERROR_CHARS = 300
+
+log = logging.getLogger(__name__)
 
 
 def tools_to_openai(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
@@ -86,14 +89,15 @@ def messages_to_input(messages: Sequence[Message]) -> list[dict[str, Any]]:
     return items
 
 
-def _parse_arguments(call_id: str, raw: Any) -> dict[str, Any]:
+def _parse_arguments(raw: Any) -> tuple[dict[str, Any], str | None]:
+    """Return ``(arguments, error)``. Bad arguments are the model's mistake, not a crash."""
     try:
         args = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise LLMResponseError(f"tool call {call_id}: arguments are not valid JSON") from exc
+    except (TypeError, ValueError):
+        return {}, "the tool arguments were not valid JSON"
     if not isinstance(args, dict):
-        raise LLMResponseError(f"tool call {call_id}: arguments are not a JSON object")
-    return args
+        return {}, "the tool arguments were not a JSON object"
+    return args, None
 
 
 def parse_response(response: Any) -> LLMResponse:
@@ -113,12 +117,9 @@ def parse_response(response: Any) -> LLMResponse:
     refused = False
     for item in response.output:
         if item.type == "function_call":
+            arguments, error = _parse_arguments(item.arguments)
             calls.append(
-                ToolCall(
-                    id=item.call_id,
-                    name=item.name,
-                    arguments=_parse_arguments(item.call_id, item.arguments),
-                )
+                ToolCall(id=item.call_id, name=item.name, arguments=arguments, error=error)
             )
         elif item.type == "message":
             for part in item.content:
@@ -184,6 +185,14 @@ class OpenAIClient:
         if tools:
             kwargs["tools"] = tools_to_openai(tools)
             kwargs["tool_choice"] = "auto" if allow_tools else "none"
+        log.debug(
+            "calling %s: %d input item(s), %d tool(s), max_output_tokens=%d, tools=%s",
+            self._config.model,
+            len(kwargs["input"]),
+            len(tools),
+            max_output_tokens,
+            "on" if allow_tools else "off",
+        )
         try:
             response = self._client.responses.create(**kwargs)
         except (openai.AuthenticationError, openai.PermissionDeniedError):

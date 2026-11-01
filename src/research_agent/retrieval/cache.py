@@ -6,6 +6,7 @@ Credentials are never part of a key.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -50,9 +51,18 @@ class ResponseCache:
             return None
 
     def put(self, key: str, payload: Any) -> None:
-        """Write atomically so a crash never leaves a half-written entry."""
-        self._dir.mkdir(parents=True, exist_ok=True)
+        """Write atomically so a crash never leaves a half-written entry.
+
+        The cache is only an optimisation, so a write failure (disk full, read-only folder,
+        OneDrive lock) is logged and the run continues.
+        """
         path = self._path(key)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as exc:
+            log.warning("could not write cache entry %s: %s", path.name, exc)
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)  # best effort: leave no stray temp file

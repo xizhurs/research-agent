@@ -105,7 +105,8 @@ def test_ask_prints_answer_references_limitations_and_stats(monkeypatch, tmp_pat
     assert "- (interpretation) It likely generalises." in result.output
     assert "[W1] A, B (2023). Crop maps." in result.output
     assert "- Only abstracts were read." in result.output
-    assert "2 model turn(s), 1 search(es), 500 tokens (400 in / 100 out)" in result.output
+    footer = "2 model turn(s), 1 search(es) (0 from cache), 500 tokens (400 in / 100 out)"
+    assert footer in result.output
 
 
 def test_ask_llm_error_exits_nonzero(monkeypatch, tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -11,7 +12,7 @@ from typing import TextIO
 
 import typer
 
-from research_agent.agent import AgentResult, ResearchAgent
+from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.credentials import (
     DEFAULT_ENV_FILE,
@@ -24,7 +25,10 @@ from research_agent.credentials import (
 )
 from research_agent.evaluation import EvalError, load_cases, run_case, summarize
 from research_agent.llm import LLMError, OpenAIClient
+from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.retrieval import OpenAlexClient, RetrievalError
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = Path("configs/base.toml")
 ENV_FILE_HELP = f"Local env file with API keys (or set {ENV_FILE_ENV_VAR})."
@@ -40,13 +44,22 @@ def _load_or_exit(path: Path) -> Config:
 
 def _credentials_or_exit(env_file: Path) -> Credentials:
     try:
-        return load_credentials(env_file)
+        creds = load_credentials(env_file)
     except CredentialError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    REDACTOR.add_credentials(creds)  # from here on, keys never appear in logs
+    return creds
 
 
-app = typer.Typer(help="GeoAI / remote-sensing literature research agent.", no_args_is_help=True)
+# Typer's default crash output prints local variables, which can include API keys. Keep that
+# off, and let unexpected exceptions reach run() so they are reported without a data dump.
+app = typer.Typer(
+    help="GeoAI / remote-sensing literature research agent.",
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    pretty_exceptions_show_locals=False,
+)
 
 
 def make_output_safe(*streams: TextIO) -> None:
@@ -61,9 +74,33 @@ def make_output_safe(*streams: TextIO) -> None:
 
 
 @app.callback()
-def main() -> None:
+def main(
+    verbose: int = typer.Option(
+        0,
+        "--verbose",
+        "-v",
+        count=True,
+        help="Log progress to stderr: -v for steps, -vv for debug. Put it before the command.",
+    ),
+) -> None:
     """GeoAI / remote-sensing literature research agent."""
     make_output_safe(sys.stdout, sys.stderr)
+    configure_logging(verbose)
+
+
+def run() -> None:
+    """Console-script entry point: run the app and report unexpected failures concisely.
+
+    Expected failures (bad config, provider errors...) are handled inside the commands and exit
+    with code 1. Anything else is a bug: show one redacted line, keep the traceback for -vv.
+    """
+    try:
+        app()
+    except Exception as exc:
+        log.debug("unexpected failure", exc_info=True)
+        message = REDACTOR.redact(f"{type(exc).__name__}: {exc}")
+        typer.echo(f"error: unexpected failure ({message}). Use -vv for a traceback.", err=True)
+        sys.exit(1)
 
 
 @app.command("show-config")
@@ -177,7 +214,7 @@ def ask(
     try:
         creds.require_openai_key()
         result = _run_agent(cfg, creds, question)
-    except (CredentialError, LLMError, RetrievalError) as exc:
+    except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -198,8 +235,9 @@ def ask(
         typer.echo(f"- {limitation}")
     stats = result.stats
     typer.echo(
-        f"\nrun: {stats.iterations} model turn(s), {stats.search_calls} search(es), "
-        f"{stats.total_tokens} tokens ({stats.input_tokens} in / {stats.output_tokens} out)",
+        f"\nrun: {stats.iterations} model turn(s), {stats.search_calls} search(es) "
+        f"({stats.cached_searches} from cache), {stats.total_tokens} tokens "
+        f"({stats.input_tokens} in / {stats.output_tokens} out)",
         err=True,
     )
 

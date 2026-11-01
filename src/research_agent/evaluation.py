@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from research_agent.agent import AgentResult
+from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.agent.budget import OVERSHOOT_PREFIX
 from research_agent.config import Limits
 from research_agent.llm import LLMAuthError, LLMError
@@ -179,7 +179,7 @@ def run_case(agent: EvalAgent, case: EvalCase, limits: Limits) -> CaseReport:
         result = agent.run(case.question)
     except (LLMAuthError, AuthError):
         raise  # a configuration problem: every remaining case would fail the same way
-    except (LLMError, RetrievalError) as exc:
+    except (LLMError, RetrievalError, InvalidQuestionError) as exc:
         message = f"{type(exc).__name__}: {exc}"
         return CaseReport(case.id, (f"run failed: {message}",), None, error=message)
     return CaseReport(case.id, tuple(check_result(case, result, limits)), result)

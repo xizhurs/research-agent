@@ -23,6 +23,7 @@ class Budget:
         self._limits = limits
         self.iterations = 0  # completed model calls
         self.search_calls = 0
+        self.cached_searches = 0  # of search_calls, answered from the local cache
         self.input_tokens = 0
         self.output_tokens = 0
         self.context_tokens = 0  # estimated tokens of retrieved content sent to the model
@@ -44,8 +45,10 @@ class Budget:
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
 
-    def record_search(self) -> None:
+    def record_search(self, *, cached: bool = False) -> None:
         self.search_calls += 1
+        if cached:
+            self.cached_searches += 1
 
     def record_context(self, tokens: int) -> None:
         self.context_tokens += tokens

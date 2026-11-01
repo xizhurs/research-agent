@@ -28,6 +28,7 @@ class Limits:
     max_context_tokens: int
     max_output_tokens: int
     max_total_tokens: int
+    max_question_chars: int
 
     def __post_init__(self) -> None:
         for f in fields(self):

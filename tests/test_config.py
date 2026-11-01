@@ -15,6 +15,7 @@ abstract_max_chars = 1200
 max_context_tokens = 6000
 max_output_tokens = 800
 max_total_tokens = 20000
+max_question_chars = 2000
 
 [openalex]
 base_url = "https://api.openalex.org"

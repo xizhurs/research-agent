@@ -211,10 +211,19 @@ def test_text_and_tool_call_together():
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '"str"', "null"])
-def test_invalid_tool_arguments_raise_without_echoing_them(bad):
-    with pytest.raises(LLMResponseError, match="call_1") as e:
-        run(FakeSDK(make_response([call_item(arguments=bad)])))
-    assert bad not in str(e.value)
+def test_invalid_tool_arguments_are_reported_not_raised_and_not_echoed(bad):
+    r = run(FakeSDK(make_response([call_item("call_1", arguments=bad)])))
+    (call,) = r.tool_calls
+    assert call.id == "call_1" and call.name == "search_literature"
+    assert call.arguments == {}
+    assert call.error and "JSON" in call.error
+    assert bad not in call.error
+    assert r.stop_reason == "tool_calls"
+
+
+def test_valid_tool_arguments_have_no_error():
+    r = run(FakeSDK(make_response([call_item()])))
+    assert r.tool_calls[0].error is None
 
 
 def test_incomplete_for_max_tokens_is_length():

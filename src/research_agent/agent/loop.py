@@ -53,13 +53,18 @@ class LiteratureSearch(Protocol):
     ) -> SearchResult: ...
 
 
+class InvalidQuestionError(ValueError):
+    """The question is empty or longer than ``limits.max_question_chars``."""
+
+
 @dataclass(frozen=True)
 class RunStats:
-    iterations: int
-    search_calls: int
+    iterations: int  # model calls
+    search_calls: int  # searches that ran (including ones answered from the cache)
     input_tokens: int
     output_tokens: int
     works_shown: int  # distinct works the model saw in full
+    cached_searches: int = 0  # of search_calls, answered from the local cache (no API cost)
 
     @property
     def total_tokens(self) -> int:
@@ -92,9 +97,13 @@ class ResearchAgent:
         """Answer ``question``. Raises LLMError (or AuthError from search) on hard failures."""
         question = question.strip()
         if not question:
-            raise ValueError("question must be a non-empty string")
-
+            raise InvalidQuestionError("question must be a non-empty string")
         limits = self._limits
+        if len(question) > limits.max_question_chars:
+            raise InvalidQuestionError(
+                f"question is {len(question)} characters; the limit is {limits.max_question_chars}"
+            )
+
         budget = Budget(limits)
         instructions = build_instructions(limits)
         messages: list[Message] = [UserMessage(question)]
@@ -119,6 +128,14 @@ class ResearchAgent:
                 allow_tools=allow_tools,
             )
             budget.record_call(response.usage)
+            log.info(
+                "turn %d: %d in / %d out tokens, stop=%s, tool calls=%d",
+                budget.iterations,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                response.stop_reason,
+                len(response.tool_calls),
+            )
 
             if not allow_tools or not response.tool_calls:
                 return self._finish(response, budget, evidence, searches, notes)
@@ -169,6 +186,14 @@ class ResearchAgent:
             input_tokens=budget.input_tokens,
             output_tokens=budget.output_tokens,
             works_shown=len(evidence),
+            cached_searches=budget.cached_searches,
+        )
+        log.info(
+            "done: %d turn(s), %d search(es) (%d cached), %d tokens",
+            stats.iterations,
+            stats.search_calls,
+            stats.cached_searches,
+            stats.total_tokens,
         )
         return AgentResult(answer=answer, stats=stats)
 
@@ -183,7 +208,9 @@ class ResearchAgent:
         """Answer every tool call (the API requires a result for each call ID)."""
         results = []
         for call in calls:
-            if call.name == SEARCH_TOOL_NAME:
+            if call.error:
+                content = f"Error: {call.error}. Call the tool again with valid JSON arguments."
+            elif call.name == SEARCH_TOOL_NAME:
                 content = self._do_search(call, budget, evidence, searches, notes)
             else:
                 content = f"Error: unknown tool '{call.name}'."
@@ -226,7 +253,15 @@ class ResearchAgent:
                 "you have."
             )
 
-        budget.record_search()
+        budget.record_search(cached=result.from_cache)
+        log.info(
+            'search "%s" (year_from=%s): %d of %d matches (%s)',
+            args.query,
+            args.year_from,
+            len(result.works),
+            result.total_count,
+            "cache" if result.from_cache else "network",
+        )
         formatted = format_results(result, budget.context_left, evidence.keys())
         budget.record_context(formatted.context_tokens)
         evidence.update({w.id: w for w in formatted.shown})

@@ -24,9 +24,16 @@ class ToolSpec:
 
 @dataclass(frozen=True)
 class ToolCall:
+    """A tool call requested by the model.
+
+    If the model's arguments could not be parsed, ``arguments`` is empty and ``error`` says why
+    (the message never echoes the raw arguments). The caller reports it back to the model.
+    """
+
     id: str
     name: str
     arguments: dict[str, Any]
+    error: str | None = None
 
 
 @dataclass(frozen=True)

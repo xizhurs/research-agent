@@ -223,6 +223,7 @@ class OpenAlexClient:
         abstract_chars = self._limits.abstract_max_chars
 
         cached = self._cache.get(key)
+        log.debug("search %r: cache %s", query, "hit" if cached is not None else "miss")
         if cached is not None:
             try:
                 works, total, skipped = parse_response(cached, abstract_chars)
