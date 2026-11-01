@@ -30,6 +30,10 @@ model = "gpt-6-luna"
 reasoning_effort = "none"
 timeout_seconds = 60
 max_retries = 2
+
+[reporting]
+thin_evidence_works = 3
+stale_after_years = 3
 """
 
 
@@ -95,6 +99,24 @@ def test_invalid_llm_values_rejected(tmp_path, old, new, match):
         load_config(write(tmp_path, VALID.replace(old, new)))
 
 
+def test_base_config_reporting_section():
+    rep = load_config(BASE).reporting
+    assert (rep.thin_evidence_works, rep.stale_after_years) == (3, 3)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "2.5", '"3"', "true"])
+def test_invalid_reporting_values_rejected(tmp_path, bad):
+    text = VALID.replace("thin_evidence_works = 3", f"thin_evidence_works = {bad}")
+    with pytest.raises(ConfigError, match="reporting.thin_evidence_works"):
+        load_config(write(tmp_path, text))
+
+
+def test_missing_reporting_table(tmp_path):
+    text = VALID.split("[reporting]")[0]
+    with pytest.raises(ConfigError, match=r"missing \[reporting\]"):
+        load_config(write(tmp_path, text))
+
+
 def test_missing_llm_table(tmp_path):
     text = VALID.split("[llm]")[0]
     with pytest.raises(ConfigError, match=r"missing \[llm\]"):
@@ -140,7 +162,13 @@ def test_unknown_openalex_key(tmp_path):
 
 
 def test_unknown_llm_key(tmp_path):
+    text = VALID.replace("[llm]\n", "[llm]\ntypo = 1\n")
     with pytest.raises(ConfigError, match="unknown llm keys"):
+        load_config(write(tmp_path, text))
+
+
+def test_unknown_reporting_key(tmp_path):
+    with pytest.raises(ConfigError, match="unknown reporting keys"):
         load_config(write(tmp_path, VALID + "typo = 1\n"))
 
 

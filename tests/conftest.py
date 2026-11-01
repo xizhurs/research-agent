@@ -19,6 +19,11 @@ def limits(base_config):
 
 
 @pytest.fixture
+def reporting(base_config):
+    return base_config.reporting
+
+
+@pytest.fixture
 def make_work():
     def _make(
         id="W1",

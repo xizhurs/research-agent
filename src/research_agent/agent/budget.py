@@ -10,6 +10,7 @@ from research_agent.config import Limits
 from research_agent.llm import Usage
 
 CHARS_PER_TOKEN = 4
+OVERSHOOT_PREFIX = "Token budget exceeded"
 
 
 def estimate_tokens(text: str) -> int:
@@ -79,7 +80,7 @@ class Budget:
         limit = self._limits.max_total_tokens
         if self.tokens_used > limit:
             return (
-                f"Token budget exceeded: {self.tokens_used} tokens used against a limit of "
+                f"{OVERSHOOT_PREFIX}: {self.tokens_used} tokens used against a limit of "
                 f"{limit}."
             )
         return None

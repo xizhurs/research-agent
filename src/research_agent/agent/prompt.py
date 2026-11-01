@@ -28,6 +28,8 @@ When you are done, reply with ONLY a JSON object and no other text:
 (for example W4388333579) in "sources".
 - kind "interpretation": your own synthesis, comparison or inference. "sources" lists the \
 works it draws on and may be empty.
+- Cite only work IDs that appear in the search results. Citations to any other ID are \
+removed, and an "evidence" claim left without a valid citation is shown as interpretation.
 - At most {MAX_CLAIMS} claims, each one or two sentences.
 - "limitations": what the evidence cannot tell (for example only abstracts were seen, a narrow \
 search, conflicting results, missing evidence).

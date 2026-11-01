@@ -11,6 +11,7 @@ from research_agent.retrieval import RateLimitError, SearchResult, Work
 
 BASE = Path(__file__).resolve().parents[1] / "configs" / "base.toml"
 runner = CliRunner()
+NL = chr(10)
 
 
 def test_help_runs():
@@ -87,7 +88,7 @@ def agent_result(make_work):
         references=(w,),
         limitations=("Only abstracts were read.",),
     )
-    return AgentResult(answer, RunStats(2, 1, 400, 100))
+    return AgentResult(answer, RunStats(2, 1, 400, 100, 3))
 
 
 def ask_args(tmp_path, question="How are crops mapped?"):
@@ -147,3 +148,119 @@ def test_output_with_unencodable_characters_does_not_crash():
 
 def test_make_output_safe_ignores_streams_that_cannot_be_reconfigured():
     make_output_safe(io.StringIO())  # no reconfigure(): must not raise
+
+
+# --- eval command ----------------------------------------------------------------------------
+
+
+class FakeEvalAgent:
+    def __init__(self, result_for):
+        self.result_for = result_for
+        self.questions = []
+
+    def run(self, question):
+        self.questions.append(question)
+        return self.result_for(question)
+
+
+def patch_agent(monkeypatch, agent):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_open(cfg, creds):
+        yield agent
+
+    monkeypatch.setattr("research_agent.cli._open_agent", fake_open)
+
+
+def two_case_file(tmp_path):
+    path = tmp_path / "cases.toml"
+    path.write_text(
+        "[[case]]" + NL + "id = 'one'" + NL + "question = 'Q1'" + NL + "min_references = 1" + NL
+        + "[[case]]" + NL + "id = 'two'" + NL + "question = 'Q2'" + NL,
+        encoding="utf-8",
+    )
+    return path
+
+
+def eval_args(tmp_path, *extra):
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef" + NL, encoding="utf-8")
+    cases = two_case_file(tmp_path)
+    return ["eval", "--cases", str(cases), "--config", str(BASE), "--env-file", str(env), *extra]
+
+
+def test_eval_all_pass_exit_zero(monkeypatch, tmp_path, make_work):
+    agent = FakeEvalAgent(lambda q: agent_result(make_work))
+    patch_agent(monkeypatch, agent)
+    result = runner.invoke(app, eval_args(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "[PASS] one" in result.output and "[PASS] two" in result.output
+    assert "Summary: 2/2 passed" in result.output
+    assert agent.questions == ["Q1", "Q2"]
+
+
+def test_eval_failure_exits_nonzero_and_lists_reasons(monkeypatch, tmp_path, make_work):
+    def result_for(question):
+        res = agent_result(make_work)
+        if question == "Q1":  # no references, but case 'one' demands one
+            res = AgentResult(
+                Answer(res.answer.claims, (), res.answer.limitations), res.stats
+            )
+        return res
+
+    patch_agent(monkeypatch, FakeEvalAgent(result_for))
+    result = runner.invoke(app, eval_args(tmp_path))
+    assert result.exit_code == 1
+    assert "[FAIL] one" in result.output
+    assert "at least 1 reference" in result.output
+    assert "Summary: 1/2 passed" in result.output
+
+
+def test_eval_only_runs_selected_case(monkeypatch, tmp_path, make_work):
+    agent = FakeEvalAgent(lambda q: agent_result(make_work))
+    patch_agent(monkeypatch, agent)
+    result = runner.invoke(app, eval_args(tmp_path, "--only", "two"))
+    assert result.exit_code == 0
+    assert agent.questions == ["Q2"]
+    assert "Summary: 1/1 passed" in result.output
+
+
+def test_eval_unknown_case_id_exits_nonzero(monkeypatch, tmp_path, make_work):
+    patch_agent(monkeypatch, FakeEvalAgent(lambda q: agent_result(make_work)))
+    result = runner.invoke(app, eval_args(tmp_path, "--only", "nope"))
+    assert result.exit_code == 1
+    assert "unknown case id" in result.output
+
+
+def test_eval_bad_case_file_exits_nonzero(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef" + NL, encoding="utf-8")
+    missing = tmp_path / "nope.toml"
+    args = ["eval", "--cases", str(missing), "--config", str(BASE), "--env-file", str(env)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_eval_without_openai_key_exits_nonzero(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    args = [
+        "eval", "--cases", str(two_case_file(tmp_path)), "--config", str(BASE),
+        "--env-file", str(tmp_path / "absent"),
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "OPENAI_API_KEY is not set" in result.output
+
+
+def test_eval_auth_failure_aborts_with_exit_one(monkeypatch, tmp_path):
+    from research_agent.llm import LLMAuthError
+
+    def boom(question):
+        raise LLMAuthError("OpenAI rejected the API key")
+
+    patch_agent(monkeypatch, FakeEvalAgent(boom))
+    result = runner.invoke(app, eval_args(tmp_path))
+    assert result.exit_code == 1
+    assert "rejected the API key" in result.output

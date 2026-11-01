@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import TextIO
@@ -20,6 +22,7 @@ from research_agent.credentials import (
     Credentials,
     load_credentials,
 )
+from research_agent.evaluation import EvalError, load_cases, run_case, summarize
 from research_agent.llm import LLMError, OpenAIClient
 from research_agent.retrieval import OpenAlexClient, RetrievalError
 
@@ -140,14 +143,21 @@ def check_credentials(
         raise typer.Exit(code=1)
 
 
-def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
-    """Build the real clients and answer one question. Patched out in CLI tests."""
+@contextmanager
+def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
+    """Build the real clients and yield an agent. Patched out in CLI tests."""
     key = creds.openalex_api_key
     llm = OpenAIClient.from_credentials(cfg.llm, creds)
     with OpenAlexClient(
         cfg.openalex, cfg.limits, api_key=key.reveal() if key else None
     ) as search:
-        return ResearchAgent(llm, search, cfg.limits).run(question)
+        yield ResearchAgent(llm, search, cfg.limits, cfg.reporting)
+
+
+def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
+    """Answer one question with the real clients. Patched out in CLI tests."""
+    with _open_agent(cfg, creds) as agent:
+        return agent.run(question)
 
 
 @app.command("ask")
@@ -192,3 +202,67 @@ def ask(
         f"{stats.total_tokens} tokens ({stats.input_tokens} in / {stats.output_tokens} out)",
         err=True,
     )
+
+
+DEFAULT_CASES = Path("evals/cases.toml")
+
+
+@app.command("eval")
+def evaluate(
+    cases: Path = typer.Option(DEFAULT_CASES, "--cases", help="TOML file with evaluation cases."),
+    only: list[str] = typer.Option(
+        [], "--only", help="Run only this case id (repeatable). Default: all cases."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Run the evaluation cases with the real model and OpenAlex (costs tokens and searches).
+
+    Exits non-zero if any case fails.
+    """
+    cfg = _load_or_exit(config)
+    creds = _credentials_or_exit(env_file)
+    try:
+        selected = load_cases(cases)
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if only:
+        unknown = sorted(set(only) - {c.id for c in selected})
+        if unknown:
+            typer.echo(f"error: unknown case id(s): {', '.join(unknown)}", err=True)
+            raise typer.Exit(code=1)
+        selected = [c for c in selected if c.id in only]
+
+    reports = []
+    try:
+        creds.require_openai_key()
+        with _open_agent(cfg, creds) as agent:
+            for case in selected:
+                report = run_case(agent, case, cfg.limits)
+                reports.append(report)
+                if report.result:
+                    st = report.result.stats
+                    detail = (
+                        f"turns={st.iterations} searches={st.search_calls} tokens={st.total_tokens}"
+                        f" rejected_citations={report.rejected_citations}"
+                    )
+                else:
+                    detail = "run failed"
+                typer.echo(f"[{'PASS' if report.passed else 'FAIL'}] {case.id}  {detail}")
+                for failure in report.failures:
+                    typer.echo(f"    - {failure}")
+    except (CredentialError, LLMError, RetrievalError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    total = summarize(reports)
+    typer.echo(
+        f"Summary: {total.passed}/{total.total} passed | {total.total_tokens} tokens | "
+        f"{total.searches} searches | {total.rejected_citations} rejected citation(s) | "
+        f"{total.unstructured} unstructured answer(s)"
+    )
+    if total.passed != total.total:
+        raise typer.Exit(code=1)

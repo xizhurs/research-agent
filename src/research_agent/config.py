@@ -93,10 +93,25 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class ReportingConfig:
+    """Thresholds for the limitations the code adds to every answer."""
+
+    thin_evidence_works: int  # fewer distinct retrieved works than this counts as thin evidence
+    stale_after_years: int  # newest retrieved work at least this many years old counts as dated
+
+    def __post_init__(self) -> None:
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(f"reporting.{f.name} must be a positive integer, got {value!r}")
+
+
+@dataclass(frozen=True)
 class Config:
     limits: Limits
     openalex: OpenAlexConfig
     llm: LLMConfig
+    reporting: ReportingConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -127,4 +142,5 @@ def load_config(path: Path) -> Config:
         limits=_build_section(Limits, raw, "limits", path),
         openalex=_build_section(OpenAlexConfig, raw, "openalex", path),
         llm=_build_section(LLMConfig, raw, "llm", path),
+        reporting=_build_section(ReportingConfig, raw, "reporting", path),
     )

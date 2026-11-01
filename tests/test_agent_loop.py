@@ -2,11 +2,13 @@
 
 import json
 from dataclasses import replace
+from datetime import date
 
 import pytest
 
 from research_agent.agent import ResearchAgent
 from research_agent.agent.tools import SEARCH_TOOL
+from research_agent.config import ReportingConfig
 from research_agent.llm import (
     AssistantMessage,
     LLMRateLimitError,
@@ -54,8 +56,13 @@ def evidence_claim(text="Finding.", sources=("W1",)):
     return {"text": text, "kind": "evidence", "sources": list(sources)}
 
 
+TODAY = date(2026, 11, 1)  # fixed clock so "outdated evidence" limitations are deterministic
+REPORTING = ReportingConfig(thin_evidence_works=3, stale_after_years=3)
+
+
 def run(llm, search, limits, question="What works for land cover?"):
-    return ResearchAgent(llm, search, limits).run(question)
+    agent = ResearchAgent(llm, search, limits, REPORTING, today=lambda: TODAY)
+    return agent.run(question)
 
 
 # --- happy paths -----------------------------------------------------------------------------
@@ -83,7 +90,8 @@ def test_search_then_structured_answer(limits, make_work, make_result):
     ans = result.answer
     assert [c.text for c in ans.claims] == ["Deep nets work."]
     assert [w.id for w in ans.references] == ["W1"]  # only cited works
-    assert ans.limitations == ("abstracts only",)
+    assert ans.limitations[0] == "abstracts only"  # the model's own limitation comes first
+    assert any("OpenAlex" in x for x in ans.limitations)  # code-added evidence limitation
     assert (result.stats.iterations, result.stats.search_calls) == (2, 1)
     assert result.stats.total_tokens == 30
 
@@ -314,3 +322,72 @@ def test_empty_question_rejected_before_any_call(limits, question):
     with pytest.raises(ValueError, match="non-empty"):
         run(llm, FakeSearch(), limits, question)
     assert llm.calls == []
+
+
+# --- M4: citation validation and limitations through the whole loop ----------------------------
+
+
+def test_hallucinated_citation_is_rejected_end_to_end(limits, make_work, make_result):
+    reply = final([evidence_claim("Real.", ["W1"]), evidence_claim("Invented.", ["W404"])])
+    llm = StubLLMClient([tool_call_response(call()), text_response(reply)])
+    result = run(llm, FakeSearch(make_result([make_work("W1")])), limits)
+
+    ans = result.answer
+    assert ans.rejected_citations == ("W404",)
+    assert [c.kind for c in ans.claims] == ["evidence", "interpretation"]
+    assert [w.id for w in ans.references] == ["W1"]
+    assert any("W404" in x for x in ans.limitations)
+
+
+def test_citing_a_work_the_model_never_saw_is_rejected_even_if_it_was_returned(
+    limits, make_work, make_result
+):
+    """W2 was returned by OpenAlex but hidden by the context budget, so it is not citable."""
+    tight = replace(limits, max_context_tokens=150)
+    works = [make_work(f"W{i}", abstract="x" * 400) for i in (1, 2)]
+    reply = final([evidence_claim("Unseen.", ["W2"])])
+    llm = StubLLMClient([tool_call_response(call()), text_response(reply)])
+    ans = run(llm, FakeSearch(make_result(works)), tight).answer
+    assert ans.rejected_citations == ("W2",)
+    assert ans.claims[0].kind == "interpretation"
+
+
+def test_every_answer_carries_limitations_even_if_the_model_gives_none(limits):
+    llm = StubLLMClient([text_response(final())])  # model: no claims, no limitations
+    ans = run(llm, FakeSearch(), limits).answer
+    assert ans.limitations
+    assert any("No literature search was run" in x for x in ans.limitations)
+
+
+def test_fallback_answer_also_carries_evidence_limitations(limits, make_work, make_result):
+    llm = StubLLMClient([tool_call_response(call()), text_response("plain prose")])
+    ans = run(llm, FakeSearch(make_result([make_work()])), limits).answer
+    assert ans.structured is False
+    assert any("OpenAlex" in x for x in ans.limitations)
+    assert any("thin" in x for x in ans.limitations)  # only 1 work retrieved
+
+
+def test_search_records_drive_year_filter_and_coverage_limitations(
+    limits, make_work, make_result
+):
+    works = [make_work(f"W{i}", year=2025) for i in range(1, 5)]
+    result = make_result(works, total=900)
+    llm = StubLLMClient(
+        [tool_call_response(call(year_from=2022)), text_response(final([evidence_claim()]))]
+    )
+    ans = run(llm, FakeSearch(result), limits).answer
+    assert any("excluded works published before 2022" in x for x in ans.limitations)
+    assert any("4 of 900 matches" in x for x in ans.limitations)
+
+
+def test_stats_report_works_shown(limits, make_work, make_result):
+    works = [make_work(f"W{i}") for i in (1, 2, 3)]
+    llm = StubLLMClient([tool_call_response(call()), text_response(final())])
+    assert run(llm, FakeSearch(make_result(works)), limits).stats.works_shown == 3
+
+
+def test_outdated_limitation_uses_the_injected_clock(limits, make_work, make_result):
+    old = [make_work(f"W{i}", year=2019) for i in (1, 2, 3)]
+    llm = StubLLMClient([tool_call_response(call()), text_response(final())])
+    ans = run(llm, FakeSearch(make_result(old)), limits).answer
+    assert any("most recent retrieved work is from 2019" in x for x in ans.limitations)

@@ -30,7 +30,7 @@ def test_parses_claims_references_and_limitations(make_work):
 def test_references_only_include_retrieved_works(make_work):
     ans = parse_answer(reply([claim(sources=["W1", "W999"])]), {"W1": make_work("W1")})
     assert [w.id for w in ans.references] == ["W1"]
-    assert ans.claims[0].sources == ("W1", "W999")  # unknown IDs are kept as given (M4 rejects)
+    assert ans.claims[0].sources == ("W1",)  # the unretrieved ID is removed from the claim
 
 
 def test_unreferenced_retrieved_works_are_not_references(make_work):
@@ -63,8 +63,10 @@ def test_empty_claims_allowed_when_evidence_is_missing():
     assert ans.limitations == ("no relevant works found",)
 
 
-def test_code_notes_are_appended_and_duplicates_removed():
-    ans = parse_answer(reply([claim()], ["a", "b"]), {}, notes=["b", "budget hit"])
+def test_code_notes_are_appended_and_duplicates_removed(make_work):
+    ans = parse_answer(
+        reply([claim()], ["a", "b"]), {"W1": make_work("W1")}, notes=["b", "budget hit"]
+    )
     assert ans.limitations == ("a", "b", "budget hit")
 
 
@@ -106,3 +108,78 @@ def test_build_answer_falls_back_on_bad_format_and_on_none():
     assert "n" in bad.limitations
     empty = build_answer(None, {}, [])
     assert "no answer text" in empty.claims[0].text
+
+
+# --- citation validation (M4) ---------------------------------------------------------------
+
+
+def test_citation_to_unretrieved_work_is_removed_and_reported(make_work):
+    ev = {"W1": make_work("W1")}
+    ans = parse_answer(reply([claim("a", "evidence", ["W1", "W404"])]), ev)
+    assert ans.claims[0].sources == ("W1",)
+    assert ans.claims[0].kind == "evidence"  # still supported by the valid citation
+    assert ans.rejected_citations == ("W404",)
+    assert any("W404" in x and "not among the retrieved" in x for x in ans.limitations)
+
+
+def test_evidence_claim_with_only_unretrieved_citations_is_downgraded(make_work):
+    ans = parse_answer(reply([claim("made up", "evidence", ["W404"])]), {"W1": make_work("W1")})
+    assert ans.claims[0].kind == "interpretation"
+    assert ans.claims[0].sources == ()
+    assert ans.references == ()
+    assert any("labelled as evidence cited no retrieved work" in x for x in ans.limitations)
+
+
+def test_evidence_claim_with_no_citation_at_all_is_downgraded():
+    ans = parse_answer(reply([claim("uncited", "evidence", [])]), {})
+    assert ans.claims[0].kind == "interpretation"
+    assert ans.rejected_citations == ()  # nothing was cited, so nothing was rejected
+    assert any("cited no retrieved work" in x for x in ans.limitations)
+
+
+def test_interpretation_with_unretrieved_citation_keeps_claim_but_drops_citation():
+    ans = parse_answer(reply([claim("my view", "interpretation", ["W404"])]), {})
+    assert ans.claims[0].kind == "interpretation"
+    assert ans.claims[0].sources == ()
+    assert ans.rejected_citations == ("W404",)
+    assert not any("labelled as evidence" in x for x in ans.limitations)
+
+
+def test_valid_answer_produces_no_citation_notes(make_work):
+    ans = parse_answer(reply([claim()]), {"W1": make_work("W1")})
+    assert ans.rejected_citations == ()
+    assert ans.limitations == ()
+
+
+def test_rejected_ids_are_listed_once_and_duplicate_sources_collapse(make_work):
+    ev = {"W1": make_work("W1")}
+    text = reply(
+        [claim("a", "evidence", ["W1", "W1", "W9"]), claim("b", "interpretation", ["W9", "W8"])]
+    )
+    ans = parse_answer(text, ev)
+    assert ans.rejected_citations == ("W9", "W8")
+    assert ans.claims[0].sources == ("W1",)
+
+
+def test_every_surviving_citation_resolves_to_a_reference(make_work):
+    ev = {f"W{i}": make_work(f"W{i}") for i in (1, 2, 3)}
+    text = reply(
+        [
+            claim("a", "evidence", ["W1", "W7"]),
+            claim("b", "evidence", ["W9"]),
+            claim("c", "interpretation", ["W2", "W8", "W3"]),
+        ]
+    )
+    ans = parse_answer(text, ev)
+    reference_ids = {w.id for w in ans.references}
+    for c in ans.claims:
+        assert set(c.sources) <= reference_ids
+        if c.kind == "evidence":
+            assert c.sources  # evidence claims always keep at least one valid citation
+    assert reference_ids == {"W1", "W2", "W3"}
+
+
+def test_structured_flag():
+    assert parse_answer(reply([claim("t", "interpretation", [])]), {}).structured is True
+    assert fallback_answer("prose", "reason").structured is False
+    assert build_answer("not json", {}, []).structured is False

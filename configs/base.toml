@@ -26,3 +26,8 @@ model = "gpt-6-luna"
 reasoning_effort = "none"
 timeout_seconds = 60
 max_retries = 2
+
+# Thresholds for code-generated limitations (see agent/limitations.py).
+[reporting]
+thin_evidence_works = 3
+stale_after_years = 3
