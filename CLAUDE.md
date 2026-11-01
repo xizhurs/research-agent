@@ -4,9 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-M0 (scaffold) is done. M1 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
+M0 (scaffold) and M1 (deterministic OpenAlex retrieval) are done. M2 onwards is not started. Implement milestone by milestone (see Milestones) and update this file as decisions are made.
 
-Layout: `src/research_agent/` (`config.py` typed TOML config, `cli.py` Typer app), `configs/base.toml` (resource limits), `tests/`. `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
+Layout:
+- `src/research_agent/config.py`: typed TOML config (`[limits]`, `[openalex]`).
+- `src/research_agent/cli.py`: Typer app (`show-config`, `search`).
+- `src/research_agent/retrieval/`: no-LLM retrieval. `openalex.py` (pure `build_params`/`parse_work`/`parse_response` plus `OpenAlexClient`), `abstract.py`, `cache.py`, `models.py` (`Work`, `SearchResult`), `errors.py` (all derive from `RetrievalError`).
+- `configs/base.toml`, `tests/` (with `tests/fixtures/openalex_search.json`, a trimmed recorded response).
+
+`memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
+
+Retrieval facts (verified against the live API on 2026-11-01):
+- The API key is optional. Set `OPENALEX_API_KEY` to use one; it is sent as an `Authorization: Bearer` header and never put in URLs or cache keys. Without a key the daily budget is small ($0.10, shared per IP).
+- Searches use `search.title_and_abstract`, so every match is on text we can show as evidence.
+- Retry only on 429/500/502/503/504 and network errors. A `Retry-After` longer than `max_backoff_seconds` fails fast.
+- `SearchResult` carries `total_count`, `missing_abstract_count`, `skipped_records` and `from_cache` so later milestones can report limitations.
 
 ## Working principles
 
@@ -47,7 +59,7 @@ Ask the user before the milestone that needs each one. Do not assume.
 
 - Which provider and model the first adapter targets (needed for M2).
 - Deployment platform (not needed before M5 is done).
-- OpenAlex credentials or contact email for polite-pool access (needed for M1).
+- Whether to get a free OpenAlex API key (recommended before heavy use; needed for the larger daily budget). The code works without one.
 - The evaluation question set and who curates it (needed for M4).
 
 ## Architecture
@@ -129,6 +141,8 @@ uv run pytest tests/test_config.py::test_missing_file   # single test
 uv run ruff check .
 uv run research-agent --help
 uv run research-agent show-config                       # reads configs/base.toml from the cwd
+uv run research-agent search "land cover" --year-from 2022 -n 3 --abstracts
+uv run pytest -m live                                   # opt-in: one real OpenAlex call
 ```
 
 ## Milestones

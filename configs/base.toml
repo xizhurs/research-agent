@@ -8,3 +8,13 @@ abstract_max_chars = 1200
 max_context_tokens = 6000
 max_output_tokens = 800
 max_total_tokens = 20000
+
+# The API key is optional and is read from the OPENALEX_API_KEY environment variable, never from here.
+[openalex]
+base_url = "https://api.openalex.org"
+timeout_seconds = 20
+max_retries = 3
+backoff_base_seconds = 1.0
+max_backoff_seconds = 30.0
+cache_dir = ".cache/openalex"
+cache_ttl_days = 30
