@@ -183,6 +183,7 @@ Behavioural contract for answers:
 - OpenAlex tests use recorded fixture responses.
 - The default `uv run pytest` makes no network calls and costs nothing.
 - Live smoke tests are opt-in behind an explicit marker or flag.
+- CI (`.github/workflows/ci.yml`) runs on pull requests to `main`: `uv sync --locked`, `ruff check`, `pytest`, on Ubuntu and Windows with Python 3.12 and 3.13. It has no secrets and must stay offline: never add the `live` marker, `eval` or API keys to it. Actions are pinned by commit SHA with the version in a comment; update them deliberately. The `CI passed` job is the single check to require in branch protection. Keep `uv.lock` committed and current, or `--locked` fails the job.
 - From M4, keep a small hand-written evaluation set (about 10–20 questions) with expected properties, not exact text.
 
 ## Commands
