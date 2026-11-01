@@ -1,0 +1,63 @@
+name: CI
+
+# Runs on every pull request that targets main. It uses no secrets and makes no calls to
+# OpenAI or OpenAlex: the default test run is fully offline (live tests and `eval` are opt-in
+# and are intentionally NOT run here, because they cost money and need API keys).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the older, now outdated run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # --locked fails the job if uv.lock is out of date with pyproject.toml.
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # pyproject.toml deselects the `live` tests by default, so this is offline.
+      - name: Test
+        run: uv run pytest
+
+  # One stable check name for branch protection, independent of the matrix above.
+  ci-passed:
+    name: CI passed
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every test job succeeded
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test jobs finished with: ${{ needs.test.result }}"
+            exit 1
+          fi

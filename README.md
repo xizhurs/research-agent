@@ -139,6 +139,8 @@ uv run pytest -m live          # opt-in: real OpenAlex and OpenAI calls (a few c
 uv run ruff check .
 ```
 
+Every pull request to `main` runs lint and the offline tests on GitHub Actions (`.github/workflows/ci.yml`: Ubuntu and Windows, Python 3.12 and 3.13). CI uses no secrets and never calls OpenAI or OpenAlex, so live tests and `eval` are not run there; run those yourself before merging changes that touch the agent, the prompt or the adapters.
+
 The default test run uses a scripted stub LLM and recorded OpenAlex responses. See [`CLAUDE.md`](CLAUDE.md) for the architecture, engineering principles, milestone history and detailed behavioural notes.
 
 ## Known limitations
