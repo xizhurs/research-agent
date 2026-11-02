@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from research_agent.config import Limits, ReportingConfig
-from research_agent.rainfall import RainfallAnalysis
+from research_agent.rainfall import RainfallRecord
 from research_agent.retrieval import Work
 
 ALWAYS = (
@@ -40,7 +40,7 @@ def evidence_limitations(
     limits: Limits,
     reporting: ReportingConfig,
     today: date,
-    analyses: Sequence[RainfallAnalysis] = (),
+    analyses: Sequence[RainfallRecord] = (),
     rainfall_calls: int = 0,
 ) -> list[str]:
     """Limitations implied by the searches, the works seen and the rainfall analyses shown.

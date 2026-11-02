@@ -93,6 +93,7 @@ class RainfallConfig:
     top_events: int
     geocode_candidates: int
     dominance_ratio: float  # top candidate wins only if its population is this many times larger
+    dry_day_mm: float  # a day with less precipitation than this is dry (ETCCDI CDD uses 1 mm)
 
     def __post_init__(self) -> None:
         for name in ("geocoding_url", "archive_url"):
@@ -109,6 +110,7 @@ class RainfallConfig:
             "max_backoff_seconds",
             "cache_ttl_days",
             "dominance_ratio",
+            "dry_day_mm",
         ):
             value = getattr(self, name)
             if not _is_number(value) or value <= 0:

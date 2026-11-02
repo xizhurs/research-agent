@@ -13,7 +13,7 @@ from typing import Any
 
 from research_agent.agent.budget import estimate_tokens
 from research_agent.llm import ToolSpec
-from research_agent.rainfall import RainfallAnalysis
+from research_agent.rainfall import DryAnalysis, RainfallAnalysis, RainfallRecord
 from research_agent.retrieval import SearchResult, Work
 
 SEARCH_TOOL_NAME = "search_literature"
@@ -43,16 +43,19 @@ SEARCH_TOOL = ToolSpec(
 )
 
 
-RAINFALL_TOOL_NAME = "analyze_extreme_rainfall"
+RAINFALL_TOOL_NAME = "analyze_rainfall_extremes"
 
 RAINFALL_TOOL = ToolSpec(
     name=RAINFALL_TOOL_NAME,
     description=(
-        "Quantify historical extreme rainfall in one city from ERA5 reanalysis (daily "
-        "precipitation). Computes Rx1day (the largest one-day rainfall of each year), a "
-        "climatological baseline, the largest events on record and, if event_date is given, how "
-        "extreme that day was. Returns a numeric record with an ID such as R1. Use it for "
-        "quantitative questions about past rainfall at a place; use search_literature for "
+        "Quantify historical rainfall extremes in one city from ERA5 reanalysis (daily "
+        "precipitation). metric='wet' (default): Rx1day, the largest one-day rainfall of each "
+        "year, a climatological baseline, the largest events and, if event_date is given, how "
+        "extreme that day was. metric='dry': consecutive dry days (CDD, longest run of days "
+        "under 1 mm), the longest dry spells, the driest years by annual total and, with "
+        "event_year or event_date, how dry that year or dry spell was. A dry spell is not a "
+        "drought index. Returns a numeric record with an ID such as R1. Use it for quantitative "
+        "questions about past rainfall or dry spells at a place; use search_literature for "
         "explanations and mechanisms. Put only the place name in 'city' and use 'country_code' "
         "(ISO alpha-2, e.g. FR) and 'region' (state or province) to disambiguate. Not for "
         "forecasts."
@@ -76,7 +79,19 @@ RAINFALL_TOOL = ToolSpec(
             },
             "event_date": {
                 "type": "string",
-                "description": "Optional. A day to assess, as YYYY-MM-DD.",
+                "description": (
+                    "Optional. A day to assess, as YYYY-MM-DD (metric 'dry': a day inside the "
+                    "dry spell of interest)."
+                ),
+            },
+            "metric": {
+                "type": "string",
+                "enum": ["wet", "dry"],
+                "description": "Optional. 'wet' (default) for heavy rain, 'dry' for dry spells.",
+            },
+            "event_year": {
+                "type": "integer",
+                "description": "Optional, metric 'dry' only. A year to compare, e.g. 2022.",
             },
         },
         "required": ["city"],
@@ -182,6 +197,8 @@ class RainfallArgs:
     start_year: int | None
     end_year: int | None
     event_date: date | None
+    metric: str
+    event_year: int | None
 
 
 def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
@@ -202,6 +219,9 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
         event_date = date.fromisoformat(raw_date) if raw_date else None
     except ValueError:
         raise ToolArgumentError("'event_date' must be a date formatted YYYY-MM-DD") from None
+    metric = _optional_str(arguments, "metric") or "wet"
+    if metric not in ("wet", "dry"):
+        raise ToolArgumentError("'metric' must be 'wet' or 'dry'")
     return RainfallArgs(
         city=city,
         country_code=_optional_str(arguments, "country_code"),
@@ -209,6 +229,8 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
         start_year=_optional_int(arguments, "start_year"),
         end_year=_optional_int(arguments, "end_year"),
         event_date=event_date,
+        metric=metric,
+        event_year=_optional_int(arguments, "event_year"),
     )
 
 
@@ -216,8 +238,14 @@ def _mm(value: float) -> str:
     return f"{value:.1f} mm"
 
 
-def format_rainfall(analysis: RainfallAnalysis) -> str:
+def format_rainfall(record: RainfallRecord) -> str:
     """Render one analysis for the model: compact, deterministic, numbers only from code."""
+    if isinstance(record, DryAnalysis):
+        return _format_dry(record)
+    return _format_wet(record)
+
+
+def _format_wet(analysis: RainfallAnalysis) -> str:
     loc, prov = analysis.location, analysis.provenance
     valid = analysis.annual_maxima
     lines = [
@@ -256,4 +284,68 @@ def format_rainfall(analysis: RainfallAnalysis) -> str:
             parts.append("ranks withheld: record too short")
         lines.append("; ".join(parts) + ".")
     lines.append("Caveats: " + " ".join(analysis.caveats))
+    return "\n".join(lines)
+
+
+def _format_dry(a: DryAnalysis) -> str:
+    loc, prov = a.location, a.provenance
+    lines = [
+        f"[{a.id}] Extreme dry conditions (CDD = longest run of days under {a.dry_day_mm:g} mm; "
+        f"annual total precipitation) for {loc.label} ({loc.latitude:.3f}, {loc.longitude:.3f}).",
+        f"Data: {prov.dataset}; grid cell centre ({prov.grid_latitude:.2f}, "
+        f"{prov.grid_longitude:.2f}); {prov.variable}.",
+        f"Valid years: {len(a.annual)} ({a.valid_years[0]}-{a.valid_years[-1]}), "
+        f"{len(a.excluded_years)} excluded.",
+    ]
+    base = a.baseline
+    if base:
+        lines.append(
+            f"Baseline {base.start_year}-{base.end_year} ({base.years} years): yearly CDD mean "
+            f"{base.cdd_mean:.1f} days, median {base.cdd_median:.1f} days; annual total mean "
+            f"{_mm(base.total_mean_mm)}, median {_mm(base.total_median_mm)}."
+        )
+    spells = [
+        f"{i}) {s.start} to {s.end}, {s.days} days, {_mm(s.total_mm)}"
+        for i, s in enumerate(a.longest_spells, start=1)
+    ]
+    lines.append("Longest unbroken dry spells: " + "; ".join(spells) + ".")
+    years = []
+    for i, y in enumerate(a.driest_years, start=1):
+        times = f" ({y.total_mm / base.total_mean_mm:.2f}x baseline mean)" if base else ""
+        years.append(f"{i}) {y.year} {_mm(y.total_mm)}{times}")
+    lines.append("Driest years (annual total): " + "; ".join(years) + ".")
+    yf = a.year_focus
+    if yf:
+        parts = [f"Year {yf.year}: total {_mm(yf.total_mm)}"]
+        if yf.total_rank is not None and yf.percent_wetter is not None:
+            parts.append(
+                f"rank {yf.total_rank} of {len(a.annual)} (1 = driest; {yf.percent_wetter:.1f}% "
+                "of years were wetter)"
+            )
+        else:
+            parts.append("rank withheld: record too short")
+        if yf.ratio_to_baseline_mean is not None:
+            parts.append(f"{yf.ratio_to_baseline_mean:.2f}x the baseline mean total")
+        parts.append(f"longest dry run that year {yf.cdd_days} days")
+        lines.append("; ".join(parts) + ".")
+    ev = a.event
+    if ev:
+        if not ev.dry_day:
+            lines.append(f"Event {ev.date}: {_mm(ev.value_mm)}, not a dry day.")
+        elif ev.spell is None:
+            lines.append(
+                f"Event {ev.date}: {_mm(ev.value_mm)}, a dry day; its dry spell was not measured "
+                "(excluded year)."
+            )
+        else:
+            parts = [
+                f"Event {ev.date}: {_mm(ev.value_mm)}, a dry day inside the unbroken dry spell "
+                f"{ev.spell.start} to {ev.spell.end} ({ev.spell.days} days)"
+            ]
+            if ev.spell_rank is not None:
+                parts.append(f"rank {ev.spell_rank} of {ev.spells} unbroken spells (1 = longest)")
+            else:
+                parts.append("rank withheld: record too short")
+            lines.append("; ".join(parts) + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
     return "\n".join(lines)

@@ -29,7 +29,7 @@ from research_agent.rainfall import (
     RainfallNetworkError,
 )
 
-SEARCH, RAIN = "search_literature", "analyze_extreme_rainfall"
+SEARCH, RAIN = "search_literature", "analyze_rainfall_extremes"
 TODAY = date(2026, 11, 2)
 REPORTING = ReportingConfig(thin_evidence_works=3, stale_after_years=3)
 
@@ -198,6 +198,8 @@ def test_tool_arguments_reach_the_analyzer_with_parsed_types(limits, make_analys
             "start_year": 1990,
             "end_year": 2024,
             "event_date": date(2021, 7, 20),
+            "metric": "wet",  # the default when the model omits it
+            "event_year": None,
         }
     ]
 
@@ -463,7 +465,7 @@ def test_trace_records_the_tools_requested_on_each_turn(
         rainfall=FakeRainfall(make_analysis()),
     )
     assert result.stats.tool_trace == (
-        (RAIN, SEARCH),
+        (f"{RAIN}[wet]", SEARCH),
         (SEARCH,),
         (),  # the answer turn requested no tool
     )
@@ -474,9 +476,78 @@ def test_trace_includes_refused_and_ignored_calls(limits, make_analysis):
     capped = replace(limits, max_iterations=2)
     llm = StubLLMClient([tool_call_response(rain("a")), tool_call_response(rain("b"))])
     result = run(llm, capped, rainfall=FakeRainfall(make_analysis()))
-    assert result.stats.tool_trace == ((RAIN,), (RAIN,))  # turn 2 was forced: the call was ignored
+    assert result.stats.tool_trace == (
+        (f"{RAIN}[wet]",),
+        (f"{RAIN}[wet]",),
+    )  # turn 2 was forced: the call was ignored
 
 
 def test_no_tool_use_gives_a_single_empty_turn(limits):
     result = run(StubLLMClient([text_response(final())]), limits)
     assert result.stats.tool_trace == ((),)
+
+
+# --- dry metric ---------------------------------------------------------------------------------
+
+
+def test_dry_metric_and_event_year_reach_the_analyzer_and_show_in_the_trace(
+    limits, make_dry_analysis
+):
+    analyzer = FakeRainfall(make_dry_analysis())
+    reply = final([evidence("The longest dry spell lasted 29 days.", "R1")])
+    llm = StubLLMClient(
+        [tool_call_response(rain(metric="dry", event_year=2004)), text_response(reply)]
+    )
+
+    result = run(llm, limits, rainfall=analyzer)
+
+    assert analyzer.calls[0]["metric"] == "dry" and analyzer.calls[0]["event_year"] == 2004
+    assert result.stats.tool_trace == ((f"{RAIN}[dry]",), ())
+    assert tool_results(llm, 1)[0].content.startswith("[R1] Extreme dry conditions")
+    ans = result.answer
+    assert [a.metric for a in ans.data_references] == ["dry"]
+    assert any("not a drought index" in x for x in ans.limitations)
+    assert not any("OpenAlex" in x for x in ans.limitations)
+
+
+def test_the_two_tool_prompt_explains_both_metrics_and_forbids_calling_dry_spells_drought(
+    limits, make_dry_analysis
+):
+    llm = StubLLMClient([text_response(final())])
+    run(llm, limits, rainfall=FakeRainfall(make_dry_analysis()))
+    prompt = llm.calls[0].instructions
+    assert 'metric "wet"' in prompt and 'metric "dry"' in prompt
+    assert "event_year" in prompt and "is not a drought" in prompt
+    assert "Leave start_year and end_year unset" in prompt
+
+
+def test_wet_and_dry_analyses_of_one_city_are_both_citable(
+    limits, make_analysis, make_dry_analysis
+):
+    analyzer = FakeRainfall(make_analysis(), make_dry_analysis())
+    reply = final([evidence("Wettest day.", "R1"), evidence("Longest dry spell.", "R2")])
+    llm = StubLLMClient(
+        [tool_call_response(rain("a"), rain("b", metric="dry")), text_response(reply)]
+    )
+    result = run(llm, limits, rainfall=analyzer)
+    ans = result.answer
+    assert [(a.id, a.metric) for a in ans.data_references] == [("R1", "wet"), ("R2", "dry")]
+    assert result.stats.rainfall_calls == 2
+    assert result.stats.tool_trace == ((f"{RAIN}[wet]", f"{RAIN}[dry]"), ())
+
+
+def test_unknown_metric_goes_back_to_the_model_and_costs_nothing(limits):
+    analyzer = FakeRainfall(RuntimeError("must not be called"))
+    llm = StubLLMClient([tool_call_response(rain(metric="drought")), text_response(final())])
+    result = run(llm, limits, rainfall=analyzer)
+    assert "'metric' must be 'wet' or 'dry'" in tool_results(llm, 1)[0].content
+    assert analyzer.calls == [] and result.stats.rainfall_calls == 0
+    assert result.stats.tool_trace[0] == (f"{RAIN}[drought]",)  # the model's choice is recorded
+
+
+def test_fabricated_id_is_still_rejected_next_to_a_dry_analysis(limits, make_dry_analysis):
+    reply = final([evidence("Real.", "R1"), evidence("Invented.", "R7")])
+    llm = StubLLMClient([tool_call_response(rain(metric="dry")), text_response(reply)])
+    result = run(llm, limits, rainfall=FakeRainfall(make_dry_analysis()))
+    assert result.answer.rejected_citations == ("R7",)
+    assert [a.id for a in result.answer.data_references] == ["R1"]

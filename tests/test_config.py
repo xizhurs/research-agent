@@ -56,6 +56,7 @@ min_year_coverage = 0.9
 top_events = 5
 geocode_candidates = 10
 dominance_ratio = 10.0
+dry_day_mm = 1.0
 """
 
 
@@ -221,6 +222,8 @@ def test_base_config_rainfall_section():
         ("min_years = 20", "min_years = 0", "min_years"),
         ("top_events = 5", "top_events = true", "top_events"),
         ("dominance_ratio = 10.0", "dominance_ratio = -1", "dominance_ratio"),
+        ("dry_day_mm = 1.0", "dry_day_mm = 0", "dry_day_mm"),
+        ("dry_day_mm = 1.0", 'dry_day_mm = "1"', "dry_day_mm"),
         ("default_start_year = 1950", "default_start_year = 1900", "default_start_year"),
         ("baseline_start_year = 1991", "baseline_start_year = 2021", "baseline_start_year"),
         ('archive_url = "https', 'archive_url = "ftp', "archive_url"),

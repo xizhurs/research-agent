@@ -39,11 +39,17 @@ def test_real_rainfall_analysis_for_one_city(tmp_path):
     with RainfallClient(cfg) as client:
         first = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
         second = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
+        dry = client.analyze(
+            "Zhengzhou", country_code="CN", start_year=1991, end_year=2020, metric="dry"
+        )
     assert first.provenance.from_cache is False and second.provenance.from_cache is True
     assert first.location.country_code == "CN" and first.location.admin1 == "Henan"
     assert len(first.annual_maxima) == 30 and first.baseline.years == 30
     assert all(a.mm > 0 for a in first.annual_maxima)
     assert "models=era5" in first.provenance.request_url
+    # The dry metric reads the same archive request, so it is served from the cache too.
+    assert dry.metric == "dry" and dry.provenance.from_cache is True
+    assert len(dry.annual) == 30 and dry.longest_spells[0].days > 10
 
 
 def test_openai_tool_calling_round_trip():

@@ -165,9 +165,13 @@ def rainfall(
     event_date: str | None = typer.Option(
         None, "--event-date", help="A day to assess, as YYYY-MM-DD."
     ),
+    metric: str = typer.Option("wet", "--metric", help="'wet' (Rx1day) or 'dry' (CDD, totals)."),
+    event_year: int | None = typer.Option(
+        None, "--event-year", help="With --metric dry: a year to compare."
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
 ) -> None:
-    """Analyse extreme rainfall (Rx1day, ERA5) for a city deterministically (no LLM)."""
+    """Analyse extreme rainfall or dry spells (ERA5) for a city deterministically (no LLM)."""
     cfg = _load_or_exit(config)
     try:
         day = date.fromisoformat(event_date) if event_date else None
@@ -183,6 +187,8 @@ def rainfall(
                 start_year=start_year,
                 end_year=end_year,
                 event_date=day,
+                metric=metric,
+                event_year=event_year,
             )
     except RainfallError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -216,9 +222,7 @@ def check_credentials(
         f"{OPENALEX_VAR}: "
         + ("set" if creds.openalex_api_key else "not set (optional; small anonymous budget)")
     )
-    typer.echo(
-        f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed for ask)")
-    )
+    typer.echo(f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed for ask)"))
     if require_openai and creds.openai_api_key is None:
         typer.echo(f"error: {OPENAI_VAR} is required but not set", err=True)
         raise typer.Exit(code=1)
@@ -281,9 +285,10 @@ def ask(
         typer.echo("\nData")
         for a in answer.data_references:
             p = a.provenance
+            what = "dry spells and annual totals" if a.metric == "dry" else "Rx1day"
             typer.echo(
-                f"[{a.id}] {a.location.label}: Rx1day {a.annual_maxima[0].year}-"
-                f"{a.annual_maxima[-1].year}. {p.dataset}; grid cell "
+                f"[{a.id}] {a.location.label}: {what} {a.valid_years[0]}-"
+                f"{a.valid_years[-1]}. {p.dataset}; grid cell "
                 f"({p.grid_latitude:.2f}, {p.grid_longitude:.2f})."
             )
             typer.echo(f"    {p.license}. {p.request_url}")
@@ -308,8 +313,13 @@ def ask(
 
 def format_trace(trace: tuple[tuple[str, ...], ...]) -> str:
     """One line: the tools the model requested on each turn, e.g. ``1: rainfall | 2: answer``."""
-    short = {"search_literature": "search", "analyze_extreme_rainfall": "rainfall"}
-    turns = [", ".join(short.get(n, n) for n in names) or "answer" for names in trace]
+    short = {"search_literature": "search", "analyze_rainfall_extremes": "rainfall"}
+
+    def shorten(name: str) -> str:
+        base, bracket, rest = name.partition("[")
+        return short.get(base, base) + bracket + rest
+
+    turns = [", ".join(shorten(n) for n in names) or "answer" for names in trace]
     return " | ".join(f"{i}: {turn}" for i, turn in enumerate(turns, start=1))
 
 

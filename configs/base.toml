@@ -57,3 +57,4 @@ min_year_coverage = 0.9
 top_events = 5
 geocode_candidates = 10
 dominance_ratio = 10.0
+dry_day_mm = 1.0

@@ -17,7 +17,7 @@ from research_agent.agent.tools import (
     parse_rainfall_args,
 )
 from research_agent.cli import app
-from research_agent.evaluation import EvalCase, check_result, load_cases
+from research_agent.evaluation import EvalCase, EvalError, check_result, load_cases
 from research_agent.rainfall import AmbiguousLocationError
 
 BASE = Path(__file__).resolve().parents[1] / "configs" / "base.toml"
@@ -34,7 +34,7 @@ def r1(make_analysis):
 
 
 def test_tool_schema_requires_city_only():
-    assert RAINFALL_TOOL.name == "analyze_extreme_rainfall"
+    assert RAINFALL_TOOL.name == "analyze_rainfall_extremes"
     assert RAINFALL_TOOL.parameters["required"] == ["city"]
     assert set(RAINFALL_TOOL.parameters["properties"]) == {
         "city",
@@ -43,6 +43,8 @@ def test_tool_schema_requires_city_only():
         "start_year",
         "end_year",
         "event_date",
+        "metric",
+        "event_year",
     }
 
 
@@ -337,20 +339,191 @@ def test_format_trace_is_one_readable_line():
     from research_agent.cli import format_trace
 
     trace = (
-        ("analyze_extreme_rainfall", "search_literature"),
-        ("search_literature",),
+        ("analyze_rainfall_extremes[wet]", "search_literature"),
+        ("analyze_rainfall_extremes[dry]",),
         (),
     )
-    assert format_trace(trace) == "1: rainfall, search | 2: search | 3: answer"
+    assert format_trace(trace) == "1: rainfall[wet], search | 2: rainfall[dry] | 3: answer"
 
 
 def test_ask_prints_tools_by_turn_on_stderr(monkeypatch, tmp_path):
     answer = Answer(claims=(Claim("x", "interpretation", ()),), references=(), limitations=("n",))
     stats = RunStats(
-        2, 0, 10, 10, 0, rainfall_calls=1, tool_trace=(("analyze_extreme_rainfall",), ())
+        2, 0, 10, 10, 0, rainfall_calls=1, tool_trace=(("analyze_rainfall_extremes[wet]",), ())
     )
     monkeypatch.setattr("research_agent.cli._run_agent", lambda *a: AgentResult(answer, stats))
     env = tmp_path / ".env"
     env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef\n", encoding="utf-8")
     result = runner.invoke(app, ["ask", "q", "--config", str(BASE), "--env-file", str(env)])
-    assert "tools by turn: 1: rainfall | 2: answer" in result.output
+    assert "tools by turn: 1: rainfall[wet] | 2: answer" in result.output
+
+
+# --- dry metric: arguments, formatting, citations, limitations, CLI, eval -------------------------
+
+
+@pytest.fixture
+def d1(make_dry_analysis):
+    """Dry analysis with a year focus (2004) and an event day inside the New Year spell."""
+    return replace(make_dry_analysis(event_date=date(2001, 12, 25), event_year=2004), id="R1")
+
+
+def test_parse_metric_and_event_year():
+    assert parse_rainfall_args({"city": "Paris"}).metric == "wet"
+    dry = parse_rainfall_args({"city": "Paris", "metric": "dry", "event_year": 2022})
+    assert (dry.metric, dry.event_year) == ("dry", 2022)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"city": "Paris", "metric": "drought"},
+        {"city": "Paris", "metric": 3},
+        {"city": "Paris", "metric": "dry", "event_year": "2022"},
+        {"city": "Paris", "metric": "dry", "event_year": True},
+    ],
+)
+def test_parse_rejects_bad_metric_or_event_year(arguments):
+    with pytest.raises(ToolArgumentError):
+        parse_rainfall_args(arguments)
+
+
+def test_schema_offers_both_metrics():
+    props = RAINFALL_TOOL.parameters["properties"]
+    assert props["metric"]["enum"] == ["wet", "dry"] and "event_year" in props
+    assert RAINFALL_TOOL.parameters["required"] == ["city"]  # metric stays optional (wet)
+
+
+def test_format_dry_contains_every_number_the_model_may_quote(d1):
+    text = format_rainfall(d1)
+    assert text.startswith(
+        "[R1] Extreme dry conditions (CDD = longest run of days under 1 mm; annual total "
+        "precipitation) for Zhengzhou, Henan, China"
+    )
+    assert "Valid years: 5 (2000-2004), 0 excluded." in text
+    assert (
+        "Baseline 2000-2004 (5 years): yearly CDD mean 14.0 days, median 12.0 days; annual total "
+        "mean 1742.0 mm, median 1755.0 mm."
+    ) in text
+    assert (
+        "Longest unbroken dry spells: 1) 2004-08-01 to 2004-08-29, 29 days, 0.0 mm; "
+        "2) 2001-12-20 to 2002-01-09, 21 days, 0.0 mm; 3) 2000-07-01 to 2000-07-20, 20 days, "
+        "0.0 mm."
+    ) in text
+    assert (
+        "Driest years (annual total): 1) 2000 1680.0 mm (0.96x baseline mean); 2) 2004 1685.0 mm "
+        "(0.97x baseline mean); 3) 2002 1755.0 mm (1.01x baseline mean)."
+    ) in text
+    assert (
+        "Year 2004: total 1685.0 mm; rank 2 of 5 (1 = driest; 60.0% of years were wetter); "
+        "0.97x the baseline mean total; longest dry run that year 29 days."
+    ) in text
+    assert (
+        "Event 2001-12-25: 0.0 mm, a dry day inside the unbroken dry spell 2001-12-20 to "
+        "2002-01-09 (21 days); rank 2 of 5 unbroken spells (1 = longest)."
+    ) in text
+    assert "Caveats: Values are ERA5 reanalysis" in text and "not a drought index" in text
+
+
+def test_format_dry_is_deterministic_and_compact(d1):
+    assert format_rainfall(d1) == format_rainfall(d1)
+    assert estimate_tokens(format_rainfall(d1)) < 800
+
+
+def test_format_dry_for_a_wet_day_and_a_withheld_rank(make_dry_analysis):
+    wet_day = replace(make_dry_analysis(event_date=date(2003, 6, 15)), id="R3")
+    assert "Event 2003-06-15: 5.0 mm, not a dry day." in format_rainfall(wet_day)
+    short = replace(make_dry_analysis(event_year=2004, min_years=20), id="R4")
+    assert "rank withheld: record too short" in format_rainfall(short)
+
+
+def test_wet_formatting_is_unchanged_by_the_dry_metric(r1):
+    assert format_rainfall(r1).startswith("[R1] Extreme rainfall (Rx1day")
+
+
+def test_dry_analysis_is_citable_next_to_a_wet_one(d1, make_analysis):
+    wet = replace(make_analysis(), id="R2")
+    reply = (
+        '{"claims": [{"text": "a", "kind": "evidence", "sources": ["R2"]},'
+        ' {"text": "b", "kind": "evidence", "sources": ["R1", "R9"]}], "limitations": []}'
+    )
+    answer = parse_answer(reply, {}, analyses={"R1": d1, "R2": wet})
+    assert [(a.id, a.metric) for a in answer.data_references] == [("R2", "wet"), ("R1", "dry")]
+    assert answer.rejected_citations == ("R9",)
+
+
+def test_dry_caveats_reach_the_limitations_without_openalex_text(limits, reporting, d1):
+    out = limits_for([], {}, limits, reporting, analyses=[d1], rainfall_calls=1)
+    assert out == list(d1.caveats) and ALWAYS not in out
+
+
+def test_rainfall_command_runs_the_dry_metric(fake_client, make_dry_analysis):
+    fake_client.outcome = make_dry_analysis(event_year=2004)
+    args = ["rainfall", "Madrid", "--metric", "dry", "--event-year", "2004"]
+    result = runner.invoke(app, [*args, "--config", str(BASE)])
+    assert result.exit_code == 0, result.output
+    assert "[R1] Extreme dry conditions" in result.output
+    assert "Year 2004: total 1685.0 mm" in result.output
+    assert fake_client.calls[0]["metric"] == "dry" and fake_client.calls[0]["event_year"] == 2004
+
+
+def test_ask_data_section_names_the_dry_analysis(monkeypatch, tmp_path, d1):
+    answer = Answer(
+        claims=(Claim("Longest spell was 29 days.", "evidence", ("R1",)),),
+        references=(),
+        limitations=("n",),
+        data_references=(d1,),
+    )
+    monkeypatch.setattr(
+        "research_agent.cli._run_agent",
+        lambda *a: AgentResult(answer, RunStats(2, 0, 10, 10, 0, rainfall_calls=1)),
+    )
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef\n", encoding="utf-8")
+    result = runner.invoke(app, ["ask", "q", "--config", str(BASE), "--env-file", str(env)])
+    assert "[R1] Zhengzhou, Henan, China: dry spells and annual totals 2000-2004." in result.output
+
+
+def _traced(d1, *trace):
+    answer = Answer(
+        claims=(Claim("x", "evidence", ("R1",)),),
+        references=(),
+        limitations=("n",),
+        data_references=(d1,),
+    )
+    return AgentResult(answer, RunStats(2, 0, 10, 10, 0, rainfall_calls=1, tool_trace=trace))
+
+
+def test_expect_metric_is_judged_on_the_trace(d1, limits):
+    case = EvalCase("c", "Q", expect_metric="dry")
+    good = _traced(d1, ("analyze_rainfall_extremes[dry]",), ())
+    assert check_result(case, good, limits) == []
+    wrong = _traced(d1, ("analyze_rainfall_extremes[wet]",), ())
+    failures = check_result(case, wrong, limits)
+    assert any("metric 'dry'" in f and "[wet]" in f for f in failures)
+
+
+def test_expect_metric_counts_a_refused_call_as_the_choice_made(limits):
+    case = EvalCase("c", "Q", expect_metric="dry")
+    refused = AgentResult(
+        Answer(claims=(Claim("x", "interpretation", ()),), references=(), limitations=("n",)),
+        RunStats(2, 0, 10, 10, 0, tool_trace=(("analyze_rainfall_extremes[dry]",), ())),
+    )
+    assert check_result(case, refused, limits) == []
+
+
+def test_case_file_rejects_an_unknown_expect_metric(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        '[[case]]\nid = "a"\nquestion = "Q"\nexpect_metric = "damp"\n', encoding="utf-8"
+    )
+    with pytest.raises(EvalError, match="expect_metric"):
+        load_cases(path)
+
+
+def test_shipped_cases_cover_wet_and_dry_choices():
+    root = Path(__file__).resolve().parents[1]
+    cases = {c.id: c for c in load_cases(root / "evals" / "cases.toml")}
+    assert cases["rainfall-event-zhengzhou"].expect_metric == "wet"
+    assert cases["dry-spells-sao-paulo"].expect_metric == "dry"
+    assert cases["dry-and-literature"].min_searches == 1
+    assert cases["wet-and-dry-both"].min_rainfall_calls == 2

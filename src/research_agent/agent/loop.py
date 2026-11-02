@@ -45,8 +45,8 @@ from research_agent.rainfall import (
     AmbiguousLocationError,
     InvalidRainfallQueryError,
     LocationNotFoundError,
-    RainfallAnalysis,
     RainfallError,
+    RainfallRecord,
 )
 from research_agent.retrieval import (
     AuthError,
@@ -75,7 +75,16 @@ class RainfallAnalyzer(Protocol):
         start_year: int | None = None,
         end_year: int | None = None,
         event_date: date | None = None,
-    ) -> RainfallAnalysis: ...
+        metric: str = "wet",
+        event_year: int | None = None,
+    ) -> RainfallRecord: ...
+
+
+def _trace_name(call: ToolCall) -> str:
+    """The tool as the model chose it; the rainfall tool also shows its metric, e.g. ``[dry]``."""
+    if call.name != RAINFALL_TOOL_NAME:
+        return call.name
+    return f"{call.name}[{call.arguments.get('metric') or 'wet'}]"
 
 
 class InvalidQuestionError(ValueError):
@@ -113,7 +122,7 @@ class _RunState:
 
     budget: Budget
     evidence: dict[str, Work] = field(default_factory=dict)  # works the model saw in full
-    analyses: dict[str, RainfallAnalysis] = field(default_factory=dict)  # R1, R2... shown
+    analyses: dict[str, RainfallRecord] = field(default_factory=dict)  # R1, R2... shown
     searches: list[SearchRecord] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     trace: list[tuple[str, ...]] = field(default_factory=list)
@@ -171,7 +180,7 @@ class ResearchAgent:
                 allow_tools=allow_tools,
             )
             budget.record_call(response.usage)
-            state.trace.append(tuple(c.name for c in response.tool_calls))
+            state.trace.append(tuple(_trace_name(c) for c in response.tool_calls))
             log.info(
                 "turn %d: %d in / %d out tokens, stop=%s, tool calls=%d",
                 budget.iterations,
@@ -339,6 +348,8 @@ class ResearchAgent:
                 start_year=args.start_year,
                 end_year=args.end_year,
                 event_date=args.event_date,
+                metric=args.metric,
+                event_year=args.event_year,
             )
         except InvalidRainfallQueryError as exc:
             return f"Error: {exc}."  # rejected before any request, so it costs no analysis
@@ -366,9 +377,10 @@ class ResearchAgent:
         text = format_rainfall(analysis)
         tokens = estimate_tokens(text)
         log.info(
-            'rainfall "%s": %d valid year(s), ~%d tokens (%s)',
+            'rainfall[%s] "%s": %d valid year(s), ~%d tokens (%s)',
+            analysis.metric,
             analysis.location.label,
-            len(analysis.annual_maxima),
+            len(analysis.valid_years),
             tokens,
             "cache" if analysis.provenance.from_cache else "network",
         )

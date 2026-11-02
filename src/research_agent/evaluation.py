@@ -26,6 +26,7 @@ _ALLOWED_KEYS = {
     "min_references",
     "min_rainfall_calls",
     "min_data_references",
+    "expect_metric",
     "max_evidence_claims",
     "keywords_any",
     "forbidden_phrases",
@@ -47,6 +48,9 @@ class EvalCase:
     forbidden_phrases: tuple[str, ...] = ()  # none may appear in the claims (case-insensitive)
     min_rainfall_calls: int = 0
     min_data_references: int = 0  # cited rainfall analyses (R1, R2...)
+    # The rainfall tool must have been requested with this metric ("wet" or "dry") at least once.
+    # Checked on the trace, so it judges the model's choice even if the tool refused the call.
+    expect_metric: str | None = None
 
 
 class EvalAgent(Protocol):
@@ -74,6 +78,9 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
     question = raw.get("question")
     if not isinstance(question, str) or not question.strip():
         raise EvalError(f"case {case_id!r}: 'question' is required")
+    expect_metric = raw.get("expect_metric")
+    if expect_metric is not None and expect_metric not in ("wet", "dry"):
+        raise EvalError(f"case {case_id!r}: expect_metric must be 'wet' or 'dry'")
     phrase_lists: dict[str, tuple[str, ...]] = {}
     for key in ("keywords_any", "forbidden_phrases"):
         values = raw.get(key, [])
@@ -92,6 +99,7 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         max_evidence_claims=_int_field(raw, "max_evidence_claims", None, case_id),
         keywords_any=phrase_lists["keywords_any"],
         forbidden_phrases=phrase_lists["forbidden_phrases"],
+        expect_metric=expect_metric,
     )
 
 
@@ -148,6 +156,13 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
     if stats.search_calls < case.min_searches:
         failures.append(
             f"expected at least {case.min_searches} search(es), ran {stats.search_calls}"
+        )
+    if case.expect_metric and not any(
+        name.endswith(f"[{case.expect_metric}]") for turn in stats.tool_trace for name in turn
+    ):
+        failures.append(
+            f"expected the rainfall tool to be requested with metric {case.expect_metric!r}; "
+            f"tools requested: {[list(turn) for turn in stats.tool_trace]}"
         )
     if stats.rainfall_calls < case.min_rainfall_calls:
         failures.append(

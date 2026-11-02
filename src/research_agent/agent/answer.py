@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from research_agent.rainfall import RainfallAnalysis
+from research_agent.rainfall import RainfallRecord
 from research_agent.retrieval import Work
 
 ClaimKind = Literal["evidence", "interpretation"]
@@ -42,7 +42,7 @@ class Answer:
     # False when the model ignored the required format and the answer is a plain-text fallback.
     structured: bool = True
     # Numerical evidence: cited rainfall analyses, in order of first citation.
-    data_references: tuple[RainfallAnalysis, ...] = ()
+    data_references: tuple[RainfallRecord, ...] = ()
 
 
 def _load_json(text: str) -> Any:
@@ -93,8 +93,8 @@ def _references(claims: Sequence[Claim], evidence: Mapping[str, Work]) -> tuple[
 
 
 def _data_references(
-    claims: Sequence[Claim], analyses: Mapping[str, RainfallAnalysis]
-) -> tuple[RainfallAnalysis, ...]:
+    claims: Sequence[Claim], analyses: Mapping[str, RainfallRecord]
+) -> tuple[RainfallRecord, ...]:
     ordered = dict.fromkeys(s for c in claims for s in c.sources)
     return tuple(analyses[i] for i in ordered if i in analyses)
 
@@ -102,7 +102,7 @@ def _data_references(
 def validate_citations(
     claims: Sequence[Claim],
     evidence: Mapping[str, Work],
-    analyses: Mapping[str, RainfallAnalysis] | None = None,
+    analyses: Mapping[str, RainfallRecord] | None = None,
 ) -> tuple[tuple[Claim, ...], tuple[str, ...], list[str]]:
     """Enforce that every citation points to a work or rainfall analysis that was retrieved.
 
@@ -143,7 +143,7 @@ def parse_answer(
     text: str,
     evidence: Mapping[str, Work],
     notes: Sequence[str] = (),
-    analyses: Mapping[str, RainfallAnalysis] | None = None,
+    analyses: Mapping[str, RainfallRecord] | None = None,
 ) -> Answer:
     """Parse the model's JSON reply. Raises AnswerFormatError if the structure is wrong.
 
@@ -194,7 +194,7 @@ def build_answer(
     text: str | None,
     evidence: Mapping[str, Work],
     notes: Sequence[str],
-    analyses: Mapping[str, RainfallAnalysis] | None = None,
+    analyses: Mapping[str, RainfallRecord] | None = None,
 ) -> Answer:
     """Parse ``text`` if possible, otherwise fall back to an unstructured answer."""
     if text is None:
