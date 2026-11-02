@@ -6,13 +6,15 @@ import logging
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from datetime import date
 from pathlib import Path
 from typing import TextIO
 
 import typer
 
 from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
+from research_agent.agent.tools import format_rainfall
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.credentials import (
     DEFAULT_ENV_FILE,
@@ -26,6 +28,7 @@ from research_agent.credentials import (
 from research_agent.evaluation import EvalError, load_cases, run_case, summarize
 from research_agent.llm import LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
+from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import OpenAlexClient, RetrievalError
 
 log = logging.getLogger(__name__)
@@ -152,6 +155,47 @@ def search(
         typer.echo(f"note: {result.skipped_records} record(s) could not be parsed", err=True)
 
 
+@app.command("rainfall")
+def rainfall(
+    city: str = typer.Argument(..., help="City name only, e.g. Zhengzhou."),
+    country_code: str | None = typer.Option(None, "--country-code", help="ISO alpha-2, e.g. CN."),
+    region: str | None = typer.Option(None, "--region", help="State or province, e.g. Henan."),
+    start_year: int | None = typer.Option(None, "--start-year", help="First year to analyse."),
+    end_year: int | None = typer.Option(None, "--end-year", help="Last year to analyse."),
+    event_date: str | None = typer.Option(
+        None, "--event-date", help="A day to assess, as YYYY-MM-DD."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Analyse extreme rainfall (Rx1day, ERA5) for a city deterministically (no LLM)."""
+    cfg = _load_or_exit(config)
+    try:
+        day = date.fromisoformat(event_date) if event_date else None
+    except ValueError:
+        typer.echo("error: --event-date must be formatted YYYY-MM-DD", err=True)
+        raise typer.Exit(code=1) from None
+    try:
+        with RainfallClient(cfg.rainfall) as client:
+            analysis = client.analyze(
+                city,
+                country_code=country_code,
+                region=region,
+                start_year=start_year,
+                end_year=end_year,
+                event_date=day,
+            )
+    except RainfallError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    prov = analysis.provenance
+    typer.echo(format_rainfall(replace(analysis, id="R1")))
+    typer.echo(f"\nSource: {prov.dataset}. {prov.license}.")
+    typer.echo(f"Request: {prov.request_url}")
+    origin = "cache" if prov.from_cache else "network"
+    typer.echo(f"({origin}; data {prov.data_start} to {prov.data_end})")
+
+
 @app.command("check-credentials")
 def check_credentials(
     env_file: Path = typer.Option(
@@ -185,10 +229,11 @@ def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
     """Build the real clients and yield an agent. Patched out in CLI tests."""
     key = creds.openalex_api_key
     llm = OpenAIClient.from_credentials(cfg.llm, creds)
-    with OpenAlexClient(
-        cfg.openalex, cfg.limits, api_key=key.reveal() if key else None
-    ) as search:
-        yield ResearchAgent(llm, search, cfg.limits, cfg.reporting)
+    with (
+        OpenAlexClient(cfg.openalex, cfg.limits, api_key=key.reveal() if key else None) as search,
+        RainfallClient(cfg.rainfall) as rain,
+    ):
+        yield ResearchAgent(llm, search, cfg.limits, cfg.reporting, rainfall=rain)
 
 
 def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
@@ -199,13 +244,15 @@ def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
 
 @app.command("ask")
 def ask(
-    question: str = typer.Argument(..., help="A GeoAI / remote-sensing literature question."),
+    question: str = typer.Argument(
+        ..., help="A GeoAI / remote-sensing literature or extreme-rainfall question."
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Answer a question from OpenAlex literature, within the configured resource limits."""
+    """Answer from OpenAlex literature and/or ERA5 rainfall analysis, within the limits."""
     if not question.strip():
         typer.echo("error: question must not be empty", err=True)
         raise typer.Exit(code=1)
@@ -230,13 +277,28 @@ def ask(
             title = w.title or "(no title)"
             typer.echo(f"[{w.id}] {authors or 'n/a'} ({w.year or 'n.d.'}). {title}.")
             typer.echo(f"    {w.venue + '. ' if w.venue else ''}{w.doi or w.url}")
+    if answer.data_references:
+        typer.echo("\nData")
+        for a in answer.data_references:
+            p = a.provenance
+            typer.echo(
+                f"[{a.id}] {a.location.label}: Rx1day {a.annual_maxima[0].year}-"
+                f"{a.annual_maxima[-1].year}. {p.dataset}; grid cell "
+                f"({p.grid_latitude:.2f}, {p.grid_longitude:.2f})."
+            )
+            typer.echo(f"    {p.license}. {p.request_url}")
     typer.echo("\nLimitations")
     for limitation in answer.limitations or ("(none reported)",):
         typer.echo(f"- {limitation}")
     stats = result.stats
+    rain = (
+        f"{stats.rainfall_calls} rainfall analysis(es) ({stats.cached_rainfall} from cache), "
+        if stats.rainfall_calls
+        else ""
+    )
     typer.echo(
         f"\nrun: {stats.iterations} model turn(s), {stats.search_calls} search(es) "
-        f"({stats.cached_searches} from cache), {stats.total_tokens} tokens "
+        f"({stats.cached_searches} from cache), {rain}{stats.total_tokens} tokens "
         f"({stats.input_tokens} in / {stats.output_tokens} out)",
         err=True,
     )
@@ -284,7 +346,8 @@ def evaluate(
                 if report.result:
                     st = report.result.stats
                     detail = (
-                        f"turns={st.iterations} searches={st.search_calls} tokens={st.total_tokens}"
+                        f"turns={st.iterations} searches={st.search_calls} "
+                        f"rainfall={st.rainfall_calls} tokens={st.total_tokens}"
                         f" rejected_citations={report.rejected_citations}"
                     )
                 else:
@@ -299,7 +362,8 @@ def evaluate(
     total = summarize(reports)
     typer.echo(
         f"Summary: {total.passed}/{total.total} passed | {total.total_tokens} tokens | "
-        f"{total.searches} searches | {total.rejected_citations} rejected citation(s) | "
+        f"{total.searches} searches | {total.rainfall_calls} rainfall analyses | "
+        f"{total.rejected_citations} rejected citation(s) | "
         f"{total.unstructured} unstructured answer(s)"
     )
     if total.passed != total.total:

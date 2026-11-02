@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from research_agent.agent.budget import estimate_tokens
 from research_agent.llm import ToolSpec
+from research_agent.rainfall import RainfallAnalysis
 from research_agent.retrieval import SearchResult, Work
 
 SEARCH_TOOL_NAME = "search_literature"
@@ -37,6 +39,47 @@ SEARCH_TOOL = ToolSpec(
             },
         },
         "required": ["query"],
+    },
+)
+
+
+RAINFALL_TOOL_NAME = "analyze_extreme_rainfall"
+
+RAINFALL_TOOL = ToolSpec(
+    name=RAINFALL_TOOL_NAME,
+    description=(
+        "Quantify historical extreme rainfall in one city from ERA5 reanalysis (daily "
+        "precipitation). Computes Rx1day (the largest one-day rainfall of each year), a "
+        "climatological baseline, the largest events on record and, if event_date is given, how "
+        "extreme that day was. Returns a numeric record with an ID such as R1. Use it for "
+        "quantitative questions about past rainfall at a place; use search_literature for "
+        "explanations and mechanisms. Put only the place name in 'city' and use 'country_code' "
+        "(ISO alpha-2, e.g. FR) and 'region' (state or province) to disambiguate. Not for "
+        "forecasts."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string", "description": "City name only, e.g. 'Zhengzhou'."},
+            "country_code": {
+                "type": "string",
+                "description": "Optional. ISO 3166-1 alpha-2 country code, e.g. 'CN'.",
+            },
+            "region": {
+                "type": "string",
+                "description": "Optional. State or province name, e.g. 'Henan'.",
+            },
+            "start_year": {"type": "integer", "description": "Optional. First year to analyse."},
+            "end_year": {
+                "type": "integer",
+                "description": "Optional. Last year to analyse (default: last complete year).",
+            },
+            "event_date": {
+                "type": "string",
+                "description": "Optional. A day to assess, as YYYY-MM-DD.",
+            },
+        },
+        "required": ["city"],
     },
 )
 
@@ -129,3 +172,88 @@ def format_results(
     return FormattedResults(
         text="\n\n".join(lines), shown=tuple(shown), omitted=omitted, context_tokens=used
     )
+
+
+@dataclass(frozen=True)
+class RainfallArgs:
+    city: str
+    country_code: str | None
+    region: str | None
+    start_year: int | None
+    end_year: int | None
+    event_date: date | None
+
+
+def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ToolArgumentError(f"'{key}' must be a string")
+    return value
+
+
+def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
+    city = arguments.get("city")
+    if not isinstance(city, str) or not city.strip():
+        raise ToolArgumentError("'city' is required and must be a non-empty string")
+    raw_date = _optional_str(arguments, "event_date")
+    try:
+        event_date = date.fromisoformat(raw_date) if raw_date else None
+    except ValueError:
+        raise ToolArgumentError("'event_date' must be a date formatted YYYY-MM-DD") from None
+    return RainfallArgs(
+        city=city,
+        country_code=_optional_str(arguments, "country_code"),
+        region=_optional_str(arguments, "region"),
+        start_year=_optional_int(arguments, "start_year"),
+        end_year=_optional_int(arguments, "end_year"),
+        event_date=event_date,
+    )
+
+
+def _mm(value: float) -> str:
+    return f"{value:.1f} mm"
+
+
+def format_rainfall(analysis: RainfallAnalysis) -> str:
+    """Render one analysis for the model: compact, deterministic, numbers only from code."""
+    loc, prov = analysis.location, analysis.provenance
+    valid = analysis.annual_maxima
+    lines = [
+        f"[{analysis.id}] Extreme rainfall (Rx1day = largest daily precipitation of the year) "
+        f"for {loc.label} ({loc.latitude:.3f}, {loc.longitude:.3f}).",
+        f"Data: {prov.dataset}; grid cell centre ({prov.grid_latitude:.2f}, "
+        f"{prov.grid_longitude:.2f}); {prov.variable}.",
+        f"Valid years: {len(valid)} ({valid[0].year}-{valid[-1].year}), "
+        f"{len(analysis.excluded_years)} excluded.",
+    ]
+    base = analysis.baseline
+    if base:
+        lines.append(
+            f"Baseline {base.start_year}-{base.end_year} Rx1day ({base.years} years): mean "
+            f"{_mm(base.mean_mm)}, median {_mm(base.median_mm)}."
+        )
+    ratio_base = base.mean_mm if base else None
+    top = []
+    for rank, a in enumerate(analysis.top_events, start=1):
+        times = f", {a.mm / ratio_base:.1f}x baseline mean" if ratio_base else ""
+        top.append(f"{rank}) {a.date} {_mm(a.mm)}{times}")
+    lines.append("Largest annual maxima: " + "; ".join(top) + ".")
+    ev = analysis.event
+    if ev:
+        parts = [f"Event {ev.date}: {_mm(ev.mm)}"]
+        if ev.rank_among_days is not None:
+            parts.append(f"rank {ev.rank_among_days:,} of {ev.days:,} days in the record")
+        if ev.rank_among_annual_maxima is not None and ev.annual_percentile is not None:
+            parts.append(
+                f"would rank {ev.rank_among_annual_maxima} of {len(valid)} annual maxima "
+                f"(percentile {ev.annual_percentile:.1f})"
+            )
+        if ev.ratio_to_baseline_mean is not None:
+            parts.append(f"{ev.ratio_to_baseline_mean:.1f}x the baseline mean Rx1day")
+        if ev.rank_among_days is None:
+            parts.append("ranks withheld: record too short")
+        lines.append("; ".join(parts) + ".")
+    lines.append("Caveats: " + " ".join(analysis.caveats))
+    return "\n".join(lines)

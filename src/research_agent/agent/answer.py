@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from research_agent.rainfall import RainfallAnalysis
 from research_agent.retrieval import Work
 
 ClaimKind = Literal["evidence", "interpretation"]
@@ -28,7 +29,7 @@ class AnswerFormatError(ValueError):
 class Claim:
     text: str
     kind: ClaimKind
-    sources: tuple[str, ...]  # short work IDs, e.g. "W4388333579"
+    sources: tuple[str, ...]  # short IDs: works ("W4388333579") or rainfall analyses ("R1")
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,8 @@ class Answer:
     rejected_citations: tuple[str, ...] = ()
     # False when the model ignored the required format and the answer is a plain-text fallback.
     structured: bool = True
+    # Numerical evidence: cited rainfall analyses, in order of first citation.
+    data_references: tuple[RainfallAnalysis, ...] = ()
 
 
 def _load_json(text: str) -> Any:
@@ -89,22 +92,33 @@ def _references(claims: Sequence[Claim], evidence: Mapping[str, Work]) -> tuple[
     return tuple(evidence[i] for i in ordered if i in evidence)
 
 
-def validate_citations(
-    claims: Sequence[Claim], evidence: Mapping[str, Work]
-) -> tuple[tuple[Claim, ...], tuple[str, ...], list[str]]:
-    """Enforce that every citation points to a work that was actually retrieved.
+def _data_references(
+    claims: Sequence[Claim], analyses: Mapping[str, RainfallAnalysis]
+) -> tuple[RainfallAnalysis, ...]:
+    ordered = dict.fromkeys(s for c in claims for s in c.sources)
+    return tuple(analyses[i] for i in ordered if i in analyses)
 
-    - Citations to unretrieved works are removed and returned as ``rejected``.
+
+def validate_citations(
+    claims: Sequence[Claim],
+    evidence: Mapping[str, Work],
+    analyses: Mapping[str, RainfallAnalysis] | None = None,
+) -> tuple[tuple[Claim, ...], tuple[str, ...], list[str]]:
+    """Enforce that every citation points to a work or rainfall analysis that was retrieved.
+
+    - Citations to anything not retrieved or computed in this run are removed and returned as
+      ``rejected``.
     - An "evidence" claim left with no valid citation is downgraded to "interpretation":
       nothing supports it as evidence, so it must not be presented as such.
     Returns ``(claims, rejected_ids, limitation_notes)``; every change is reported.
     """
+    known = {**evidence, **(analyses or {})}
     rejected: dict[str, None] = {}
     downgraded = 0
     checked: list[Claim] = []
     for claim in claims:
-        valid = tuple(dict.fromkeys(s for s in claim.sources if s in evidence))
-        rejected.update(dict.fromkeys(s for s in claim.sources if s not in evidence))
+        valid = tuple(dict.fromkeys(s for s in claim.sources if s in known))
+        rejected.update(dict.fromkeys(s for s in claim.sources if s not in known))
         kind: ClaimKind = claim.kind
         if kind == "evidence" and not valid:
             kind = "interpretation"
@@ -114,18 +128,23 @@ def validate_citations(
     notes: list[str] = []
     if rejected:
         notes.append(
-            f"{len(rejected)} cited work ID(s) were not among the retrieved works and were "
-            f"removed: {', '.join(rejected)}."
+            f"{len(rejected)} cited ID(s) were not among the retrieved works or computed "
+            f"analyses and were removed: {', '.join(rejected)}."
         )
     if downgraded:
         notes.append(
-            f"{downgraded} claim(s) labelled as evidence cited no retrieved work and are shown "
-            "as interpretation."
+            f"{downgraded} claim(s) labelled as evidence cited no retrieved work or analysis and "
+            "are shown as interpretation."
         )
     return tuple(checked), tuple(rejected), notes
 
 
-def parse_answer(text: str, evidence: Mapping[str, Work], notes: Sequence[str] = ()) -> Answer:
+def parse_answer(
+    text: str,
+    evidence: Mapping[str, Work],
+    notes: Sequence[str] = (),
+    analyses: Mapping[str, RainfallAnalysis] | None = None,
+) -> Answer:
     """Parse the model's JSON reply. Raises AnswerFormatError if the structure is wrong.
 
     ``notes`` are limitations added by the code (e.g. a budget was hit); they are appended
@@ -141,10 +160,11 @@ def parse_answer(text: str, evidence: Mapping[str, Work], notes: Sequence[str] =
     raw_limits = data.get("limitations", [])
     if not isinstance(raw_limits, list) or not all(isinstance(x, str) for x in raw_limits):
         raise AnswerFormatError("'limitations' is not a list of strings")
-    claims, rejected, citation_notes = validate_citations(parsed, evidence)
+    claims, rejected, citation_notes = validate_citations(parsed, evidence, analyses)
     return Answer(
         claims=claims,
         references=_references(claims, evidence),
+        data_references=_data_references(claims, analyses or {}),
         limitations=_dedupe([*(x.strip() for x in raw_limits), *notes, *citation_notes]),
         rejected_citations=rejected,
     )
@@ -170,11 +190,16 @@ def fallback_answer(text: str | None, reason: str, notes: Sequence[str] = ()) ->
     )
 
 
-def build_answer(text: str | None, evidence: Mapping[str, Work], notes: Sequence[str]) -> Answer:
+def build_answer(
+    text: str | None,
+    evidence: Mapping[str, Work],
+    notes: Sequence[str],
+    analyses: Mapping[str, RainfallAnalysis] | None = None,
+) -> Answer:
     """Parse ``text`` if possible, otherwise fall back to an unstructured answer."""
     if text is None:
         return fallback_answer(None, "empty reply", notes)
     try:
-        return parse_answer(text, evidence, notes)
+        return parse_answer(text, evidence, notes, analyses)
     except AnswerFormatError as exc:
         return fallback_answer(text, str(exc), notes)

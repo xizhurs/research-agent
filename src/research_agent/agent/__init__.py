@@ -6,6 +6,7 @@ from research_agent.agent.loop import (
     AgentResult,
     InvalidQuestionError,
     LiteratureSearch,
+    RainfallAnalyzer,
     ResearchAgent,
     RunStats,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "Claim",
     "InvalidQuestionError",
     "LiteratureSearch",
+    "RainfallAnalyzer",
     "ResearchAgent",
     "RunStats",
     "estimate_tokens",
