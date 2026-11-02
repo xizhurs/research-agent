@@ -315,3 +315,51 @@ def test_non_json_success_is_an_api_error(cfg):
 def test_unexpected_archive_shapes_are_api_errors(cfg, mutate):
     with pytest.raises(RainfallApiError):
         analyze(cfg, FakeServer(archive=[httpx.Response(200, json=mutate(ARCHIVE))]))
+
+
+# --- dry metric ---------------------------------------------------------------------------------
+
+
+def test_dry_metric_computes_dry_statistics_from_the_recorded_data(cfg):
+    result = analyze(cfg, FakeServer(), metric="dry", event_year=2020)
+    assert result.metric == "dry" and result.valid_years == (2019, 2020, 2021)
+    assert result.year_focus.year == 2020 and result.baseline.years == 3
+    assert result.longest_spells and result.dry_day_mm == 1.0
+    assert "models=era5" in result.provenance.request_url
+
+
+def test_dry_after_wet_for_the_same_city_makes_no_new_request(cfg):
+    server = FakeServer()
+    wet = analyze(cfg, server)
+    assert wet.metric == "wet" and len(server.requests) == 2
+    dry = analyze(cfg, server, metric="dry")
+    assert len(server.requests) == 2  # geocoding and archive both came from the cache
+    assert dry.metric == "dry" and dry.provenance.from_cache is True
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"metric": "drought"},
+        {"metric": None},
+        {"event_year": 2020},  # event_year needs metric 'dry'
+        {"metric": "wet", "event_year": 2020},
+        {"metric": "dry", "event_year": 2018},  # before start_year
+        {"metric": "dry", "event_year": 2022},  # after end_year
+        {"metric": "dry", "event_year": True},
+        {"metric": "dry", "event_year": "2020"},
+    ],
+)
+def test_invalid_metric_or_event_year_is_rejected_before_any_request(cfg, kwargs):
+    server = FakeServer()
+    with pytest.raises(InvalidRainfallQueryError):
+        make_client(cfg, server).analyze("Paris", start_year=2019, end_year=2021, **kwargs)
+    assert server.requests == []
+
+
+def test_event_year_in_the_current_year_is_reported_not_ranked(cfg):
+    result = make_client(cfg, FakeServer()).analyze(
+        "Zhengzhou", start_year=2019, end_year=2026, metric="dry", event_year=2026
+    )
+    assert result.year_focus is None
+    assert any("2026 was excluded (year not complete)" in c for c in result.caveats)

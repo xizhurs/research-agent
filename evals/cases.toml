@@ -10,6 +10,11 @@
 #   forbidden_phrases   none of these may appear in the claims
 #   min_rainfall_calls  the agent must have run at least this many rainfall analyses
 #   min_data_references the answer must cite at least this many rainfall analyses (R1, R2...)
+#   expect_metric       the rainfall tool must have been requested with this metric ("wet" or
+#                       "dry"); judged on the tool trace, i.e. on the model's choice
+#   expect_tool         this tool must have been requested at least once (judged on the trace);
+#                       one of search_literature, analyze_rainfall_extremes, analyze_enso_events
+#   forbid_tool         this tool must never have been requested
 # Every case is also checked against the universal invariants in evaluation.check_result
 # (structured answer, limitations present, citations valid, budgets respected).
 
@@ -97,7 +102,7 @@ forbidden_phrases = [
     "only a json object",
     "you are a research assistant",
     "search_literature",
-    "analyze_extreme_rainfall",
+    "analyze_rainfall_extremes",
 ]
 
 # --- Extreme rainfall (M6): ERA5 via Open-Meteo, numbers computed in code. DRAFT cases, like the
@@ -106,6 +111,7 @@ forbidden_phrases = [
 [[case]]
 id = "rainfall-event-zhengzhou"
 question = "How extreme was the rainfall in Zhengzhou, China on 20 July 2021 compared with the historical record?"
+expect_metric = "wet"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["mm", "rx1day", "rank", "percentile"]
@@ -113,6 +119,7 @@ keywords_any = ["mm", "rx1day", "rank", "percentile"]
 [[case]]
 id = "rainfall-top-events-mumbai"
 question = "What were the largest one-day rainfall events in Mumbai since 1980?"
+expect_metric = "wet"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["mm"]
@@ -139,3 +146,90 @@ keywords_any = ["ambiguous", "several", "multiple", "more than one", "which spri
 id = "rainfall-years-before-archive"
 question = "Show the extreme rainfall record for Nairobi, Kenya between 1900 and 1930."
 keywords_any = ["1940"]
+
+# --- Extreme dry conditions (M7): the same tool with metric "dry" (CDD and annual totals).
+# --- DRAFT cases: review and edit. expect_metric judges the model's choice of wet or dry.
+
+[[case]]
+id = "dry-spells-sao-paulo"
+question = "What were the longest dry spells in Sao Paulo, Brazil since 1980?"
+expect_metric = "dry"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["day"]
+
+[[case]]
+id = "dry-year-madrid"
+question = "How dry was 2022 in Madrid, Spain compared with the historical record?"
+expect_metric = "dry"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["2022"]
+
+[[case]]
+id = "dry-and-literature"
+question = "What was the longest dry spell in Cape Town, South Africa since 2000, and what does the literature say about the causes of the 2015-2018 drought there?"
+expect_metric = "dry"
+min_rainfall_calls = 1
+min_searches = 1
+min_data_references = 1
+min_references = 1
+keywords_any = ["dry", "drought"]
+
+# Both kinds of extreme for one city need two calls (one wet, one dry).
+[[case]]
+id = "wet-and-dry-both"
+question = "For Seville, Spain since 1990, compare the single wettest day with the longest dry spell."
+expect_metric = "dry"
+min_rainfall_calls = 2
+min_data_references = 2
+keywords_any = ["mm"]
+
+# ENSO cases. They judge the model's CHOICE of tool (expect_tool / forbid_tool, read from the tool
+# trace) as well as the answer. min_rainfall_calls counts rainfall AND ENSO analyses together
+# (they share one limit).
+[[case]]
+id = "enso-events-since-1990"
+question = "List the El Nino events since 1990 and say how strong each one was."
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["nino", "niño"]
+
+[[case]]
+id = "enso-year-2010"
+question = "Was 2010 an El Nino year, a La Nina year, or neither?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["2010"]
+
+# A methods question about sea-surface-temperature monitoring: the literature tool is right and
+# the ENSO event list is not needed.
+[[case]]
+id = "enso-literature-only"
+question = "How do remote-sensing studies use sea surface temperature to monitor El Nino?"
+forbid_tool = "analyze_enso_events"
+min_searches = 1
+min_references = 1
+
+[[case]]
+id = "enso-strongest-la-nina-and-literature"
+question = "Which were the strongest La Nina events since 1950, and what did papers report about their impacts?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_searches = 1
+min_data_references = 1
+min_references = 1
+keywords_any = ["nina", "niña"]
+
+# Time-dependent: it describes the state of the record when the case was written (2026-11-02:
+# conditions at El Nino level for fewer than 5 seasons). Review the keywords when the record moves
+# on; the tool choice and the data citation stay valid.
+[[case]]
+id = "enso-current-conditions"
+question = "Is there an El Nino happening right now?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["not yet", "ongoing", "fewer than", "so far", "developing", "has not"]

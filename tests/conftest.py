@@ -5,8 +5,11 @@ from pathlib import Path
 import pytest
 
 from research_agent.config import load_config
+from research_agent.enso.analysis import Season
+from research_agent.enso.analysis import compute_analysis as compute_enso_analysis
 from research_agent.rainfall import Location, Provenance
 from research_agent.rainfall.analysis import compute_analysis
+from research_agent.rainfall.dryness import compute_dry_analysis
 from research_agent.retrieval import SearchResult, Work
 
 BASE_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "base.toml"
@@ -166,3 +169,98 @@ def make_analysis(rainfall_config, make_location, make_provenance, make_series):
     return _make
 
 
+
+
+def day_range(start, end):
+    """Every date from ``start`` to ``end`` inclusive."""
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+# A wet year is 5 mm every day; these ranges are dry (0 mm). Hand-computed expectations:
+# unbroken spells 10, 20, 21 (2001-12-20 to 2002-01-09, crosses New Year), 5 and 29 days;
+# yearly CDD 2000:20 2001:12 2002:9 2003:0 2004:29; annual totals (mm) 2000:1680 2001:1765
+# 2002:1755 2003:1825 2004:1685.
+DRY_RANGES = [
+    (date(2000, 1, 1), date(2000, 1, 10)),
+    (date(2000, 7, 1), date(2000, 7, 20)),
+    (date(2001, 12, 20), date(2002, 1, 9)),
+    (date(2002, 6, 1), date(2002, 6, 5)),
+    (date(2004, 8, 1), date(2004, 8, 29)),
+]
+
+
+@pytest.fixture
+def dry_spikes():
+    return {d: 0.0 for start, end in DRY_RANGES for d in day_range(start, end)}
+
+
+@pytest.fixture
+def make_dry_analysis(rainfall_config, make_location, make_provenance, make_series, dry_spikes):
+    """A real DryAnalysis (computed, not hand-built) for 2000-2004, id still empty."""
+
+    def _make(location=None, event_date=None, event_year=None, from_cache=False, **config):
+        settings = {"min_years": 3, "baseline_start_year": 2000, "baseline_end_year": 2004}
+        cfg = replace(rainfall_config, **{**settings, "top_events": 3, **config})
+        dates, values = make_series(2000, 2004, dry_spikes, base=5.0)
+        return compute_dry_analysis(
+            location or make_location(),
+            dates,
+            values,
+            start_year=2000,
+            end_year=2004,
+            last_complete_year=2025,
+            config=cfg,
+            provenance=make_provenance(from_cache),
+            event_date=event_date,
+            event_year=event_year,
+        )
+
+    return _make
+
+
+# --- ENSO -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def enso_config(base_config, tmp_path):
+    """ENSO settings with a temporary cache folder."""
+    return replace(base_config.enso, cache_dir=tmp_path / "enso-cache")
+
+
+@pytest.fixture
+def make_seasons():
+    """Consecutive seasons from index values, starting at DJF of ``year`` (or at ``slot``)."""
+
+    def _make(values, year=2000, slot=0):
+        first = year * 12 + slot
+        return tuple(Season((first + i) // 12, (first + i) % 12, v) for i, v in enumerate(values))
+
+    return _make
+
+
+# Hand-built series, starting DJF 2000: two quiet seasons, an El Nino of 6 seasons (FMA-JAS 2000,
+# peak +1.40 in AMJ 2000), two quiet seasons, a La Nina of 5 seasons (OND 2000-FMA 2001, peak
+# -1.80 in DJF 2001), two quiet seasons.
+ENSO_SERIES = (
+    [0.0, 0.1]
+    + [0.6, 1.0, 1.4, 1.2, 0.8, 0.6]
+    + [0.2, -0.2]
+    + [-0.6, -1.0, -1.8, -1.2, -0.7]
+    + [0.0, 0.1]
+)
+
+
+@pytest.fixture
+def make_enso_analysis(enso_config, make_seasons):
+    """A real EnsoAnalysis (computed, not hand-built) over ENSO_SERIES, id still empty."""
+
+    def _make(values=None, from_cache=False, **kwargs):
+        return compute_enso_analysis(
+            make_seasons(ENSO_SERIES if values is None else values),
+            config=enso_config,
+            source_url=enso_config.url,
+            from_cache=from_cache,
+            **kwargs,
+        )
+
+    return _make

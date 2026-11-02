@@ -37,6 +37,20 @@ max_retries = 2
 thin_evidence_works = 3
 stale_after_years = 3
 
+[enso]
+url = "https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt"
+timeout_seconds = 30
+max_retries = 3
+backoff_base_seconds = 1.0
+max_backoff_seconds = 30.0
+cache_dir = ".cache/enso"
+cache_ttl_days = 7
+threshold = 0.5
+min_seasons = 5
+strength_moderate = 1.0
+strength_strong = 1.5
+strength_very_strong = 2.0
+
 [rainfall]
 geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
 archive_url = "https://archive-api.open-meteo.com/v1/archive"
@@ -56,6 +70,7 @@ min_year_coverage = 0.9
 top_events = 5
 geocode_candidates = 10
 dominance_ratio = 10.0
+dry_day_mm = 1.0
 """
 
 
@@ -221,6 +236,8 @@ def test_base_config_rainfall_section():
         ("min_years = 20", "min_years = 0", "min_years"),
         ("top_events = 5", "top_events = true", "top_events"),
         ("dominance_ratio = 10.0", "dominance_ratio = -1", "dominance_ratio"),
+        ("dry_day_mm = 1.0", "dry_day_mm = 0", "dry_day_mm"),
+        ("dry_day_mm = 1.0", 'dry_day_mm = "1"', "dry_day_mm"),
         ("default_start_year = 1950", "default_start_year = 1900", "default_start_year"),
         ("baseline_start_year = 1991", "baseline_start_year = 2021", "baseline_start_year"),
         ('archive_url = "https', 'archive_url = "ftp', "archive_url"),
@@ -243,6 +260,53 @@ def test_missing_rainfall_table(tmp_path):
 def test_unknown_rainfall_key(tmp_path):
     with pytest.raises(ConfigError, match="unknown rainfall keys"):
         load_config(write(tmp_path, VALID + "bogus = 1\n"))
+
+
+def test_base_config_enso_section():
+    cfg = load_config(BASE)
+    assert cfg.enso.url.endswith("/RONI.ascii.txt")
+    assert cfg.enso.cache_dir == Path(".cache/enso")
+    assert (cfg.enso.threshold, cfg.enso.min_seasons) == (0.5, 5)
+    assert (cfg.enso.strength_moderate, cfg.enso.strength_strong) == (1.0, 1.5)
+    assert cfg.enso.strength_very_strong == 2.0
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "name"),
+    [
+        ('url = "https://www.cpc', 'url = "ftp://www.cpc', "enso.url"),
+        ("threshold = 0.5", "threshold = 0", "enso.threshold"),
+        ("threshold = 0.5", 'threshold = "0.5"', "enso.threshold"),
+        ("min_seasons = 5", "min_seasons = 0", "enso.min_seasons"),
+        ("min_seasons = 5", "min_seasons = true", "enso.min_seasons"),
+        ("strength_strong = 1.5", "strength_strong = 0.9", "threshold < strength_moderate"),
+        ("strength_moderate = 1.0", "strength_moderate = 0.5", "threshold < strength_moderate"),
+        ("cache_ttl_days = 7", "cache_ttl_days = 0", "enso.cache_ttl_days"),
+    ],
+)
+def test_invalid_enso_values_rejected(tmp_path, old, new, name):
+    text = VALID.replace(old, new)
+    assert text != VALID
+    with pytest.raises(ConfigError, match=name):
+        load_config(write(tmp_path, text))
+
+
+def test_enso_negative_retries_rejected(tmp_path):
+    head, tail = VALID.split("[enso]")  # "max_retries = 3" also appears in other tables
+    text = head + "[enso]" + tail.replace("max_retries = 3", "max_retries = -1", 1)
+    with pytest.raises(ConfigError, match="enso.max_retries"):
+        load_config(write(tmp_path, text))
+
+
+def test_missing_enso_table(tmp_path):
+    text = VALID.replace("[enso]", "[ens]")
+    with pytest.raises(ConfigError, match=r"missing \[enso\]"):
+        load_config(write(tmp_path, text))
+
+
+def test_unknown_enso_key(tmp_path):
+    with pytest.raises(ConfigError, match="unknown enso keys"):
+        load_config(write(tmp_path, VALID.replace("[enso]\n", "[enso]\nbogus = 1\n")))
 
 
 def test_missing_max_rainfall_calls(tmp_path):

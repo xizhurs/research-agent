@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import calendar
 import statistics
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -58,6 +58,49 @@ def _group_by_year(
     return stats
 
 
+def classify_years(
+    days_with_data: Mapping[int, int],
+    start_year: int,
+    end_year: int,
+    last_complete_year: int,
+    min_year_coverage: float,
+) -> tuple[list[int], list[tuple[int, str]]]:
+    """Split the requested years into ``(valid, excluded-with-reason)``. Shared by both metrics.
+
+    A year is valid if it is complete and at least ``min_year_coverage`` of its days have data.
+    """
+    valid: list[int] = []
+    excluded: list[tuple[int, str]] = []
+    for year in range(start_year, end_year + 1):
+        if year > last_complete_year:
+            excluded.append((year, "year not complete"))
+            continue
+        expected = 366 if calendar.isleap(year) else 365
+        have = days_with_data.get(year, 0)
+        if have < min_year_coverage * expected:
+            excluded.append((year, f"only {have} of {expected} days have data"))
+        else:
+            valid.append(year)
+    return valid, excluded
+
+
+def excluded_years_caveat(label: str, excluded: Sequence[tuple[int, str]], what: str) -> str:
+    listed = ", ".join(f"{y} ({r})" for y, r in excluded[:MAX_YEARS_LISTED])
+    more = "..." if len(excluded) > MAX_YEARS_LISTED else ""
+    return f"{label}: {len(excluded)} year(s) were excluded from {what}: {listed}{more}."
+
+
+def other_matches_caveat(
+    location: Location, other_matches: Sequence[Location], dominance_ratio: float
+) -> str:
+    names = "; ".join(m.label for m in other_matches[:3])
+    return (
+        f"'{location.name}' also matched {len(other_matches)} other place(s) (for example "
+        f"{names}); {location.label} was used because its population is at least "
+        f"{dominance_ratio:g} times larger."
+    )
+
+
 def compute_analysis(
     location: Location,
     dates: Sequence[date],
@@ -78,19 +121,16 @@ def compute_analysis(
     """
     per_year = _group_by_year(dates, values, start_year, end_year)
 
-    annual: list[AnnualMax] = []
-    excluded: list[tuple[int, str]] = []
-    for year in range(start_year, end_year + 1):
-        if year > last_complete_year:
-            excluded.append((year, "year not complete"))
-            continue
-        expected = 366 if calendar.isleap(year) else 365
-        stats = per_year.get(year)
-        have = stats.days_with_data if stats else 0
-        if have < config.min_year_coverage * expected or stats is None or stats.best_date is None:
-            excluded.append((year, f"only {have} of {expected} days have data"))
-            continue
-        annual.append(AnnualMax(year, stats.best_date.isoformat(), stats.best_mm))
+    valid_list, excluded = classify_years(
+        {y: s.days_with_data for y, s in per_year.items()},
+        start_year,
+        end_year,
+        last_complete_year,
+        config.min_year_coverage,
+    )
+    annual = [
+        AnnualMax(y, per_year[y].best_date.isoformat(), per_year[y].best_mm) for y in valid_list
+    ]
     if not annual:
         raise InsufficientDataError(
             f"no year between {start_year} and {end_year} has enough daily data "
@@ -128,9 +168,7 @@ def compute_analysis(
             )
         event_year_valid = event_date.year in valid_years
         record = [
-            v
-            for d, v in zip(dates, values, strict=True)
-            if v is not None and d.year in valid_years
+            v for d, v in zip(dates, values, strict=True) if v is not None and d.year in valid_years
         ]
         maxima = [a.mm for a in annual]
         event = EventContext(
@@ -149,12 +187,7 @@ def compute_analysis(
 
     caveats = [REANALYSIS_CAVEAT, RX1DAY_CAVEAT]
     if excluded:
-        listed = ", ".join(f"{y} ({r})" for y, r in excluded[:MAX_YEARS_LISTED])
-        more = "..." if len(excluded) > MAX_YEARS_LISTED else ""
-        caveats.append(
-            f"{label}: {len(excluded)} year(s) were excluded from the annual maxima: "
-            f"{listed}{more}."
-        )
+        caveats.append(excluded_years_caveat(label, excluded, "the annual maxima"))
     if not ranking_available:
         caveats.append(
             f"{label}: only {len(annual)} valid year(s) (minimum {config.min_years}); ranks and "
@@ -172,12 +205,7 @@ def compute_analysis(
             "years' record only."
         )
     if other_matches:
-        names = "; ".join(m.label for m in other_matches[:3])
-        caveats.append(
-            f"'{location.name}' also matched {len(other_matches)} other place(s) (for example "
-            f"{names}); {label} was used because its population is at least "
-            f"{config.dominance_ratio:g} times larger."
-        )
+        caveats.append(other_matches_caveat(location, other_matches, config.dominance_ratio))
 
     return RainfallAnalysis(
         id="",

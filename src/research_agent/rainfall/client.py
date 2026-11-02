@@ -21,6 +21,7 @@ import httpx
 
 from research_agent.config import RainfallConfig
 from research_agent.rainfall.analysis import compute_analysis
+from research_agent.rainfall.dryness import compute_dry_analysis
 from research_agent.rainfall.errors import (
     InvalidRainfallQueryError,
     RainfallApiError,
@@ -32,12 +33,13 @@ from research_agent.rainfall.geocoding import (
     parse_candidates,
     resolve_location,
 )
-from research_agent.rainfall.models import Provenance, RainfallAnalysis
+from research_agent.rainfall.models import Provenance, RainfallRecord
 from research_agent.retrieval.cache import ResponseCache, cache_key
 
 log = logging.getLogger(__name__)
 
 MAX_CITY_CHARS = 200
+METRICS = ("wet", "dry")
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _COUNTRY_CODE = re.compile(r"^[A-Za-z]{2}$")
 VARIABLE = "precipitation_sum: daily total precipitation in mm, local calendar day"
@@ -173,12 +175,18 @@ class RainfallClient:
         start_year: int | None = None,
         end_year: int | None = None,
         event_date: date | None = None,
-    ) -> RainfallAnalysis:
+        metric: str = "wet",
+        event_year: int | None = None,
+    ) -> RainfallRecord:
+        """Analyse ``city``. ``metric`` is ``"wet"`` (Rx1day) or ``"dry"`` (CDD, annual totals).
+
+        ``event_year`` (dry only) asks how one year compares; ``event_date`` asks about one day.
+        """
         cfg = self._config
         today = self._today()
         last_complete_year = today.year - 1
         city, country_code, region, start_year, end_year = self._validate(
-            city, country_code, region, start_year, end_year, event_date, today
+            city, country_code, region, start_year, end_year, event_date, today, metric, event_year
         )
 
         geo_params = build_geocode_params(city, country_code, cfg.geocode_candidates)
@@ -211,6 +219,20 @@ class RainfallClient:
             data_end=archive.dates[-1].isoformat(),
             from_cache=geo_cached and archive_cached,
         )
+        if metric == "dry":
+            return compute_dry_analysis(
+                location,
+                archive.dates,
+                archive.values,
+                start_year=start_year,
+                end_year=end_year,
+                last_complete_year=last_complete_year,
+                config=cfg,
+                provenance=provenance,
+                event_date=event_date,
+                event_year=event_year,
+                other_matches=others,
+            )
         return compute_analysis(
             location,
             archive.dates,
@@ -233,8 +255,12 @@ class RainfallClient:
         end_year: object,
         event_date: object,
         today: date,
+        metric: object,
+        event_year: object,
     ) -> tuple[str, str | None, str | None, int, int]:
         cfg = self._config
+        if metric not in METRICS:
+            raise InvalidRainfallQueryError("metric must be 'wet' or 'dry'")
         if not isinstance(city, str) or not city.strip():
             raise InvalidRainfallQueryError("city must be a non-empty string")
         city = city.strip()
@@ -258,6 +284,17 @@ class RainfallClient:
                 )
         if first > last:
             raise InvalidRainfallQueryError("start_year must not be after end_year")
+        if event_year is not None:
+            if metric != "dry":
+                raise InvalidRainfallQueryError("event_year can only be used with metric 'dry'")
+            if (
+                isinstance(event_year, bool)
+                or not isinstance(event_year, int)
+                or not first <= event_year <= last
+            ):
+                raise InvalidRainfallQueryError(
+                    f"event_year must be an integer between {first} and {last}"
+                )
         if event_date is not None:
             latest = min(date(last, 12, 31), today)
             if not isinstance(event_date, date) or not date(first, 1, 1) <= event_date <= latest:

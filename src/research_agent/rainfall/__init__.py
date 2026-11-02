@@ -12,18 +12,31 @@ from research_agent.rainfall.errors import (
     RainfallRateLimitError,
 )
 from research_agent.rainfall.models import (
+    AnnualDry,
     AnnualMax,
     Baseline,
+    DryAnalysis,
+    DryBaseline,
+    DryEventContext,
+    DrySpell,
+    DryYearContext,
     EventContext,
     Location,
     Provenance,
     RainfallAnalysis,
+    RainfallRecord,
 )
 
 __all__ = [
     "AmbiguousLocationError",
+    "AnnualDry",
     "AnnualMax",
     "Baseline",
+    "DryAnalysis",
+    "DryBaseline",
+    "DryEventContext",
+    "DrySpell",
+    "DryYearContext",
     "EventContext",
     "InsufficientDataError",
     "InvalidRainfallQueryError",
@@ -36,4 +49,5 @@ __all__ = [
     "RainfallError",
     "RainfallNetworkError",
     "RainfallRateLimitError",
+    "RainfallRecord",
 ]

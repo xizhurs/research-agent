@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -93,3 +94,93 @@ class RainfallAnalysis:
     top_events: tuple[AnnualMax, ...]  # the largest annual maxima, wettest first
     event: EventContext | None
     caveats: tuple[str, ...]
+    metric: ClassVar[str] = "wet"
+
+    @property
+    def valid_years(self) -> tuple[int, ...]:
+        return tuple(a.year for a in self.annual_maxima)
+
+
+@dataclass(frozen=True)
+class AnnualDry:
+    """Dry-condition numbers for one valid year."""
+
+    year: int
+    cdd_days: int  # longest run of dry days inside the calendar year (0 if no dry day)
+    cdd_start: str | None  # first and last day of that run (the earliest run if tied)
+    cdd_end: str | None
+    total_mm: float  # precipitation summed over every day of the year
+
+
+@dataclass(frozen=True)
+class DrySpell:
+    """A maximal run of consecutive dry days, not split at New Year."""
+
+    start: str
+    end: str
+    days: int
+    total_mm: float
+
+
+@dataclass(frozen=True)
+class DryBaseline:
+    start_year: int
+    end_year: int
+    years: int  # valid years inside the baseline period
+    cdd_mean: float
+    cdd_median: float
+    total_mean_mm: float
+    total_median_mm: float
+
+
+@dataclass(frozen=True)
+class DryYearContext:
+    """How one requested year compares with the record. Rank 1 is the driest."""
+
+    year: int
+    total_mm: float
+    total_rank: int | None  # 1 + valid years that were drier; None when ranks are withheld
+    percent_wetter: float | None  # % of valid years with a strictly higher total
+    ratio_to_baseline_mean: float | None
+    cdd_days: int
+
+
+@dataclass(frozen=True)
+class DryEventContext:
+    """How one requested day relates to dry spells. Rank 1 is the longest spell."""
+
+    date: str
+    value_mm: float
+    dry_day: bool
+    spell: DrySpell | None  # the unbroken spell containing the day (None if not dry or unmeasured)
+    spell_rank: int | None  # 1 + spells that were longer; None when ranks are withheld
+    spells: int  # unbroken dry spells in the valid record
+
+
+@dataclass(frozen=True)
+class DryAnalysis:
+    """Dry-extremes counterpart of ``RainfallAnalysis``; cited as ``R…`` in the same way."""
+
+    id: str
+    location: Location
+    provenance: Provenance
+    start_year: int  # requested period
+    end_year: int
+    dry_day_mm: float  # threshold: a day below this is dry
+    annual: tuple[AnnualDry, ...]  # valid years only, in year order
+    excluded_years: tuple[tuple[int, str], ...]  # (year, reason)
+    baseline: DryBaseline | None
+    ranking_available: bool
+    longest_spells: tuple[DrySpell, ...]  # longest unbroken spells, longest first
+    driest_years: tuple[AnnualDry, ...]  # lowest annual totals, driest first
+    year_focus: DryYearContext | None
+    event: DryEventContext | None
+    caveats: tuple[str, ...]
+    metric: ClassVar[str] = "dry"
+
+    @property
+    def valid_years(self) -> tuple[int, ...]:
+        return tuple(a.year for a in self.annual)
+
+
+RainfallRecord = RainfallAnalysis | DryAnalysis

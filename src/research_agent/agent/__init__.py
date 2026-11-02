@@ -4,6 +4,7 @@ from research_agent.agent.answer import Answer, AnswerFormatError, Claim, parse_
 from research_agent.agent.budget import Budget, estimate_tokens
 from research_agent.agent.loop import (
     AgentResult,
+    EnsoAnalyzer,
     InvalidQuestionError,
     LiteratureSearch,
     RainfallAnalyzer,
@@ -17,6 +18,7 @@ __all__ = [
     "AnswerFormatError",
     "Budget",
     "Claim",
+    "EnsoAnalyzer",
     "InvalidQuestionError",
     "LiteratureSearch",
     "RainfallAnalyzer",
