@@ -19,11 +19,14 @@ def estimate_tokens(text: str) -> int:
 
 
 class Budget:
-    def __init__(self, limits: Limits) -> None:
+    def __init__(self, limits: Limits, *, rainfall_enabled: bool = False) -> None:
         self._limits = limits
+        self._rainfall_enabled = rainfall_enabled
         self.iterations = 0  # completed model calls
         self.search_calls = 0
         self.cached_searches = 0  # of search_calls, answered from the local cache
+        self.rainfall_calls = 0
+        self.cached_rainfall = 0  # of rainfall_calls, answered from the local cache
         self.input_tokens = 0
         self.output_tokens = 0
         self.context_tokens = 0  # estimated tokens of retrieved content sent to the model
@@ -35,6 +38,12 @@ class Budget:
     @property
     def searches_left(self) -> int:
         return max(0, self._limits.max_search_calls - self.search_calls)
+
+    @property
+    def rainfall_left(self) -> int:
+        if not self._rainfall_enabled:
+            return 0
+        return max(0, self._limits.max_rainfall_calls - self.rainfall_calls)
 
     @property
     def context_left(self) -> int:
@@ -49,6 +58,11 @@ class Budget:
         self.search_calls += 1
         if cached:
             self.cached_searches += 1
+
+    def record_rainfall(self, *, cached: bool = False) -> None:
+        self.rainfall_calls += 1
+        if cached:
+            self.cached_rainfall += 1
 
     def record_context(self, tokens: int) -> None:
         self.context_tokens += tokens
@@ -65,10 +79,17 @@ class Budget:
                 f"Iteration limit reached ({lim.max_iterations} model turns): the final answer "
                 "was written without further searching."
             )
-        if self.searches_left == 0:
+        if self.searches_left == 0 and not self._rainfall_enabled:
             return (
                 f"Search limit reached ({self.search_calls} of {lim.max_search_calls} searches "
                 "used): the answer is based only on the evidence retrieved so far."
+            )
+        if self.searches_left == 0 and self.rainfall_left == 0:
+            return (
+                f"Search and rainfall-analysis limits reached ({self.search_calls} of "
+                f"{lim.max_search_calls} searches, {self.rainfall_calls} of "
+                f"{lim.max_rainfall_calls} rainfall analyses used): the answer is based only on "
+                "the evidence retrieved so far."
             )
         next_call_cost = next_input_estimate + lim.max_output_tokens
         if self.tokens_used + 2 * next_call_cost > lim.max_total_tokens:

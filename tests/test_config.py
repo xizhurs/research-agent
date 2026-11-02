@@ -16,6 +16,7 @@ max_context_tokens = 6000
 max_output_tokens = 800
 max_total_tokens = 20000
 max_question_chars = 2000
+max_rainfall_calls = 3
 
 [openalex]
 base_url = "https://api.openalex.org"
@@ -35,6 +36,26 @@ max_retries = 2
 [reporting]
 thin_evidence_works = 3
 stale_after_years = 3
+
+[rainfall]
+geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
+archive_url = "https://archive-api.open-meteo.com/v1/archive"
+model = "era5"
+timeout_seconds = 30
+max_retries = 3
+backoff_base_seconds = 1.0
+max_backoff_seconds = 30.0
+cache_dir = ".cache/rainfall"
+cache_ttl_days = 90
+earliest_year = 1940
+default_start_year = 1950
+baseline_start_year = 1991
+baseline_end_year = 2020
+min_years = 20
+min_year_coverage = 0.9
+top_events = 5
+geocode_candidates = 10
+dominance_ratio = 10.0
 """
 
 
@@ -169,8 +190,9 @@ def test_unknown_llm_key(tmp_path):
 
 
 def test_unknown_reporting_key(tmp_path):
+    text = VALID.replace("[reporting]\n", "[reporting]\ntypo = 1\n")
     with pytest.raises(ConfigError, match="unknown reporting keys"):
-        load_config(write(tmp_path, VALID + "typo = 1\n"))
+        load_config(write(tmp_path, text))
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "2.5", '"5"', "true"])
@@ -178,3 +200,51 @@ def test_non_positive_or_non_int_rejected(tmp_path, bad):
     text = VALID.replace("max_iterations = 5", f"max_iterations = {bad}")
     with pytest.raises(ConfigError, match="max_iterations"):
         load_config(write(tmp_path, text))
+
+
+
+
+def test_base_config_rainfall_section():
+    cfg = load_config(BASE)
+    assert cfg.rainfall.model == "era5"
+    assert cfg.rainfall.cache_dir == Path(".cache/rainfall")
+    assert (cfg.rainfall.baseline_start_year, cfg.rainfall.baseline_end_year) == (1991, 2020)
+    assert cfg.limits.max_rainfall_calls == 3
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "name"),
+    [
+        ('model = "era5"', 'model = ""', "rainfall.model"),
+        ("min_year_coverage = 0.9", "min_year_coverage = 0", "min_year_coverage"),
+        ("min_year_coverage = 0.9", "min_year_coverage = 1.5", "min_year_coverage"),
+        ("min_years = 20", "min_years = 0", "min_years"),
+        ("top_events = 5", "top_events = true", "top_events"),
+        ("dominance_ratio = 10.0", "dominance_ratio = -1", "dominance_ratio"),
+        ("default_start_year = 1950", "default_start_year = 1900", "default_start_year"),
+        ("baseline_start_year = 1991", "baseline_start_year = 2021", "baseline_start_year"),
+        ('archive_url = "https', 'archive_url = "ftp', "archive_url"),
+        ("cache_ttl_days = 90", "cache_ttl_days = 0", "rainfall.cache_ttl_days"),
+    ],
+)
+def test_invalid_rainfall_values_rejected(tmp_path, old, new, name):
+    text = VALID.replace(old, new)
+    assert text != VALID
+    with pytest.raises(ConfigError, match=name):
+        load_config(write(tmp_path, text))
+
+
+def test_missing_rainfall_table(tmp_path):
+    text = VALID[: VALID.index("[rainfall]")]
+    with pytest.raises(ConfigError, match=r"missing \[rainfall\]"):
+        load_config(write(tmp_path, text))
+
+
+def test_unknown_rainfall_key(tmp_path):
+    with pytest.raises(ConfigError, match="unknown rainfall keys"):
+        load_config(write(tmp_path, VALID + "bogus = 1\n"))
+
+
+def test_missing_max_rainfall_calls(tmp_path):
+    with pytest.raises(ConfigError, match="max_rainfall_calls"):
+        load_config(write(tmp_path, VALID.replace("max_rainfall_calls = 3\n", "")))

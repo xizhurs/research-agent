@@ -24,6 +24,8 @@ _ALLOWED_KEYS = {
     "note",
     "min_searches",
     "min_references",
+    "min_rainfall_calls",
+    "min_data_references",
     "max_evidence_claims",
     "keywords_any",
     "forbidden_phrases",
@@ -43,6 +45,8 @@ class EvalCase:
     max_evidence_claims: int | None = None
     keywords_any: tuple[str, ...] = ()  # at least one must appear in the claims (case-insensitive)
     forbidden_phrases: tuple[str, ...] = ()  # none may appear in the claims (case-insensitive)
+    min_rainfall_calls: int = 0
+    min_data_references: int = 0  # cited rainfall analyses (R1, R2...)
 
 
 class EvalAgent(Protocol):
@@ -83,6 +87,8 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         question=question.strip(),
         min_searches=_int_field(raw, "min_searches", 0, case_id) or 0,
         min_references=_int_field(raw, "min_references", 0, case_id) or 0,
+        min_rainfall_calls=_int_field(raw, "min_rainfall_calls", 0, case_id) or 0,
+        min_data_references=_int_field(raw, "min_data_references", 0, case_id) or 0,
         max_evidence_claims=_int_field(raw, "max_evidence_claims", None, case_id),
         keywords_any=phrase_lists["keywords_any"],
         forbidden_phrases=phrase_lists["forbidden_phrases"],
@@ -118,7 +124,7 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
         failures.append("answer was not in the required structured format")
     if not answer.limitations:
         failures.append("answer carries no limitations")
-    reference_ids = {w.id for w in answer.references}
+    reference_ids = {w.id for w in answer.references} | {a.id for a in answer.data_references}
     for claim in answer.claims:
         if claim.kind == "evidence" and not claim.sources:
             failures.append(f"evidence claim has no citation: {claim.text[:60]!r}")
@@ -129,6 +135,10 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
         failures.append(f"used {stats.iterations} model turns (limit {limits.max_iterations})")
     if stats.search_calls > limits.max_search_calls:
         failures.append(f"ran {stats.search_calls} searches (limit {limits.max_search_calls})")
+    if stats.rainfall_calls > limits.max_rainfall_calls:
+        failures.append(
+            f"ran {stats.rainfall_calls} rainfall analyses (limit {limits.max_rainfall_calls})"
+        )
     if stats.total_tokens > limits.max_total_tokens and not any(
         x.startswith(OVERSHOOT_PREFIX) for x in answer.limitations
     ):
@@ -138,6 +148,16 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
     if stats.search_calls < case.min_searches:
         failures.append(
             f"expected at least {case.min_searches} search(es), ran {stats.search_calls}"
+        )
+    if stats.rainfall_calls < case.min_rainfall_calls:
+        failures.append(
+            f"expected at least {case.min_rainfall_calls} rainfall analysis(es), "
+            f"ran {stats.rainfall_calls}"
+        )
+    if len(answer.data_references) < case.min_data_references:
+        failures.append(
+            f"expected at least {case.min_data_references} cited rainfall analysis(es), "
+            f"got {len(answer.data_references)}"
         )
     if len(answer.references) < case.min_references:
         failures.append(
@@ -193,6 +213,7 @@ class EvalSummary:
     searches: int
     rejected_citations: int
     unstructured: int
+    rainfall_calls: int = 0
 
 
 def summarize(reports: list[CaseReport]) -> EvalSummary:
@@ -204,4 +225,5 @@ def summarize(reports: list[CaseReport]) -> EvalSummary:
         searches=sum(r.stats.search_calls for r in results),
         rejected_citations=sum(r.rejected_citations for r in reports),
         unstructured=sum(1 for r in results if not r.answer.structured),
+        rainfall_calls=sum(r.stats.rainfall_calls for r in results),
     )

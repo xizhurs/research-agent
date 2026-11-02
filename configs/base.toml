@@ -9,6 +9,7 @@ max_context_tokens = 6000
 max_output_tokens = 800
 max_total_tokens = 20000
 max_question_chars = 2000
+max_rainfall_calls = 3
 
 # The API key is optional and is read from the OPENALEX_API_KEY environment variable, never from here.
 [openalex]
@@ -32,3 +33,27 @@ max_retries = 2
 [reporting]
 thin_evidence_works = 3
 stale_after_years = 3
+
+# Extreme-rainfall tool: Open-Meteo geocoding + archive (ERA5 reanalysis). No API key is used.
+# The free tier is for non-commercial use (CC BY 4.0, attribution required); commercial use needs
+# a paid Open-Meteo plan. `model` is pinned because the API's default mixes reanalysis products
+# and gives different grid cells and values (verified live on 2026-11-02).
+[rainfall]
+geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
+archive_url = "https://archive-api.open-meteo.com/v1/archive"
+model = "era5"
+timeout_seconds = 30
+max_retries = 3
+backoff_base_seconds = 1.0
+max_backoff_seconds = 30.0
+cache_dir = ".cache/rainfall"
+cache_ttl_days = 90
+earliest_year = 1940
+default_start_year = 1950
+baseline_start_year = 1991
+baseline_end_year = 2020
+min_years = 20
+min_year_coverage = 0.9
+top_events = 5
+geocode_candidates = 10
+dominance_ratio = 10.0

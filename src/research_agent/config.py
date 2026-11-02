@@ -29,6 +29,7 @@ class Limits:
     max_output_tokens: int
     max_total_tokens: int
     max_question_chars: int
+    max_rainfall_calls: int
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -68,6 +69,72 @@ class OpenAlexConfig:
         retries = self.max_retries
         if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
             raise ConfigError(f"openalex.max_retries must be an integer >= 0, got {retries!r}")
+
+
+@dataclass(frozen=True)
+class RainfallConfig:
+    """Open-Meteo geocoding + ERA5 archive settings and the thresholds of the rainfall analysis."""
+
+    geocoding_url: str
+    archive_url: str
+    model: str  # pinned reanalysis product; the API's default mixes products (verified live)
+    timeout_seconds: float
+    max_retries: int
+    backoff_base_seconds: float
+    max_backoff_seconds: float
+    cache_dir: Path
+    cache_ttl_days: float
+    earliest_year: int  # first year the archive serves
+    default_start_year: int
+    baseline_start_year: int
+    baseline_end_year: int
+    min_years: int  # fewer valid years than this: no ranking / no baseline comparison
+    min_year_coverage: float  # a year needs at least this fraction of days with data
+    top_events: int
+    geocode_candidates: int
+    dominance_ratio: float  # top candidate wins only if its population is this many times larger
+
+    def __post_init__(self) -> None:
+        for name in ("geocoding_url", "archive_url"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.startswith(("https://", "http://")):
+                raise ConfigError(f"rainfall.{name} must be an http(s) URL, got {value!r}")
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ConfigError(f"rainfall.model must be a non-empty string, got {self.model!r}")
+        if not isinstance(self.cache_dir, Path):
+            object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        for name in (
+            "timeout_seconds",
+            "backoff_base_seconds",
+            "max_backoff_seconds",
+            "cache_ttl_days",
+            "dominance_ratio",
+        ):
+            value = getattr(self, name)
+            if not _is_number(value) or value <= 0:
+                raise ConfigError(f"rainfall.{name} must be a positive number, got {value!r}")
+        for name in (
+            "earliest_year",
+            "default_start_year",
+            "baseline_start_year",
+            "baseline_end_year",
+            "min_years",
+            "top_events",
+            "geocode_candidates",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(f"rainfall.{name} must be a positive integer, got {value!r}")
+        retries = self.max_retries
+        if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+            raise ConfigError(f"rainfall.max_retries must be an integer >= 0, got {retries!r}")
+        coverage = self.min_year_coverage
+        if not _is_number(coverage) or not 0 < coverage <= 1:
+            raise ConfigError(f"rainfall.min_year_coverage must be in (0, 1], got {coverage!r}")
+        if self.default_start_year < self.earliest_year:
+            raise ConfigError("rainfall.default_start_year must not be before earliest_year")
+        if self.baseline_start_year > self.baseline_end_year:
+            raise ConfigError("rainfall.baseline_start_year must not be after baseline_end_year")
 
 
 @dataclass(frozen=True)
@@ -113,6 +180,7 @@ class Config:
     openalex: OpenAlexConfig
     llm: LLMConfig
     reporting: ReportingConfig
+    rainfall: RainfallConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -144,4 +212,5 @@ def load_config(path: Path) -> Config:
         openalex=_build_section(OpenAlexConfig, raw, "openalex", path),
         llm=_build_section(LLMConfig, raw, "llm", path),
         reporting=_build_section(ReportingConfig, raw, "reporting", path),
+        rainfall=_build_section(RainfallConfig, raw, "rainfall", path),
     )

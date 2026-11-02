@@ -8,6 +8,7 @@ import pytest
 from research_agent.config import load_config
 from research_agent.credentials import load_credentials
 from research_agent.llm import OpenAIClient, ToolResultMessage, ToolSpec, UserMessage
+from research_agent.rainfall import RainfallClient
 from research_agent.retrieval import OpenAlexClient
 
 pytestmark = pytest.mark.live
@@ -28,6 +29,21 @@ def test_real_search_returns_works_with_abstracts(tmp_path):
     assert result.skipped_records == 0
     assert all(w.id.startswith("W") for w in result.works)
     assert any(w.abstract for w in result.works)
+
+
+def test_real_rainfall_analysis_for_one_city(tmp_path):
+    """Geocode + ERA5 archive for Zhengzhou: one pinned-model request, then served from cache."""
+    root = Path(__file__).resolve().parents[1]
+    base = load_config(root / "configs" / "base.toml")
+    cfg = replace(base.rainfall, cache_dir=tmp_path)
+    with RainfallClient(cfg) as client:
+        first = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
+        second = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
+    assert first.provenance.from_cache is False and second.provenance.from_cache is True
+    assert first.location.country_code == "CN" and first.location.admin1 == "Henan"
+    assert len(first.annual_maxima) == 30 and first.baseline.years == 30
+    assert all(a.mm > 0 for a in first.annual_maxima)
+    assert "models=era5" in first.provenance.request_url
 
 
 def test_openai_tool_calling_round_trip():

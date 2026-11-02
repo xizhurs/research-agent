@@ -2,17 +2,18 @@
 
 Guarantees, all enforced here in code (not in the prompt):
 - at most ``max_iterations`` model calls per question;
-- at most ``max_search_calls`` searches actually run;
-- the retrieved content sent to the model stays within ``max_context_tokens``;
-- when a budget is spent, the next call is made with tools disabled so the model must answer
-  from what it has, and the answer's limitations say so.
+- at most ``max_search_calls`` searches and ``max_rainfall_calls`` rainfall analyses actually run;
+- the retrieved content (literature and rainfall results) sent to the model stays within
+  ``max_context_tokens``;
+- when every tool budget is spent, the next call is made with tools disabled so the model must
+  answer from what it has, and the answer's limitations say so.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Protocol
 
@@ -21,10 +22,14 @@ from research_agent.agent.budget import Budget, estimate_tokens
 from research_agent.agent.limitations import SearchRecord, evidence_limitations
 from research_agent.agent.prompt import build_instructions
 from research_agent.agent.tools import (
+    RAINFALL_TOOL,
+    RAINFALL_TOOL_NAME,
     SEARCH_TOOL,
     SEARCH_TOOL_NAME,
     ToolArgumentError,
+    format_rainfall,
     format_results,
+    parse_rainfall_args,
     parse_search_args,
 )
 from research_agent.config import Limits, ReportingConfig
@@ -35,6 +40,13 @@ from research_agent.llm import (
     ToolCall,
     ToolResultMessage,
     UserMessage,
+)
+from research_agent.rainfall import (
+    AmbiguousLocationError,
+    InvalidRainfallQueryError,
+    LocationNotFoundError,
+    RainfallAnalysis,
+    RainfallError,
 )
 from research_agent.retrieval import (
     AuthError,
@@ -53,6 +65,19 @@ class LiteratureSearch(Protocol):
     ) -> SearchResult: ...
 
 
+class RainfallAnalyzer(Protocol):
+    def analyze(
+        self,
+        city: str,
+        *,
+        country_code: str | None = None,
+        region: str | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        event_date: date | None = None,
+    ) -> RainfallAnalysis: ...
+
+
 class InvalidQuestionError(ValueError):
     """The question is empty or longer than ``limits.max_question_chars``."""
 
@@ -65,6 +90,8 @@ class RunStats:
     output_tokens: int
     works_shown: int  # distinct works the model saw in full
     cached_searches: int = 0  # of search_calls, answered from the local cache (no API cost)
+    rainfall_calls: int = 0  # rainfall analyses that ran (including ones that failed)
+    cached_rainfall: int = 0  # of rainfall_calls, answered from the local cache
 
     @property
     def total_tokens(self) -> int:
@@ -77,6 +104,17 @@ class AgentResult:
     stats: RunStats
 
 
+@dataclass
+class _RunState:
+    """Everything one question accumulates. Never shared between runs."""
+
+    budget: Budget
+    evidence: dict[str, Work] = field(default_factory=dict)  # works the model saw in full
+    analyses: dict[str, RainfallAnalysis] = field(default_factory=dict)  # R1, R2... shown
+    searches: list[SearchRecord] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
 class ResearchAgent:
     def __init__(
         self,
@@ -85,10 +123,12 @@ class ResearchAgent:
         limits: Limits,
         reporting: ReportingConfig,
         *,
+        rainfall: RainfallAnalyzer | None = None,
         today: Callable[[], date] = date.today,
     ) -> None:
         self._llm = llm
         self._search = search
+        self._rainfall = rainfall
         self._limits = limits
         self._reporting = reporting
         self._today = today
@@ -104,12 +144,11 @@ class ResearchAgent:
                 f"question is {len(question)} characters; the limit is {limits.max_question_chars}"
             )
 
-        budget = Budget(limits)
-        instructions = build_instructions(limits)
+        state = _RunState(Budget(limits, rainfall_enabled=self._rainfall is not None))
+        budget = state.budget
+        instructions = build_instructions(limits, rainfall=self._rainfall is not None)
+        tools = [SEARCH_TOOL] if self._rainfall is None else [SEARCH_TOOL, RAINFALL_TOOL]
         messages: list[Message] = [UserMessage(question)]
-        evidence: dict[str, Work] = {}
-        searches: list[SearchRecord] = []
-        notes: list[str] = []
         next_input = estimate_tokens(instructions) + estimate_tokens(question)
 
         # Terminates: force_final_reason() is non-None once iterations + 1 >= max_iterations,
@@ -119,11 +158,11 @@ class ResearchAgent:
             allow_tools = reason is None
             if reason:
                 log.info("forcing final answer: %s", reason)
-                notes.append(reason)
+                state.notes.append(reason)
             response = self._llm.complete(
                 instructions=instructions,
                 messages=messages,
-                tools=[SEARCH_TOOL],
+                tools=tools,
                 max_output_tokens=limits.max_output_tokens,
                 allow_tools=allow_tools,
             )
@@ -138,10 +177,10 @@ class ResearchAgent:
             )
 
             if not allow_tools or not response.tool_calls:
-                return self._finish(response, budget, evidence, searches, notes)
+                return self._finish(response, state)
 
             messages.append(response.to_message())
-            results = self._run_tools(response.tool_calls, budget, evidence, searches, notes)
+            results = self._run_tools(response.tool_calls, state)
             messages.extend(results)
             next_input = (
                 response.usage.input_tokens
@@ -149,14 +188,8 @@ class ResearchAgent:
                 + sum(estimate_tokens(r.content) for r in results)
             )
 
-    def _finish(
-        self,
-        response: LLMResponse,
-        budget: Budget,
-        evidence: dict[str, Work],
-        searches: list[SearchRecord],
-        notes: list[str],
-    ) -> AgentResult:
+    def _finish(self, response: LLMResponse, state: _RunState) -> AgentResult:
+        budget, notes = state.budget, state.notes
         if response.tool_calls:  # only possible when tools were disabled for this call
             notes.append(
                 "The model tried to call tools after the budget was spent; those calls were "
@@ -172,59 +205,55 @@ class ResearchAgent:
             notes.append(overshoot)
         notes.extend(
             evidence_limitations(
-                searches,
-                evidence,
+                state.searches,
+                state.evidence,
                 limits=self._limits,
                 reporting=self._reporting,
                 today=self._today(),
+                analyses=list(state.analyses.values()),
+                rainfall_calls=budget.rainfall_calls,
             )
         )
-        answer = build_answer(response.text, evidence, notes)
+        answer = build_answer(response.text, state.evidence, notes, state.analyses)
         stats = RunStats(
             iterations=budget.iterations,
             search_calls=budget.search_calls,
             input_tokens=budget.input_tokens,
             output_tokens=budget.output_tokens,
-            works_shown=len(evidence),
+            works_shown=len(state.evidence),
             cached_searches=budget.cached_searches,
+            rainfall_calls=budget.rainfall_calls,
+            cached_rainfall=budget.cached_rainfall,
         )
         log.info(
-            "done: %d turn(s), %d search(es) (%d cached), %d tokens",
+            "done: %d turn(s), %d search(es) (%d cached), %d rainfall analysis(es) (%d cached), "
+            "%d tokens",
             stats.iterations,
             stats.search_calls,
             stats.cached_searches,
+            stats.rainfall_calls,
+            stats.cached_rainfall,
             stats.total_tokens,
         )
         return AgentResult(answer=answer, stats=stats)
 
-    def _run_tools(
-        self,
-        calls: Sequence[ToolCall],
-        budget: Budget,
-        evidence: dict[str, Work],
-        searches: list[SearchRecord],
-        notes: list[str],
-    ) -> list[ToolResultMessage]:
+    def _run_tools(self, calls: Sequence[ToolCall], state: _RunState) -> list[ToolResultMessage]:
         """Answer every tool call (the API requires a result for each call ID)."""
         results = []
         for call in calls:
             if call.error:
                 content = f"Error: {call.error}. Call the tool again with valid JSON arguments."
             elif call.name == SEARCH_TOOL_NAME:
-                content = self._do_search(call, budget, evidence, searches, notes)
+                content = self._do_search(call, state)
+            elif call.name == RAINFALL_TOOL_NAME and self._rainfall is not None:
+                content = self._do_rainfall(call, self._rainfall, state)
             else:
                 content = f"Error: unknown tool '{call.name}'."
             results.append(ToolResultMessage(call_id=call.id, content=content))
         return results
 
-    def _do_search(
-        self,
-        call: ToolCall,
-        budget: Budget,
-        evidence: dict[str, Work],
-        searches: list[SearchRecord],
-        notes: list[str],
-    ) -> str:
+    def _do_search(self, call: ToolCall, state: _RunState) -> str:
+        budget, notes = state.budget, state.notes
         try:
             args = parse_search_args(call.arguments)
         except ToolArgumentError as exc:
@@ -262,10 +291,10 @@ class ResearchAgent:
             result.total_count,
             "cache" if result.from_cache else "network",
         )
-        formatted = format_results(result, budget.context_left, evidence.keys())
+        formatted = format_results(result, budget.context_left, state.evidence.keys())
         budget.record_context(formatted.context_tokens)
-        evidence.update({w.id: w for w in formatted.shown})
-        searches.append(
+        state.evidence.update({w.id: w for w in formatted.shown})
+        state.searches.append(
             SearchRecord(
                 query=args.query,
                 year_from=args.year_from,
@@ -280,3 +309,69 @@ class ResearchAgent:
                 f"retrieved-context limit ({self._limits.max_context_tokens} tokens) was reached."
             )
         return formatted.text
+
+    def _do_rainfall(self, call: ToolCall, analyzer: RainfallAnalyzer, state: _RunState) -> str:
+        budget, notes = state.budget, state.notes
+        try:
+            args = parse_rainfall_args(call.arguments)
+        except ToolArgumentError as exc:
+            return f"Error: {exc}."
+        if budget.rainfall_left == 0:
+            notes.append(
+                "A requested rainfall analysis was not run because the rainfall-analysis limit "
+                "was reached."
+            )
+            return (
+                "Error: rainfall-analysis limit reached; no more analyses are allowed. Answer now."
+            )
+
+        try:
+            analysis = analyzer.analyze(
+                args.city,
+                country_code=args.country_code,
+                region=args.region,
+                start_year=args.start_year,
+                end_year=args.end_year,
+                event_date=args.event_date,
+            )
+        except InvalidRainfallQueryError as exc:
+            return f"Error: {exc}."  # rejected before any request, so it costs no analysis
+        except (AmbiguousLocationError, LocationNotFoundError) as exc:
+            budget.record_rainfall()
+            kind = "ambiguous" if isinstance(exc, AmbiguousLocationError) else "not found"
+            notes.append(
+                f"The location '{args.city}' was {kind}; no rainfall analysis was run for it."
+            )
+            return f"Error: {exc}."
+        except RainfallError as exc:
+            budget.record_rainfall()
+            log.warning("rainfall analysis failed: %s", exc)
+            notes.append(
+                f"A rainfall analysis failed ({type(exc).__name__}); the numerical evidence may "
+                "be incomplete."
+            )
+            return (
+                f"Error: the rainfall analysis failed ({exc}). You may retry once or answer with "
+                "what you have."
+            )
+
+        budget.record_rainfall(cached=analysis.provenance.from_cache)
+        analysis = replace(analysis, id=f"R{len(state.analyses) + 1}")
+        text = format_rainfall(analysis)
+        tokens = estimate_tokens(text)
+        log.info(
+            'rainfall "%s": %d valid year(s), ~%d tokens (%s)',
+            analysis.location.label,
+            len(analysis.annual_maxima),
+            tokens,
+            "cache" if analysis.provenance.from_cache else "network",
+        )
+        if tokens > budget.context_left:
+            notes.append(
+                "A rainfall result was not shown to the model because the retrieved-context "
+                f"limit ({self._limits.max_context_tokens} tokens) was reached."
+            )
+            return "Error: result omitted because the retrieved-context budget is used up."
+        budget.record_context(tokens)
+        state.analyses[analysis.id] = analysis  # only results the model saw in full are citable
+        return text
