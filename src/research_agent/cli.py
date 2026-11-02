@@ -14,7 +14,7 @@ from typing import TextIO
 import typer
 
 from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
-from research_agent.agent.tools import format_rainfall
+from research_agent.agent.tools import format_enso, format_rainfall
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.credentials import (
     DEFAULT_ENV_FILE,
@@ -25,6 +25,7 @@ from research_agent.credentials import (
     Credentials,
     load_credentials,
 )
+from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import EvalError, load_cases, run_case, summarize
 from research_agent.llm import LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
@@ -202,6 +203,30 @@ def rainfall(
     typer.echo(f"({origin}; data {prov.data_start} to {prov.data_end})")
 
 
+@app.command("enso")
+def enso(
+    phase: str = typer.Option("both", "--phase", help="'both', 'el_nino' or 'la_nina'."),
+    start_year: int | None = typer.Option(None, "--start-year", help="Events that begin in/after."),
+    end_year: int | None = typer.Option(None, "--end-year", help="Events that begin in/before."),
+    year: int | None = typer.Option(None, "--year", help="Describe this calendar year."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """List El Nino / La Nina events from NOAA CPC's RONI deterministically (no LLM)."""
+    cfg = _load_or_exit(config)
+    try:
+        with EnsoClient(cfg.enso) as client:
+            analysis = client.analyze(
+                phase=phase, start_year=start_year, end_year=end_year, year=year
+            )
+    except EnsoError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(format_enso(replace(analysis, id="R1")))
+    origin = "cache" if analysis.from_cache else "network"
+    typer.echo(f"\n({origin}; record {analysis.record_first} to {analysis.record_last})")
+
+
 @app.command("check-credentials")
 def check_credentials(
     env_file: Path = typer.Option(
@@ -236,8 +261,11 @@ def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
     with (
         OpenAlexClient(cfg.openalex, cfg.limits, api_key=key.reveal() if key else None) as search,
         RainfallClient(cfg.rainfall) as rain,
+        EnsoClient(cfg.enso) as enso_client,
     ):
-        yield ResearchAgent(llm, search, cfg.limits, cfg.reporting, rainfall=rain)
+        yield ResearchAgent(
+            llm, search, cfg.limits, cfg.reporting, rainfall=rain, enso=enso_client
+        )
 
 
 def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
@@ -284,6 +312,13 @@ def ask(
     if answer.data_references:
         typer.echo("\nData")
         for a in answer.data_references:
+            if isinstance(a, EnsoAnalysis):
+                typer.echo(
+                    f"[{a.id}] ENSO events, NOAA CPC {a.index_name}, record {a.record_first} to "
+                    f"{a.record_last}; events starting {a.first_year}-{a.last_year}."
+                )
+                typer.echo(f"    {a.source_url}")
+                continue
             p = a.provenance
             what = "dry spells and annual totals" if a.metric == "dry" else "Rx1day"
             typer.echo(
@@ -297,7 +332,7 @@ def ask(
         typer.echo(f"- {limitation}")
     stats = result.stats
     rain = (
-        f"{stats.rainfall_calls} rainfall analysis(es) ({stats.cached_rainfall} from cache), "
+        f"{stats.rainfall_calls} rainfall/ENSO analysis(es) ({stats.cached_rainfall} from cache), "
         if stats.rainfall_calls
         else ""
     )
@@ -313,7 +348,11 @@ def ask(
 
 def format_trace(trace: tuple[tuple[str, ...], ...]) -> str:
     """One line: the tools the model requested on each turn, e.g. ``1: rainfall | 2: answer``."""
-    short = {"search_literature": "search", "analyze_rainfall_extremes": "rainfall"}
+    short = {
+        "search_literature": "search",
+        "analyze_rainfall_extremes": "rainfall",
+        "analyze_enso_events": "enso",
+    }
 
     def shorten(name: str) -> str:
         base, bracket, rest = name.partition("[")

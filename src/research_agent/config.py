@@ -140,6 +140,61 @@ class RainfallConfig:
 
 
 @dataclass(frozen=True)
+class EnsoConfig:
+    """NOAA CPC RONI file settings and the event rule (threshold, minimum length, strength)."""
+
+    url: str
+    timeout_seconds: float
+    max_retries: int
+    backoff_base_seconds: float
+    max_backoff_seconds: float
+    cache_dir: Path
+    cache_ttl_days: float
+    threshold: float  # |index| at or above this counts as El Nino / La Nina (inclusive)
+    min_seasons: int  # an event needs this many consecutive overlapping seasons
+    strength_moderate: float  # peak |index| at or above: moderate (below: weak)
+    strength_strong: float
+    strength_very_strong: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.url, str) or not self.url.startswith(("https://", "http://")):
+            raise ConfigError(f"enso.url must be an http(s) URL, got {self.url!r}")
+        if not isinstance(self.cache_dir, Path):
+            object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        for name in (
+            "timeout_seconds",
+            "backoff_base_seconds",
+            "max_backoff_seconds",
+            "cache_ttl_days",
+            "threshold",
+            "strength_moderate",
+            "strength_strong",
+            "strength_very_strong",
+        ):
+            value = getattr(self, name)
+            if not _is_number(value) or value <= 0:
+                raise ConfigError(f"enso.{name} must be a positive number, got {value!r}")
+        for name in ("max_retries",):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ConfigError(f"enso.{name} must be an integer >= 0, got {value!r}")
+        seasons = self.min_seasons
+        if isinstance(seasons, bool) or not isinstance(seasons, int) or seasons <= 0:
+            raise ConfigError(f"enso.min_seasons must be a positive integer, got {seasons!r}")
+        ladder = (
+            self.threshold,
+            self.strength_moderate,
+            self.strength_strong,
+            self.strength_very_strong,
+        )
+        if list(ladder) != sorted(set(ladder)):
+            raise ConfigError(
+                "enso: threshold < strength_moderate < strength_strong < strength_very_strong "
+                "is required"
+            )
+
+
+@dataclass(frozen=True)
 class LLMConfig:
     """LLM settings for the OpenAI adapter. The API key is never stored here (env var only)."""
 
@@ -183,6 +238,7 @@ class Config:
     llm: LLMConfig
     reporting: ReportingConfig
     rainfall: RainfallConfig
+    enso: EnsoConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -215,4 +271,5 @@ def load_config(path: Path) -> Config:
         llm=_build_section(LLMConfig, raw, "llm", path),
         reporting=_build_section(ReportingConfig, raw, "reporting", path),
         rainfall=_build_section(RainfallConfig, raw, "rainfall", path),
+        enso=_build_section(EnsoConfig, raw, "enso", path),
     )

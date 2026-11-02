@@ -17,22 +17,27 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Protocol
 
-from research_agent.agent.answer import Answer, build_answer
+from research_agent.agent.answer import Answer, DataRecord, build_answer
 from research_agent.agent.budget import Budget, estimate_tokens
 from research_agent.agent.limitations import SearchRecord, evidence_limitations
 from research_agent.agent.prompt import build_instructions
 from research_agent.agent.tools import (
+    ENSO_TOOL,
+    ENSO_TOOL_NAME,
     RAINFALL_TOOL,
     RAINFALL_TOOL_NAME,
     SEARCH_TOOL,
     SEARCH_TOOL_NAME,
     ToolArgumentError,
+    format_enso,
     format_rainfall,
     format_results,
+    parse_enso_args,
     parse_rainfall_args,
     parse_search_args,
 )
 from research_agent.config import Limits, ReportingConfig
+from research_agent.enso import EnsoAnalysis, EnsoError, InvalidEnsoQueryError
 from research_agent.llm import (
     LLMClient,
     LLMResponse,
@@ -80,6 +85,17 @@ class RainfallAnalyzer(Protocol):
     ) -> RainfallRecord: ...
 
 
+class EnsoAnalyzer(Protocol):
+    def analyze(
+        self,
+        *,
+        phase: str = "both",
+        start_year: int | None = None,
+        end_year: int | None = None,
+        year: int | None = None,
+    ) -> EnsoAnalysis: ...
+
+
 def _trace_name(call: ToolCall) -> str:
     """The tool as the model chose it; the rainfall tool also shows its metric, e.g. ``[dry]``."""
     if call.name != RAINFALL_TOOL_NAME:
@@ -122,7 +138,7 @@ class _RunState:
 
     budget: Budget
     evidence: dict[str, Work] = field(default_factory=dict)  # works the model saw in full
-    analyses: dict[str, RainfallRecord] = field(default_factory=dict)  # R1, R2... shown
+    analyses: dict[str, DataRecord] = field(default_factory=dict)  # R1, R2... shown
     searches: list[SearchRecord] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     trace: list[tuple[str, ...]] = field(default_factory=list)
@@ -137,11 +153,15 @@ class ResearchAgent:
         reporting: ReportingConfig,
         *,
         rainfall: RainfallAnalyzer | None = None,
+        enso: EnsoAnalyzer | None = None,
         today: Callable[[], date] = date.today,
     ) -> None:
+        if enso is not None and rainfall is None:
+            raise ValueError("the ENSO tool is offered together with the rainfall tool")
         self._llm = llm
         self._search = search
         self._rainfall = rainfall
+        self._enso = enso
         self._limits = limits
         self._reporting = reporting
         self._today = today
@@ -159,8 +179,14 @@ class ResearchAgent:
 
         state = _RunState(Budget(limits, rainfall_enabled=self._rainfall is not None))
         budget = state.budget
-        instructions = build_instructions(limits, rainfall=self._rainfall is not None)
-        tools = [SEARCH_TOOL] if self._rainfall is None else [SEARCH_TOOL, RAINFALL_TOOL]
+        instructions = build_instructions(
+            limits, rainfall=self._rainfall is not None, enso=self._enso is not None
+        )
+        tools = [SEARCH_TOOL]
+        if self._rainfall is not None:
+            tools.append(RAINFALL_TOOL)
+        if self._enso is not None:
+            tools.append(ENSO_TOOL)
         messages: list[Message] = [UserMessage(question)]
         next_input = estimate_tokens(instructions) + estimate_tokens(question)
 
@@ -262,6 +288,8 @@ class ResearchAgent:
                 content = self._do_search(call, state)
             elif call.name == RAINFALL_TOOL_NAME and self._rainfall is not None:
                 content = self._do_rainfall(call, self._rainfall, state)
+            elif call.name == ENSO_TOOL_NAME and self._enso is not None:
+                content = self._do_enso(call, self._enso, state)
             else:
                 content = f"Error: unknown tool '{call.name}'."
             results.append(ToolResultMessage(call_id=call.id, content=content))
@@ -387,6 +415,65 @@ class ResearchAgent:
         if tokens > budget.context_left:
             notes.append(
                 "A rainfall result was not shown to the model because the retrieved-context "
+                f"limit ({self._limits.max_context_tokens} tokens) was reached."
+            )
+            return "Error: result omitted because the retrieved-context budget is used up."
+        budget.record_context(tokens)
+        state.analyses[analysis.id] = analysis  # only results the model saw in full are citable
+        return text
+
+    def _do_enso(self, call: ToolCall, analyzer: EnsoAnalyzer, state: _RunState) -> str:
+        """Same contract as ``_do_rainfall``; ENSO calls share the ``max_rainfall_calls`` limit."""
+        budget, notes = state.budget, state.notes
+        try:
+            args = parse_enso_args(call.arguments)
+        except ToolArgumentError as exc:
+            return f"Error: {exc}."
+        if budget.rainfall_left == 0:
+            notes.append(
+                "A requested ENSO analysis was not run because the rainfall/ENSO analysis limit "
+                "was reached."
+            )
+            return (
+                "Error: analysis limit reached (rainfall and ENSO analyses share it); no more "
+                "analyses are allowed. Answer now."
+            )
+
+        try:
+            analysis = analyzer.analyze(
+                phase=args.phase,
+                start_year=args.start_year,
+                end_year=args.end_year,
+                year=args.year,
+            )
+        except InvalidEnsoQueryError as exc:
+            return f"Error: {exc}."  # rejected before any request, so it costs no analysis
+        except EnsoError as exc:
+            budget.record_rainfall()
+            log.warning("ENSO analysis failed: %s", exc)
+            notes.append(
+                f"An ENSO analysis failed ({type(exc).__name__}); the numerical evidence may be "
+                "incomplete."
+            )
+            return (
+                f"Error: the ENSO analysis failed ({exc}). You may retry once or answer with "
+                "what you have."
+            )
+
+        budget.record_rainfall(cached=analysis.from_cache)
+        analysis = replace(analysis, id=f"R{len(state.analyses) + 1}")
+        text = format_enso(analysis)
+        tokens = estimate_tokens(text)
+        log.info(
+            "enso %s: %d event(s), ~%d tokens (%s)",
+            analysis.index_name,
+            len(analysis.events),
+            tokens,
+            "cache" if analysis.from_cache else "network",
+        )
+        if tokens > budget.context_left:
+            notes.append(
+                "An ENSO result was not shown to the model because the retrieved-context "
                 f"limit ({self._limits.max_context_tokens} tokens) was reached."
             )
             return "Error: result omitted because the retrieved-context budget is used up."

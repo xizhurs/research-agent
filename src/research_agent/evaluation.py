@@ -14,9 +14,12 @@ from typing import Any, Protocol
 
 from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.agent.budget import OVERSHOOT_PREFIX
+from research_agent.agent.tools import ENSO_TOOL_NAME, RAINFALL_TOOL_NAME, SEARCH_TOOL_NAME
 from research_agent.config import Limits
 from research_agent.llm import LLMAuthError, LLMError
 from research_agent.retrieval import AuthError, RetrievalError
+
+KNOWN_TOOLS = frozenset({SEARCH_TOOL_NAME, RAINFALL_TOOL_NAME, ENSO_TOOL_NAME})
 
 _ALLOWED_KEYS = {
     "id",
@@ -27,6 +30,8 @@ _ALLOWED_KEYS = {
     "min_rainfall_calls",
     "min_data_references",
     "expect_metric",
+    "expect_tool",
+    "forbid_tool",
     "max_evidence_claims",
     "keywords_any",
     "forbidden_phrases",
@@ -51,6 +56,10 @@ class EvalCase:
     # The rainfall tool must have been requested with this metric ("wet" or "dry") at least once.
     # Checked on the trace, so it judges the model's choice even if the tool refused the call.
     expect_metric: str | None = None
+    # A tool name that must (expect_tool) or must not (forbid_tool) appear in the trace, e.g.
+    # "analyze_enso_events". Like expect_metric, this judges the model's choice of tool.
+    expect_tool: str | None = None
+    forbid_tool: str | None = None
 
 
 class EvalAgent(Protocol):
@@ -81,6 +90,12 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
     expect_metric = raw.get("expect_metric")
     if expect_metric is not None and expect_metric not in ("wet", "dry"):
         raise EvalError(f"case {case_id!r}: expect_metric must be 'wet' or 'dry'")
+    tools: dict[str, str | None] = {}
+    for key in ("expect_tool", "forbid_tool"):
+        name = raw.get(key)
+        if name is not None and not (isinstance(name, str) and name in KNOWN_TOOLS):
+            raise EvalError(f"case {case_id!r}: {key} must be one of {sorted(KNOWN_TOOLS)}")
+        tools[key] = name
     phrase_lists: dict[str, tuple[str, ...]] = {}
     for key in ("keywords_any", "forbidden_phrases"):
         values = raw.get(key, [])
@@ -100,6 +115,8 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         keywords_any=phrase_lists["keywords_any"],
         forbidden_phrases=phrase_lists["forbidden_phrases"],
         expect_metric=expect_metric,
+        expect_tool=tools["expect_tool"],
+        forbid_tool=tools["forbid_tool"],
     )
 
 
@@ -164,6 +181,14 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
             f"expected the rainfall tool to be requested with metric {case.expect_metric!r}; "
             f"tools requested: {[list(turn) for turn in stats.tool_trace]}"
         )
+    requested = {name.partition("[")[0] for turn in stats.tool_trace for name in turn}
+    if case.expect_tool and case.expect_tool not in requested:
+        failures.append(
+            f"expected the model to request {case.expect_tool}; "
+            f"tools requested: {[list(turn) for turn in stats.tool_trace]}"
+        )
+    if case.forbid_tool and case.forbid_tool in requested:
+        failures.append(f"the model requested {case.forbid_tool}, which this case forbids")
     if stats.rainfall_calls < case.min_rainfall_calls:
         failures.append(
             f"expected at least {case.min_rainfall_calls} rainfall analysis(es), "

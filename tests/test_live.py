@@ -7,6 +7,7 @@ import pytest
 
 from research_agent.config import load_config
 from research_agent.credentials import load_credentials
+from research_agent.enso import EnsoClient
 from research_agent.llm import OpenAIClient, ToolResultMessage, ToolSpec, UserMessage
 from research_agent.rainfall import RainfallClient
 from research_agent.retrieval import OpenAlexClient
@@ -50,6 +51,22 @@ def test_real_rainfall_analysis_for_one_city(tmp_path):
     # The dry metric reads the same archive request, so it is served from the cache too.
     assert dry.metric == "dry" and dry.provenance.from_cache is True
     assert len(dry.annual) == 30 and dry.longest_spells[0].days > 10
+
+
+def test_real_enso_events_from_the_noaa_file(tmp_path):
+    """One real download of NOAA CPC's RONI file, parsed strictly, then served from the cache."""
+    root = Path(__file__).resolve().parents[1]
+    base = load_config(root / "configs" / "base.toml")
+    cfg = replace(base.enso, cache_dir=tmp_path)
+    with EnsoClient(cfg) as client:
+        first = client.analyze()
+        second = client.analyze(phase="la_nina", start_year=2010, end_year=2010)
+    assert first.from_cache is False and second.from_cache is True
+    assert first.record_first == "DJF 1950" and first.last_year >= 2025
+    found = {(e.phase, e.first_season, e.last_season) for e in first.events}
+    assert ("el_nino", "AMJ 1997", "MAM 1998") in found  # the 1997-98 El Nino
+    assert ("la_nina", "AMJ 2010", "AMJ 2011") in found  # the 2010-11 La Nina
+    assert [e.first_season for e in second.events] == ["AMJ 2010"]
 
 
 def test_openai_tool_calling_round_trip():

@@ -12,8 +12,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
+from research_agent.agent.answer import DataRecord
 from research_agent.config import Limits, ReportingConfig
-from research_agent.rainfall import RainfallRecord
 from research_agent.retrieval import Work
 
 ALWAYS = (
@@ -40,7 +40,7 @@ def evidence_limitations(
     limits: Limits,
     reporting: ReportingConfig,
     today: date,
-    analyses: Sequence[RainfallRecord] = (),
+    analyses: Sequence[DataRecord] = (),
     rainfall_calls: int = 0,
 ) -> list[str]:
     """Limitations implied by the searches, the works seen and the rainfall analyses shown.
@@ -53,8 +53,8 @@ def evidence_limitations(
         notes.extend(_literature_limitations(searches, evidence, limits, reporting, today))
     if rainfall_calls and not analyses:
         notes.append(
-            "A rainfall analysis was requested but produced no usable result, so no numerical "
-            "evidence backs this answer."
+            "A rainfall or ENSO analysis was requested but produced no usable result, so no "
+            "numerical evidence backs this answer."
         )
     for analysis in analyses:
         notes.extend(analysis.caveats)  # identical sentences are removed when the answer is built

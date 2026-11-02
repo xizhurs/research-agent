@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from research_agent.config import load_config
+from research_agent.enso.analysis import Season
+from research_agent.enso.analysis import compute_analysis as compute_enso_analysis
 from research_agent.rainfall import Location, Provenance
 from research_agent.rainfall.analysis import compute_analysis
 from research_agent.rainfall.dryness import compute_dry_analysis
@@ -211,6 +213,54 @@ def make_dry_analysis(rainfall_config, make_location, make_provenance, make_seri
             provenance=make_provenance(from_cache),
             event_date=event_date,
             event_year=event_year,
+        )
+
+    return _make
+
+
+# --- ENSO -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def enso_config(base_config, tmp_path):
+    """ENSO settings with a temporary cache folder."""
+    return replace(base_config.enso, cache_dir=tmp_path / "enso-cache")
+
+
+@pytest.fixture
+def make_seasons():
+    """Consecutive seasons from index values, starting at DJF of ``year`` (or at ``slot``)."""
+
+    def _make(values, year=2000, slot=0):
+        first = year * 12 + slot
+        return tuple(Season((first + i) // 12, (first + i) % 12, v) for i, v in enumerate(values))
+
+    return _make
+
+
+# Hand-built series, starting DJF 2000: two quiet seasons, an El Nino of 6 seasons (FMA-JAS 2000,
+# peak +1.40 in AMJ 2000), two quiet seasons, a La Nina of 5 seasons (OND 2000-FMA 2001, peak
+# -1.80 in DJF 2001), two quiet seasons.
+ENSO_SERIES = (
+    [0.0, 0.1]
+    + [0.6, 1.0, 1.4, 1.2, 0.8, 0.6]
+    + [0.2, -0.2]
+    + [-0.6, -1.0, -1.8, -1.2, -0.7]
+    + [0.0, 0.1]
+)
+
+
+@pytest.fixture
+def make_enso_analysis(enso_config, make_seasons):
+    """A real EnsoAnalysis (computed, not hand-built) over ENSO_SERIES, id still empty."""
+
+    def _make(values=None, from_cache=False, **kwargs):
+        return compute_enso_analysis(
+            make_seasons(ENSO_SERIES if values is None else values),
+            config=enso_config,
+            source_url=enso_config.url,
+            from_cache=from_cache,
+            **kwargs,
         )
 
     return _make

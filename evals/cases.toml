@@ -12,6 +12,9 @@
 #   min_data_references the answer must cite at least this many rainfall analyses (R1, R2...)
 #   expect_metric       the rainfall tool must have been requested with this metric ("wet" or
 #                       "dry"); judged on the tool trace, i.e. on the model's choice
+#   expect_tool         this tool must have been requested at least once (judged on the trace);
+#                       one of search_literature, analyze_rainfall_extremes, analyze_enso_events
+#   forbid_tool         this tool must never have been requested
 # Every case is also checked against the universal invariants in evaluation.check_result
 # (structured answer, limitations present, citations valid, budgets respected).
 
@@ -181,3 +184,52 @@ expect_metric = "dry"
 min_rainfall_calls = 2
 min_data_references = 2
 keywords_any = ["mm"]
+
+# ENSO cases. They judge the model's CHOICE of tool (expect_tool / forbid_tool, read from the tool
+# trace) as well as the answer. min_rainfall_calls counts rainfall AND ENSO analyses together
+# (they share one limit).
+[[case]]
+id = "enso-events-since-1990"
+question = "List the El Nino events since 1990 and say how strong each one was."
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["nino", "niño"]
+
+[[case]]
+id = "enso-year-2010"
+question = "Was 2010 an El Nino year, a La Nina year, or neither?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["2010"]
+
+# A methods question about sea-surface-temperature monitoring: the literature tool is right and
+# the ENSO event list is not needed.
+[[case]]
+id = "enso-literature-only"
+question = "How do remote-sensing studies use sea surface temperature to monitor El Nino?"
+forbid_tool = "analyze_enso_events"
+min_searches = 1
+min_references = 1
+
+[[case]]
+id = "enso-strongest-la-nina-and-literature"
+question = "Which were the strongest La Nina events since 1950, and what did papers report about their impacts?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_searches = 1
+min_data_references = 1
+min_references = 1
+keywords_any = ["nina", "niña"]
+
+# Time-dependent: it describes the state of the record when the case was written (2026-11-02:
+# conditions at El Nino level for fewer than 5 seasons). Review the keywords when the record moves
+# on; the tool choice and the data citation stay valid.
+[[case]]
+id = "enso-current-conditions"
+question = "Is there an El Nino happening right now?"
+expect_tool = "analyze_enso_events"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["not yet", "ongoing", "fewer than", "so far", "developing", "has not"]

@@ -12,6 +12,7 @@ from datetime import date
 from typing import Any
 
 from research_agent.agent.budget import estimate_tokens
+from research_agent.enso import PHASE_LABELS, EnsoAnalysis, EnsoRun
 from research_agent.llm import ToolSpec
 from research_agent.rainfall import DryAnalysis, RainfallAnalysis, RainfallRecord
 from research_agent.retrieval import SearchResult, Work
@@ -95,6 +96,50 @@ RAINFALL_TOOL = ToolSpec(
             },
         },
         "required": ["city"],
+    },
+)
+
+
+ENSO_TOOL_NAME = "analyze_enso_events"
+
+ENSO_TOOL = ToolSpec(
+    name=ENSO_TOOL_NAME,
+    description=(
+        "List El Nino and La Nina events from NOAA CPC's Relative Oceanic Nino Index (RONI), the "
+        "official ENSO index, over the whole record since 1950: first and last season, number "
+        "of seasons, peak value and strength. An event follows NOAA's rule (index at or beyond "
+        "+/-0.5 for at least 5 consecutive overlapping 3-month seasons). With 'year', also "
+        "report what the record says about that calendar year. Returns a numeric record with an "
+        "ID such as R1. Use it to find or date ENSO events, count them or compare their "
+        "strength; use search_literature for causes, impacts, forecasting methods and for what "
+        "a paper counted as an event. It is a global index: it takes no place and says nothing "
+        "about rainfall at a location. Not for forecasts."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "phase": {
+                "type": "string",
+                "enum": ["both", "el_nino", "la_nina"],
+                "description": "Optional. Which events to list (default 'both').",
+            },
+            "start_year": {
+                "type": "integer",
+                "description": "Optional. Only events that begin in or after this year.",
+            },
+            "end_year": {
+                "type": "integer",
+                "description": "Optional. Only events that begin in or before this year.",
+            },
+            "year": {
+                "type": "integer",
+                "description": (
+                    "Optional. A calendar year to describe: its seasonal values and any event "
+                    "overlapping it."
+                ),
+            },
+        },
+        "required": [],
     },
 )
 
@@ -234,6 +279,26 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
     )
 
 
+@dataclass(frozen=True)
+class EnsoArgs:
+    phase: str
+    start_year: int | None
+    end_year: int | None
+    year: int | None
+
+
+def parse_enso_args(arguments: dict[str, Any]) -> EnsoArgs:
+    phase = _optional_str(arguments, "phase") or "both"
+    if phase not in ("both", "el_nino", "la_nina"):
+        raise ToolArgumentError("'phase' must be 'both', 'el_nino' or 'la_nina'")
+    return EnsoArgs(
+        phase=phase,
+        start_year=_optional_int(arguments, "start_year"),
+        end_year=_optional_int(arguments, "end_year"),
+        year=_optional_int(arguments, "year"),
+    )
+
+
 def _mm(value: float) -> str:
     return f"{value:.1f} mm"
 
@@ -347,5 +412,60 @@ def _format_dry(a: DryAnalysis) -> str:
             else:
                 parts.append("rank withheld: record too short")
             lines.append("; ".join(parts) + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
+
+
+def _enso_run(run: EnsoRun) -> str:
+    text = (
+        f"{PHASE_LABELS[run.phase]} {run.first_season} to {run.last_season} "
+        f"({run.seasons} season{'s' if run.seasons != 1 else ''}), peak {run.peak:+.2f} "
+        f"({run.peak_season})"
+    )
+    if run.strength:
+        text += f", {run.strength}"
+    if run.starts_at_record_start:
+        text += ", the record starts inside it so its start may be cut"
+    if run.ongoing:
+        text += ", ongoing: the record ends inside it"
+    return text
+
+
+def format_enso(a: EnsoAnalysis) -> str:
+    """Render one ENSO analysis for the model: compact, deterministic, numbers only from code."""
+    t = a.threshold
+    phases = [p for p in ("el_nino", "la_nina") if a.phase in ("both", p)]
+    counts = ", ".join(
+        f"{sum(e.phase == p for e in a.events)} {PHASE_LABELS[p]}" for p in phases
+    )
+    lines = [
+        f"[{a.id}] ENSO events from NOAA CPC {a.index_name}; record {a.record_first} to "
+        f"{a.record_last}; events starting {a.first_year}-{a.last_year}.",
+        f"Rule: index at or above +{t:g} (El Nino) or at or below -{t:g} (La Nina) for at least "
+        f"{a.min_seasons} consecutive overlapping 3-month seasons. Strength by peak value "
+        f"(convention): weak, moderate from {a.strength_moderate:g}, strong from "
+        f"{a.strength_strong:g}, very strong from {a.strength_very_strong:g}.",
+        f"Source: {a.source_url}",
+        f"Events: {counts}.",
+    ]
+    lines.extend(f"- {_enso_run(e)}" for e in a.events)
+    if a.pending:
+        lines.append(
+            f"Not yet an event: {_enso_run(a.pending)}; fewer than {a.min_seasons} seasons so far."
+        )
+    f = a.focus
+    if f:
+        values = ", ".join(f"{season} {value:+.2f}" for season, value in f.values)
+        lines.append(f"Year {f.year} seasonal values: {values}.")
+        if f.events:
+            overlapping = "; ".join(_enso_run(e) for e in f.events)
+            lines.append(f"Events overlapping {f.year}: {overlapping}")
+        else:
+            lines.append(f"No El Nino or La Nina event overlaps {f.year}.")
+        if f.short_runs:
+            lines.append(
+                f"At-threshold runs in {f.year} too short to be events: "
+                + "; ".join(_enso_run(r) for r in f.short_runs)
+            )
     lines.append("Caveats: " + " ".join(a.caveats))
     return "\n".join(lines)
