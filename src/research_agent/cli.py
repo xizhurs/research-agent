@@ -296,12 +296,21 @@ def ask(
         if stats.rainfall_calls
         else ""
     )
+    if stats.tool_trace:
+        typer.echo(f"\ntools by turn: {format_trace(stats.tool_trace)}", err=True)
     typer.echo(
         f"\nrun: {stats.iterations} model turn(s), {stats.search_calls} search(es) "
         f"({stats.cached_searches} from cache), {rain}{stats.total_tokens} tokens "
         f"({stats.input_tokens} in / {stats.output_tokens} out)",
         err=True,
     )
+
+
+def format_trace(trace: tuple[tuple[str, ...], ...]) -> str:
+    """One line: the tools the model requested on each turn, e.g. ``1: rainfall | 2: answer``."""
+    short = {"search_literature": "search", "analyze_extreme_rainfall": "rainfall"}
+    turns = [", ".join(short.get(n, n) for n in names) or "answer" for names in trace]
+    return " | ".join(f"{i}: {turn}" for i, turn in enumerate(turns, start=1))
 
 
 DEFAULT_CASES = Path("evals/cases.toml")
@@ -348,6 +357,7 @@ def evaluate(
                     detail = (
                         f"turns={st.iterations} searches={st.search_calls} "
                         f"rainfall={st.rainfall_calls} tokens={st.total_tokens}"
+                        f" tools=[{format_trace(st.tool_trace)}]"
                         f" rejected_citations={report.rejected_citations}"
                     )
                 else:

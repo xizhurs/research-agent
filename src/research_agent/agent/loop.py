@@ -92,6 +92,9 @@ class RunStats:
     cached_searches: int = 0  # of search_calls, answered from the local cache (no API cost)
     rainfall_calls: int = 0  # rainfall analyses that ran (including ones that failed)
     cached_rainfall: int = 0  # of rainfall_calls, answered from the local cache
+    # What the model asked for on each turn, in order: the tool names it requested (even if the
+    # call was refused or invalid). An empty tuple is a turn with no tool call, e.g. the answer.
+    tool_trace: tuple[tuple[str, ...], ...] = ()
 
     @property
     def total_tokens(self) -> int:
@@ -113,6 +116,7 @@ class _RunState:
     analyses: dict[str, RainfallAnalysis] = field(default_factory=dict)  # R1, R2... shown
     searches: list[SearchRecord] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    trace: list[tuple[str, ...]] = field(default_factory=list)
 
 
 class ResearchAgent:
@@ -167,6 +171,7 @@ class ResearchAgent:
                 allow_tools=allow_tools,
             )
             budget.record_call(response.usage)
+            state.trace.append(tuple(c.name for c in response.tool_calls))
             log.info(
                 "turn %d: %d in / %d out tokens, stop=%s, tool calls=%d",
                 budget.iterations,
@@ -224,6 +229,7 @@ class ResearchAgent:
             cached_searches=budget.cached_searches,
             rainfall_calls=budget.rainfall_calls,
             cached_rainfall=budget.cached_rainfall,
+            tool_trace=tuple(state.trace),
         )
         log.info(
             "done: %d turn(s), %d search(es) (%d cached), %d rainfall analysis(es) (%d cached), "

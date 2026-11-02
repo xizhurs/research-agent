@@ -331,3 +331,26 @@ def test_ask_prints_a_data_section_and_the_rainfall_footer(monkeypatch, tmp_path
     assert "Data" in result.output
     assert "[R1] Zhengzhou, Henan, China: Rx1day 2000-2004. ERA5 test dataset" in result.output
     assert "1 rainfall analysis(es) (1 from cache), 500 tokens" in result.output
+
+
+def test_format_trace_is_one_readable_line():
+    from research_agent.cli import format_trace
+
+    trace = (
+        ("analyze_extreme_rainfall", "search_literature"),
+        ("search_literature",),
+        (),
+    )
+    assert format_trace(trace) == "1: rainfall, search | 2: search | 3: answer"
+
+
+def test_ask_prints_tools_by_turn_on_stderr(monkeypatch, tmp_path):
+    answer = Answer(claims=(Claim("x", "interpretation", ()),), references=(), limitations=("n",))
+    stats = RunStats(
+        2, 0, 10, 10, 0, rainfall_calls=1, tool_trace=(("analyze_extreme_rainfall",), ())
+    )
+    monkeypatch.setattr("research_agent.cli._run_agent", lambda *a: AgentResult(answer, stats))
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef\n", encoding="utf-8")
+    result = runner.invoke(app, ["ask", "q", "--config", str(BASE), "--env-file", str(env)])
+    assert "tools by turn: 1: rainfall | 2: answer" in result.output

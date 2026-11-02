@@ -441,3 +441,42 @@ def test_work_id_cited_for_numbers_that_were_never_retrieved_is_rejected(limits,
     result = run(llm, limits, rainfall=FakeRainfall(make_analysis()))
     assert result.answer.rejected_citations == ("W123",)
     assert result.answer.claims[0].kind == "interpretation"
+
+
+# --- tool trace (what the model chose, per turn) ------------------------------------------------
+
+
+def test_trace_records_the_tools_requested_on_each_turn(
+    limits, make_work, make_result, make_analysis
+):
+    llm = StubLLMClient(
+        [
+            tool_call_response(rain("a"), lit("b")),
+            tool_call_response(lit("c", "second query")),
+            text_response(final()),
+        ]
+    )
+    result = run(
+        llm,
+        limits,
+        search=FakeSearch(make_result([make_work()])),
+        rainfall=FakeRainfall(make_analysis()),
+    )
+    assert result.stats.tool_trace == (
+        (RAIN, SEARCH),
+        (SEARCH,),
+        (),  # the answer turn requested no tool
+    )
+    assert len(result.stats.tool_trace) == result.stats.iterations
+
+
+def test_trace_includes_refused_and_ignored_calls(limits, make_analysis):
+    capped = replace(limits, max_iterations=2)
+    llm = StubLLMClient([tool_call_response(rain("a")), tool_call_response(rain("b"))])
+    result = run(llm, capped, rainfall=FakeRainfall(make_analysis()))
+    assert result.stats.tool_trace == ((RAIN,), (RAIN,))  # turn 2 was forced: the call was ignored
+
+
+def test_no_tool_use_gives_a_single_empty_turn(limits):
+    result = run(StubLLMClient([text_response(final())]), limits)
+    assert result.stats.tool_trace == ((),)
