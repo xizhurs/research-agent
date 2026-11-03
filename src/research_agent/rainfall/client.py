@@ -33,7 +33,7 @@ from research_agent.rainfall.geocoding import (
     parse_candidates,
     resolve_location,
 )
-from research_agent.rainfall.models import Provenance, RainfallRecord
+from research_agent.rainfall.models import Location, Provenance, RainfallRecord
 from research_agent.retrieval.cache import ResponseCache, cache_key
 
 log = logging.getLogger(__name__)
@@ -166,6 +166,29 @@ class RainfallClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def _archive_params(self, location: Location, start_year: int, end_year: int) -> dict[str, str]:
+        return build_archive_params(
+            location.latitude,
+            location.longitude,
+            date(start_year, 1, 1),
+            min(date(end_year, 12, 31), self._today()),
+            self._config.model,
+        )
+
+    def fetch_archive(self, location: Location, start_year: int, end_year: int) -> Archive:
+        """The daily series ``analyze`` used for ``location`` and these years.
+
+        Builds the same request as ``analyze``, so it is a cache hit right after an analysis (it
+        does not geocode again, which could resolve differently). Used to plot an analysis that
+        only the statistics were kept for.
+        """
+        archive, _ = self._cached(
+            self._config.archive_url,
+            self._archive_params(location, start_year, end_year),
+            parse_archive,
+        )
+        return archive
+
     def analyze(
         self,
         city: str,
@@ -177,10 +200,12 @@ class RainfallClient:
         event_date: date | None = None,
         metric: str = "wet",
         event_year: int | None = None,
-    ) -> RainfallRecord:
-        """Analyse ``city``. ``metric`` is ``"wet"`` (Rx1day) or ``"dry"`` (CDD, annual totals).
+    ) -> tuple[RainfallRecord, Archive]:
+        """Analyse ``city``: returns the statistics and the daily series they were computed from.
 
-        ``event_year`` (dry only) asks how one year compares; ``event_date`` asks about one day.
+        ``metric`` is ``"wet"`` (Rx1day) or ``"dry"`` (CDD, annual totals). ``event_year`` (dry
+        only) asks how one year compares; ``event_date`` asks about one day. The archive covers
+        the requested period, so a plot of the daily values needs no second request.
         """
         cfg = self._config
         today = self._today()
@@ -195,13 +220,7 @@ class RainfallClient:
             candidates, city=city, region=region, dominance_ratio=cfg.dominance_ratio
         )
 
-        params = build_archive_params(
-            location.latitude,
-            location.longitude,
-            date(start_year, 1, 1),
-            min(date(end_year, 12, 31), today),
-            cfg.model,
-        )
+        params = self._archive_params(location, start_year, end_year)
         archive, archive_cached = self._cached(cfg.archive_url, params, parse_archive)
         provenance = Provenance(
             dataset=(
@@ -220,7 +239,7 @@ class RainfallClient:
             from_cache=geo_cached and archive_cached,
         )
         if metric == "dry":
-            return compute_dry_analysis(
+            record: RainfallRecord = compute_dry_analysis(
                 location,
                 archive.dates,
                 archive.values,
@@ -233,18 +252,20 @@ class RainfallClient:
                 event_year=event_year,
                 other_matches=others,
             )
-        return compute_analysis(
-            location,
-            archive.dates,
-            archive.values,
-            start_year=start_year,
-            end_year=end_year,
-            last_complete_year=last_complete_year,
-            config=cfg,
-            provenance=provenance,
-            event_date=event_date,
-            other_matches=others,
-        )
+        else:
+            record = compute_analysis(
+                location,
+                archive.dates,
+                archive.values,
+                start_year=start_year,
+                end_year=end_year,
+                last_complete_year=last_complete_year,
+                config=cfg,
+                provenance=provenance,
+                event_date=event_date,
+                other_matches=others,
+            )
+        return record, archive
 
     def _validate(
         self,

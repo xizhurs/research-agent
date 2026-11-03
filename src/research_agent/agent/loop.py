@@ -48,6 +48,7 @@ from research_agent.llm import (
 )
 from research_agent.rainfall import (
     AmbiguousLocationError,
+    Archive,
     InvalidRainfallQueryError,
     LocationNotFoundError,
     RainfallError,
@@ -82,7 +83,7 @@ class RainfallAnalyzer(Protocol):
         event_date: date | None = None,
         metric: str = "wet",
         event_year: int | None = None,
-    ) -> RainfallRecord: ...
+    ) -> tuple[RainfallRecord, Archive]: ...
 
 
 class EnsoAnalyzer(Protocol):
@@ -369,7 +370,7 @@ class ResearchAgent:
             )
 
         try:
-            analysis = analyzer.analyze(
+            analysis, _daily = analyzer.analyze(  # the model sees statistics, not daily values
                 args.city,
                 country_code=args.country_code,
                 region=args.region,

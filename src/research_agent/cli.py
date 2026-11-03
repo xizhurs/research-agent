@@ -181,7 +181,7 @@ def rainfall(
         raise typer.Exit(code=1) from None
     try:
         with RainfallClient(cfg.rainfall) as client:
-            analysis = client.analyze(
+            analysis, _daily = client.analyze(
                 city,
                 country_code=country_code,
                 region=region,
@@ -225,6 +225,30 @@ def enso(
     typer.echo(format_enso(replace(analysis, id="R1")))
     origin = "cache" if analysis.from_cache else "network"
     typer.echo(f"\n({origin}; record {analysis.record_first} to {analysis.record_last})")
+
+
+@app.command("ui")
+def ui(
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Interface to listen on. Whoever can reach it can spend tokens."
+    ),
+    port: int = typer.Option(7860, "--port", help="Port to listen on."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Serve the web interface (Ask, Search, Rainfall). Needs the extra: uv sync --extra ui."""
+    cfg = _load_or_exit(config)
+    creds = _credentials_or_exit(env_file)
+    try:
+        from research_agent.ui.app import build_app
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in {"gradio", "plotly"}:
+            raise
+        typer.echo("error: the web interface needs the extra: uv sync --extra ui", err=True)
+        raise typer.Exit(code=1) from exc
+    build_app(cfg, creds).launch(server_name=host, server_port=port)
 
 
 @app.command("check-credentials")

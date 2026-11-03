@@ -72,6 +72,7 @@ Run all commands from the repository root: the default config path is `configs/b
 | `uv run research-agent search "<query>" [--year-from 2022] [-n 5] [--abstracts]` | Search OpenAlex only, with no LLM, and print the results |
 | `uv run research-agent rainfall "<city>" [--country-code CN] [--region Henan] [--event-date 2021-07-20] [--start-year 1950] [--end-year 2025] [--metric dry] [--event-year 2022]` | Rainfall-extremes analysis only, with no LLM. Default (wet): Rx1day per year, baseline, largest events, how extreme one day was. `--metric dry`: dry spells, driest years, how dry a year or dry spell was |
 | `uv run research-agent enso [--phase el_nino\|la_nina\|both] [--start-year 1990] [--end-year 2020] [--year 2010]` | El Niño / La Niña events from NOAA CPC's RONI only, with no LLM: first and last season, length, peak, strength; `--year` also shows that year's seasonal values and overlapping events |
+| `uv run research-agent ui [--host 127.0.0.1] [--port 7860]` | Web interface with Ask, Search and Rainfall tabs; each says whether the LLM is used, and Rainfall plots the daily series against a smoothed day-of-year baseline. Needs `uv sync --extra ui`; local use only, it has no login |
 | `uv run research-agent eval [--only <case-id>]` | Run the evaluation cases in `evals/cases.toml` (costs tokens and searches) |
 | `uv run research-agent check-credentials [--require-openai]` | Check that keys are present and well formed |
 | `uv run research-agent show-config` | Validate `configs/base.toml` and print the resource limits |

@@ -273,7 +273,7 @@ class FakeRainfallClient:
         FakeRainfallClient.calls.append({"city": city, **kwargs})
         if isinstance(FakeRainfallClient.outcome, Exception):
             raise FakeRainfallClient.outcome
-        return FakeRainfallClient.outcome
+        return FakeRainfallClient.outcome, None
 
 
 @pytest.fixture

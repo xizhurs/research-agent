@@ -46,7 +46,7 @@ class FakeRainfall:
         outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        return outcome, None  # the real client also returns the daily series; the agent ignores it
 
 
 class FakeSearch:

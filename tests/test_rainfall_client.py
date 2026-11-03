@@ -78,10 +78,15 @@ def make_client(cfg, server, sleeps=None):
     )
 
 
-def analyze(cfg, server, **kwargs):
+def analyze_with_archive(cfg, server, **kwargs):
     kwargs.setdefault("start_year", 2019)
     kwargs.setdefault("end_year", 2021)
     return make_client(cfg, server).analyze("Zhengzhou", **kwargs)
+
+
+def analyze(cfg, server, **kwargs):
+    """The statistics only; most tests do not look at the daily series."""
+    return analyze_with_archive(cfg, server, **kwargs)[0]
 
 
 # --- happy path and provenance ----------------------------------------------------------------
@@ -104,6 +109,34 @@ def test_analyze_computes_from_recorded_data_with_provenance(cfg):
     assert server.hosts() == ["geocoding-api", "archive-api"]
 
 
+def test_analyze_returns_the_daily_series_the_statistics_came_from(cfg):
+    for metric in ("wet", "dry"):
+        record, archive = analyze_with_archive(cfg, FakeServer(), metric=metric)
+        assert record.metric == metric
+        times, values = ARCHIVE["daily"]["time"], ARCHIVE["daily"]["precipitation_sum"]
+        assert [d.isoformat() for d in archive.dates] == times
+        assert list(archive.values) == values
+        assert (archive.latitude, archive.longitude) == (
+            record.provenance.grid_latitude,
+            record.provenance.grid_longitude,
+        )
+
+
+def test_cached_analysis_returns_the_same_daily_series(cfg):
+    server = FakeServer()
+    _, first = analyze_with_archive(cfg, server)
+    _, second = analyze_with_archive(cfg, server)
+    assert len(server.requests) == 2 and second == first
+
+
+def test_fetch_archive_after_an_analysis_is_a_cache_hit_without_geocoding(cfg):
+    server = FakeServer()
+    client = make_client(cfg, server)
+    record, archive = client.analyze("Zhengzhou", start_year=2019, end_year=2021)
+    assert client.fetch_archive(record.location, 2019, 2021) == archive
+    assert server.hosts() == ["geocoding-api", "archive-api"]  # nothing new was requested
+
+
 def test_requests_pin_the_model_and_carry_no_credentials(cfg):
     server = FakeServer()
     analyze(cfg, server, country_code="CN")
@@ -119,7 +152,7 @@ def test_requests_pin_the_model_and_carry_no_credentials(cfg):
 
 def test_default_period_is_configured_start_to_last_complete_year(cfg):
     server = FakeServer()
-    result = make_client(cfg, server).analyze("Zhengzhou")
+    result, _ = make_client(cfg, server).analyze("Zhengzhou")
     q = server.requests[1].url.params
     assert (q["start_date"], q["end_date"]) == ("1950-01-01", "2025-12-31")
     assert (result.start_year, result.end_year) == (1950, 2025)
@@ -128,7 +161,7 @@ def test_default_period_is_configured_start_to_last_complete_year(cfg):
 
 def test_current_year_is_requested_up_to_today_and_excluded_as_incomplete(cfg):
     server = FakeServer()
-    result = make_client(cfg, server).analyze("Zhengzhou", start_year=2019, end_year=2026)
+    result, _ = make_client(cfg, server).analyze("Zhengzhou", start_year=2019, end_year=2026)
     assert server.requests[1].url.params["end_date"] == "2026-11-02"
     assert (2026, "year not complete") in result.excluded_years
 
@@ -182,7 +215,7 @@ def test_ambiguous_city_stops_before_any_archive_request(cfg):
 
 def test_region_resolves_an_ambiguous_city(cfg):
     server = FakeServer(geocode=[httpx.Response(200, json=SPRINGFIELD)])
-    result = make_client(cfg, server).analyze(
+    result, _ = make_client(cfg, server).analyze(
         "Springfield", region="Illinois", start_year=2019, end_year=2021
     )
     assert result.location.admin1 == "Illinois"
@@ -251,7 +284,9 @@ def test_transient_failure_is_retried_with_backoff(cfg):
     busy = httpx.Response(503, json={"reason": "busy"})
     server = FakeServer(archive=[busy, httpx.Response(200, json=ARCHIVE)])
     sleeps: list[float] = []
-    result = make_client(cfg, server, sleeps).analyze("Zhengzhou", start_year=2019, end_year=2021)
+    result, _ = make_client(cfg, server, sleeps).analyze(
+        "Zhengzhou", start_year=2019, end_year=2021
+    )
     assert result.annual_maxima and sleeps == [cfg.backoff_base_seconds]
 
 
@@ -358,7 +393,7 @@ def test_invalid_metric_or_event_year_is_rejected_before_any_request(cfg, kwargs
 
 
 def test_event_year_in_the_current_year_is_reported_not_ranked(cfg):
-    result = make_client(cfg, FakeServer()).analyze(
+    result, _ = make_client(cfg, FakeServer()).analyze(
         "Zhengzhou", start_year=2019, end_year=2026, metric="dry", event_year=2026
     )
     assert result.year_focus is None
