@@ -21,6 +21,17 @@ def _badge(uses_llm: bool, text: str) -> str:
     return _BADGE.format(color="#b45309" if uses_llm else "#15803d", text=text)
 
 
+def _view_radio() -> gr.Radio:
+    return gr.Radio(
+        [
+            ("Daily values vs smoothed day-of-year mean", "daily"),
+            ("Monthly totals vs 10th-90th percentile band", "monthly"),
+        ],
+        value="daily",
+        label="Plot view (switching redraws the last analysis)",
+    )
+
+
 def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
     """Build the interface. Handlers get the config and credentials; nothing is global."""
     with gr.Blocks(title="GeoAI research agent", analytics_enabled=False) as demo:
@@ -39,13 +50,22 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 ask_button = gr.Button("Ask", variant="primary")
                 ask_status = gr.Markdown()
                 ask_answer = gr.Markdown()
-                ask_plot = gr.Plot(label="Daily rainfall vs baseline")
+                ask_view = _view_radio()
+                ask_plot = gr.Plot(label="Rainfall vs baseline")
                 ask_note = gr.Markdown()
+                ask_series = gr.State()  # (record, daily series) of the plotted analysis
                 ask_button.click(
                     partial(handlers.ask, cfg, creds),
-                    question,
-                    [ask_status, ask_answer, ask_plot, ask_note],
+                    [question, ask_view],
+                    [ask_status, ask_answer, ask_plot, ask_note, ask_series],
                     api_name="ask",
+                )
+
+                def redraw_ask(series, view):
+                    return handlers.replot(cfg, series, None, DEFAULT_WINDOW_DAYS, view)
+
+                ask_view.change(
+                    redraw_ask, [ask_series, ask_view], [ask_plot, ask_note], api_name="ask_plot"
                 )
 
             with gr.Tab("Search"):
@@ -97,6 +117,7 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 with gr.Row():
                     event_date = gr.Textbox(label="Event date (optional)", placeholder="YYYY-MM-DD")
                     event_year = gr.Number(label="Event year (dry metric only)", precision=0)
+                view = _view_radio()
                 with gr.Accordion("Plot options", open=False):
                     plot_year = gr.Number(
                         label="Year to plot (default: event year, else latest valid year)",
@@ -107,13 +128,14 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         61,
                         value=DEFAULT_WINDOW_DAYS,
                         step=2,
-                        label="Baseline smoothing window (days)",
+                        label="Baseline smoothing window (days, daily view only)",
                     )
                 rain_button = gr.Button("Analyse", variant="primary")
                 rain_status = gr.Markdown()
                 rain_text = gr.Textbox(label="Analysis", lines=18, max_lines=40, interactive=False)
-                rain_plot = gr.Plot(label="Daily rainfall vs baseline")
+                rain_plot = gr.Plot(label="Rainfall vs baseline")
                 rain_note = gr.Markdown()
+                rain_series = gr.State()  # (record, daily series) of the last analysis, per session
                 rain_button.click(
                     partial(handlers.rainfall, cfg),
                     [
@@ -127,8 +149,15 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         event_year,
                         plot_year,
                         window,
+                        view,
                     ],
-                    [rain_status, rain_text, rain_plot, rain_note],
+                    [rain_status, rain_text, rain_plot, rain_note, rain_series],
                     api_name="rainfall",
+                )
+                view.change(
+                    partial(handlers.replot, cfg),
+                    [rain_series, plot_year, window, view],
+                    [rain_plot, rain_note],
+                    api_name="rainfall_plot",
                 )
     return demo

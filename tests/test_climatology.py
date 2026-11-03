@@ -4,7 +4,12 @@ from datetime import date, timedelta
 
 import pytest
 
-from research_agent.rainfall.climatology import SLOTS, daily_baseline
+from research_agent.rainfall.climatology import (
+    SLOTS,
+    daily_baseline,
+    monthly_baseline,
+    monthly_totals,
+)
 
 LAST_COMPLETE = 2025
 
@@ -121,3 +126,97 @@ def test_a_slot_with_no_data_is_none_unless_smoothing_reaches_a_neighbour():
     dates, values = series([2001, 2002, 2003], lambda d: 4.0)
     assert baseline(dates, values).at(date(2004, 2, 29)) is None
     assert baseline(dates, values, window_days=3).at(date(2004, 2, 29)) == 4.0
+
+
+# --- monthly totals and the percentile band -----------------------------------------------------
+
+
+def month_band(dates, values, **kwargs):
+    defaults = {
+        "start_year": 2001,
+        "end_year": 2010,
+        "last_complete_year": LAST_COMPLETE,
+        "min_years": 10,
+        "min_year_coverage": 0.9,
+    }
+    return monthly_baseline(dates, values, **{**defaults, **kwargs})
+
+
+def test_monthly_totals_sum_each_month_with_leap_february():
+    dates, values = series([2000, 2001], lambda d: 1.0)
+    leap = monthly_totals(dates, values, year=2000, min_year_coverage=0.9)
+    plain = monthly_totals(dates, values, year=2001, min_year_coverage=0.9)
+    assert leap == (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    assert plain[1] == 28
+
+
+def test_a_month_needs_enough_days_and_a_missing_day_is_never_zero():
+    # February 2002 (28 days): 2 missing days is still 92.9% covered, 4 missing is 85.7%.
+    def value(d):
+        if d.year == 2002 and d.month == 2 and d.day <= 2:
+            return None
+        if d.year == 2003 and d.month == 2 and d.day <= 4:
+            return None
+        return 1.0
+
+    dates, values = series([2002, 2003], value)
+    assert monthly_totals(dates, values, year=2002, min_year_coverage=0.9)[1] == 26.0
+    assert monthly_totals(dates, values, year=2003, min_year_coverage=0.9)[1] is None
+    assert monthly_totals(dates, values, year=2003, min_year_coverage=0.9)[0] == 31.0
+
+
+def test_a_year_outside_the_series_has_no_totals():
+    dates, values = series([2001], lambda d: 1.0)
+    assert monthly_totals(dates, values, year=1999, min_year_coverage=0.9) == (None,) * 12
+
+
+def test_band_is_the_linearly_interpolated_10th_and_90th_percentile_of_monthly_totals():
+    # July totals are 1, 2, ... 10 mm over 2001-2010 (all on 1 July); every other month is 0 mm.
+    dates, values = series(
+        range(2001, 2011), lambda d: float(d.year - 2000) if (d.month, d.day) == (7, 1) else 0.0
+    )
+    band = month_band(dates, values)
+    assert band.years == tuple(range(2001, 2011))
+    assert (band.low_percentile, band.high_percentile) == (10, 90)
+    assert band.low_mm[6] == pytest.approx(1.9) and band.high_mm[6] == pytest.approx(9.1)
+    assert band.low_mm[0] == 0.0 and band.high_mm[0] == 0.0
+
+
+def test_percentiles_can_be_changed_and_must_be_ordered():
+    dates, values = series(
+        range(2001, 2011), lambda d: float(d.year - 2000) if (d.month, d.day) == (7, 1) else 0.0
+    )
+    band = month_band(dates, values, low_percentile=25, high_percentile=75)
+    assert band.low_mm[6] == pytest.approx(3.25) and band.high_mm[6] == pytest.approx(7.75)
+    for low, high in ((0, 90), (50, 50), (60, 40), (10, 100)):
+        with pytest.raises(ValueError, match="percentiles"):
+            month_band(dates, values, low_percentile=low, high_percentile=high)
+
+
+def test_only_valid_baseline_years_inside_the_period_count():
+    # 2011 lies outside the period with a huge July; it must not move the band.
+    def value(d):
+        if (d.month, d.day) != (7, 1):
+            return 0.0
+        return 1000.0 if d.year == 2011 else float(d.year - 2000)
+
+    dates, values = series(range(2001, 2012), value)
+    assert month_band(dates, values).high_mm[6] == pytest.approx(9.1)
+
+
+def test_too_few_valid_years_gives_no_monthly_band():
+    dates, values = series(range(2001, 2010), lambda d: 1.0)  # 9 years, 10 are asked for
+    assert month_band(dates, values) is None
+    assert month_band(dates, values, min_years=9) is not None
+
+
+def test_a_month_with_too_few_usable_totals_has_no_band_but_other_months_do():
+    # July is missing entirely in 2001-2005: the years stay valid (92% of days) but July has
+    # only 5 totals, fewer than the 10 required.
+    dates, values = series(
+        range(2001, 2011), lambda d: None if d.year <= 2005 and d.month == 7 else 2.0
+    )
+    band = month_band(dates, values)
+    assert band is not None
+    assert band.low_mm[6] is None and band.high_mm[6] is None
+    assert band.low_mm[5] is not None and band.high_mm[5] is not None

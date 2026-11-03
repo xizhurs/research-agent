@@ -22,7 +22,13 @@ from research_agent.enso import EnsoAnalysis
 from research_agent.llm import LLMError
 from research_agent.rainfall import Archive, RainfallClient, RainfallError, RainfallRecord
 from research_agent.retrieval import OpenAlexClient, RetrievalError, Work
-from research_agent.ui.plots import DEFAULT_WINDOW_DAYS, PlotError, daily_figure, default_plot_year
+from research_agent.ui.plots import (
+    DEFAULT_WINDOW_DAYS,
+    PlotError,
+    daily_figure,
+    default_plot_year,
+    monthly_figure,
+)
 
 if TYPE_CHECKING:
     from plotly.graph_objects import Figure
@@ -115,24 +121,51 @@ def search(
 def _plot(
     cfg: Config,
     record: RainfallRecord,
-    client: RainfallClient,
+    client: RainfallClient | None,
     year: int | None,
     window_days: int,
     archive: Archive | None = None,
+    view: str = "daily",
 ) -> tuple[Figure | None, str]:
-    """The daily plot for ``record``, or ``(None, why not)``. ``archive`` skips the lookup."""
+    """The plot for ``record``, or ``(None, why not)``.
+
+    ``view`` is ``"daily"`` or ``"monthly"``. ``archive`` is the daily series; without it the
+    client fetches it (from the cache, normally).
+    """
     try:
         if archive is None:
+            if client is None:
+                raise ValueError("no daily series to plot")
             archive = client.fetch_archive(record.location, record.start_year, record.end_year)
-        return daily_figure(
-            record,
-            archive,
-            year=year if year is not None else default_plot_year(record),
-            window_days=window_days,
-            config=cfg.rainfall,
-        )
+        year = year if year is not None else default_plot_year(record)
+        if view == "daily":
+            return daily_figure(
+                record, archive, year=year, window_days=window_days, config=cfg.rainfall
+            )
+        if view == "monthly":
+            return monthly_figure(record, archive, year=year, config=cfg.rainfall)
+        raise ValueError(f"unknown plot view {view!r}")
     except (PlotError, RainfallError, ValueError) as exc:
         return None, f"No plot: {md(exc)}"
+
+
+def replot(
+    cfg: Config,
+    series: tuple[RainfallRecord, Archive] | None,
+    plot_year: float | None,
+    window_days: float,
+    view: str,
+) -> tuple[Figure | None, str]:
+    """Redraw the Rainfall plot from the last analysis (no request) when the view changes."""
+    if series is None:
+        return None, ""
+    try:
+        year = _whole(plot_year, "plot year")
+        window = _whole(window_days, "smoothing window") or DEFAULT_WINDOW_DAYS
+    except ValueError as exc:
+        return None, f"No plot: {md(exc)}"
+    record, archive = series
+    return _plot(cfg, record, None, year, window, archive, view)
 
 
 def rainfall(
@@ -147,12 +180,17 @@ def rainfall(
     event_year: float | None,
     plot_year: float | None,
     window_days: float,
-) -> tuple[str, str, Figure | None, str]:
-    """ERA5 rainfall analysis. Returns ``(status, statistics, figure, plot note)``."""
+    view: str = "daily",
+) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
+    """ERA5 rainfall analysis.
+
+    Returns ``(status, statistics, figure, plot note, series)``; ``series`` is the record and
+    daily data for ``replot`` (None when the analysis failed).
+    """
     try:
         day = date.fromisoformat(event_date.strip()) if event_date and event_date.strip() else None
     except ValueError:
-        return "**Error:** event date must be formatted YYYY-MM-DD", "", None, ""
+        return "**Error:** event date must be formatted YYYY-MM-DD", "", None, "", None
     try:
         years = (
             _whole(start_year, "start year"),
@@ -172,9 +210,9 @@ def rainfall(
                 metric=metric,
                 event_year=years[2],
             )
-            figure, note = _plot(cfg, record, client, years[3], window, archive)
+            figure, note = _plot(cfg, record, client, years[3], window, archive, view)
     except (RainfallError, ValueError) as exc:
-        return _error(exc), "", None, ""
+        return _error(exc), "", None, "", None
 
     prov = record.provenance
     origin = "cache" if prov.from_cache else "network"
@@ -186,7 +224,7 @@ def rainfall(
         f"{format_rainfall(replace(record, id='R1'))}\n\n"
         f"Source: {prov.dataset}. {prov.license}.\nRequest: {prov.request_url}"
     )
-    return status, text, figure, note
+    return status, text, figure, note, (record, archive)
 
 
 # --- Ask ----------------------------------------------------------------------------------------
@@ -246,26 +284,39 @@ def _ask_status(cfg: Config, stats) -> str:
     return " · ".join(parts)
 
 
-def ask(cfg: Config, creds: Credentials, question: str) -> tuple[str, str, Figure | None, str]:
-    """Run the agent. Returns ``(status, answer, figure, plot note)``.
+def ask(
+    cfg: Config, creds: Credentials, question: str, view: str = "daily"
+) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
+    """Run the agent. Returns ``(status, answer, figure, plot note, series)``.
 
-    The figure plots the first rainfall analysis the answer cites, from the same cached daily
-    series; the language model never sees or draws it.
+    The figure plots the first rainfall analysis the answer cites, in ``view`` (``"daily"`` or
+    ``"monthly"``), from the same cached daily series; the language model never sees or draws it.
+    ``series`` is that analysis and its daily data, for ``replot`` (None if nothing was plotted).
     """
     if not question.strip():
-        return "**Error:** the question must not be empty", "", None, ""
+        return "**Error:** the question must not be empty", "", None, "", None
     try:
         creds.require_openai_key()
         result = _run_agent(cfg, creds, question)
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
-        return f"**LLM used: no** (stopped before an answer) · {_error(exc)}", "", None, ""
+        return f"**LLM used: no** (stopped before an answer) · {_error(exc)}", "", None, "", None
 
+    body = _format_answer(result)
     records = [a for a in result.answer.data_references if not isinstance(a, EnsoAnalysis)]
-    figure, note = None, ""
+    figure, note, series = None, "", None
     if records:
-        with RainfallClient(cfg.rainfall) as client:
-            figure, note = _plot(cfg, records[0], client, None, DEFAULT_WINDOW_DAYS)
-        if figure is not None and len(records) > 1:
-            others = len(records) - 1
-            note = f"Plotted [{records[0].id}]; {others} other analysis(es) not plotted. {note}"
-    return _ask_status(cfg, result.stats), _format_answer(result), figure, note
+        record = records[0]
+        try:
+            with RainfallClient(cfg.rainfall) as client:
+                archive = client.fetch_archive(record.location, record.start_year, record.end_year)
+        except RainfallError as exc:
+            note = f"No plot: {md(exc)}"
+        else:
+            series = (record, archive)
+            figure, note = _plot(cfg, record, None, None, DEFAULT_WINDOW_DAYS, archive, view)
+            if len(records) > 1:  # said here, not in the note, which a redraw replaces
+                body += (
+                    f"\n\n*Only {record.id} is plotted; "
+                    f"{len(records) - 1} other analysis(es) not plotted.*"
+                )
+    return _ask_status(cfg, result.stats), body, figure, note, series

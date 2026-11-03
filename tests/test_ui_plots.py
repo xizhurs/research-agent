@@ -8,7 +8,12 @@ import pytest
 pytest.importorskip("plotly")
 
 from research_agent.rainfall import Archive  # noqa: E402
-from research_agent.ui.plots import PlotError, daily_figure, default_plot_year  # noqa: E402
+from research_agent.ui.plots import (  # noqa: E402
+    PlotError,
+    daily_figure,
+    default_plot_year,
+    monthly_figure,
+)
 
 TODAY = lambda: date(2026, 11, 2)  # noqa: E731
 
@@ -90,3 +95,54 @@ def test_default_year_is_the_event_year_then_the_compared_year_then_the_latest(
     assert default_plot_year(make_dry_analysis(event_year=2001)) == 2001
     assert default_plot_year(make_dry_analysis(event_date=date(2003, 3, 3))) == 2003
     assert default_plot_year(make_dry_analysis()) == 2004
+
+
+# --- monthly view -------------------------------------------------------------------------------
+
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def monthly(record, archive, cfg, year=2002):
+    return monthly_figure(record, archive, year=year, config=cfg, today=TODAY)
+
+
+def test_monthly_bars_are_the_years_totals_and_the_band_is_the_baseline_percentiles(
+    make_analysis, archive, cfg
+):
+    # July is 30 mm of 1 mm days plus the 1 July spike: totals 40, 50, 60, 70, 80 in 2000-04.
+    fig, note = monthly(make_analysis(), archive, cfg, year=2002)
+    band, bars = fig.data
+    assert list(bars.x) == MONTHS
+    assert bars.y[0] == 31.0 and bars.y[1] == 28.0 and bars.y[6] == 60.0
+    july = list(band.x).index("Jul")
+    assert band.base[july] == pytest.approx(44.0)  # 10th percentile of 40..80
+    assert band.base[july] + band.y[july] == pytest.approx(76.0)  # 90th percentile
+    assert fig.layout.barmode == "overlay"
+    assert fig.layout.title.text == "Zhengzhou, Henan, China: monthly precipitation in 2002"
+    assert "percentile 10 to 90" in note and "5 valid years of 2000-2004" in note
+    assert "20% of years fall outside" in note
+
+
+def test_no_monthly_band_when_the_series_has_too_few_baseline_years(make_analysis, archive, cfg):
+    cfg = replace(cfg, baseline_start_year=2010, baseline_end_year=2020)
+    fig, note = monthly(make_analysis(), archive, cfg)
+    assert len(fig.data) == 1  # the year's bars only
+    assert "No baseline band" in note and "2010-2020" in note
+
+
+def test_months_without_enough_data_are_left_blank_and_the_note_says_so(
+    make_analysis, make_series, cfg
+):
+    last_quarter = [d for d in make_series(2004, 2004)[0] if d.month >= 10]
+    dates, values = make_series(2000, 2004, missing=last_quarter)
+    archive = Archive(tuple(dates), tuple(values), 34.75, 113.75, 110.0, "Asia/Shanghai")
+    fig, note = monthly(make_analysis(), archive, cfg, year=2004)
+    totals = fig.data[-1].y
+    assert totals[8] == 30.0 and tuple(totals[9:]) == (None, None, None)
+    assert "left blank" in note
+    assert "4 valid years of 2000-2004" in note  # 2004 is too incomplete to be a baseline year
+
+
+def test_a_year_with_no_usable_month_is_a_plot_error(make_analysis, archive, cfg):
+    with pytest.raises(PlotError, match="no month with enough data in 2010"):
+        monthly(make_analysis(), archive, cfg, year=2010)
