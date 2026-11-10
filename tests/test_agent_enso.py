@@ -52,7 +52,7 @@ class FakeRainfall:
         self.analysis = analysis
 
     def analyze(self, city, **kwargs):
-        return self.analysis
+        return self.analysis, None
 
 
 class FakeSearch:

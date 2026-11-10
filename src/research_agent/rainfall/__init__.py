@@ -1,6 +1,6 @@
 """Deterministic extreme-rainfall analysis (no LLM)."""
 
-from research_agent.rainfall.client import RainfallClient
+from research_agent.rainfall.client import Archive, RainfallClient
 from research_agent.rainfall.errors import (
     AmbiguousLocationError,
     InsufficientDataError,
@@ -30,6 +30,7 @@ from research_agent.rainfall.models import (
 __all__ = [
     "AmbiguousLocationError",
     "AnnualDry",
+    "Archive",
     "AnnualMax",
     "Baseline",
     "DryAnalysis",

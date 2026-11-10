@@ -38,11 +38,14 @@ def test_real_rainfall_analysis_for_one_city(tmp_path):
     base = load_config(root / "configs" / "base.toml")
     cfg = replace(base.rainfall, cache_dir=tmp_path)
     with RainfallClient(cfg) as client:
-        first = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
-        second = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
-        dry = client.analyze(
+        first, daily = client.analyze(
+            "Zhengzhou", country_code="CN", start_year=1991, end_year=2020
+        )
+        second, _ = client.analyze("Zhengzhou", country_code="CN", start_year=1991, end_year=2020)
+        dry, _ = client.analyze(
             "Zhengzhou", country_code="CN", start_year=1991, end_year=2020, metric="dry"
         )
+    assert daily.dates[0].year == 1991 and daily.dates[-1].year == 2020
     assert first.provenance.from_cache is False and second.provenance.from_cache is True
     assert first.location.country_code == "CN" and first.location.admin1 == "Henan"
     assert len(first.annual_maxima) == 30 and first.baseline.years == 30
