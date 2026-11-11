@@ -66,7 +66,13 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     new_button = gr.Button("New conversation")
                 ask_status = gr.Markdown()
                 ask_answer = gr.Markdown()
-                ask_view = _view_radio()
+                with gr.Row():
+                    ask_view = _view_radio()
+                    ask_year = gr.Number(
+                        label="Year to plot (press Enter; redraws from the stored data, "
+                        "no new question)",
+                        precision=0,
+                    )
                 ask_plot = gr.Plot(label="Rainfall vs baseline")
                 ask_note = gr.Markdown()
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
@@ -77,20 +83,23 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     [question, ask_view, ask_session],
                     [*ask_outputs, ask_session, ask_transcript],
                     api_name="ask",
-                )
+                ).then(handlers.plotted_year, ask_series, ask_year)  # show the year plotted
                 new_button.click(
-                    lambda: ("", "", None, "", None, None, ""),
+                    lambda: ("", "", None, "", None, None, "", None),
                     None,
-                    [*ask_outputs, ask_session, ask_transcript],
+                    [*ask_outputs, ask_session, ask_transcript, ask_year],
                     api_name="new_conversation",
                 )
 
-                def redraw_ask(series, view):
-                    return handlers.replot(cfg, series, None, DEFAULT_WINDOW_DAYS, view)
+                def redraw_ask(series, year, view):
+                    return handlers.replot(cfg, series, year, DEFAULT_WINDOW_DAYS, view)
 
+                redraw_inputs = [ask_series, ask_year, ask_view]
                 ask_view.change(
-                    redraw_ask, [ask_series, ask_view], [ask_plot, ask_note], api_name="ask_plot"
+                    redraw_ask, redraw_inputs, [ask_plot, ask_note], api_name="ask_plot"
                 )
+                ask_year.submit(redraw_ask, redraw_inputs, [ask_plot, ask_note])
+                ask_year.blur(redraw_ask, redraw_inputs, [ask_plot, ask_note])
 
             with gr.Tab("Search"):
                 gr.HTML(_badge(False, "No LLM: deterministic OpenAlex search"))

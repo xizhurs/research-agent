@@ -98,3 +98,5 @@ def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
     assert [("Uses the LLM" in b) for b in badges] == [True, False, False]
     views = [b for b in demo.blocks.values() if isinstance(b, gr.Radio) and b.value == "daily"]
     assert len(views) == 2  # a Daily/Monthly toggle on the Ask tab and on the Rainfall tab
+    years = [b.label for b in demo.blocks.values() if isinstance(b, gr.Number)]
+    assert any(label.startswith("Year to plot (press Enter") for label in years)  # Ask tab
