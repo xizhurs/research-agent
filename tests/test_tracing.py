@@ -244,3 +244,26 @@ def test_cli_exits_on_incomplete_langfuse_settings(spans, tmp_path):
     assert result.exit_code == 1
     assert "LANGFUSE_PUBLIC_KEY" in result.output
     assert SK not in result.output
+
+
+def test_conversation_turns_share_a_langfuse_session(spans, base_config):
+    from research_agent.agent import AgentResult, RunStats
+    from research_agent.agent.answer import Answer, Claim
+    from research_agent.conversation import ConversationService, InMemorySessionStore
+
+    def run(question, context):
+        answer = Answer((Claim("ok", "interpretation", ()),), (), ())
+        return AgentResult(answer, RunStats(1, 0, 10, 5, 0))
+
+    service = ConversationService(run, InMemorySessionStore(10, 3600), base_config.conversation)
+    first = service.ask(None, "first question")
+    service.ask(first.session_id, "follow-up")
+
+    turns = [s for s in spans.get_finished_spans() if s.name == "chat.turn"]
+    assert [t.attributes["langfuse.session.id"] for t in turns] == [first.session_id] * 2
+    assert [t.attributes["research_agent.turn"] for t in turns] == [1, 2]
+    assert turns[0].attributes["research_agent.context.tokens"] == 0
+    assert turns[1].attributes["research_agent.context.tokens"] > 0
+    assert turns[1].attributes["research_agent.relation"] == "update"
+    assert turns[1].attributes["research_agent.relation_source"] == "default"
+    assert turns[1].attributes["langfuse.observation.input"] == "follow-up"

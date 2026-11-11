@@ -22,6 +22,8 @@ DataRecord = RainfallRecord | EnsoAnalysis
 
 ClaimKind = Literal["evidence", "interpretation"]
 _KINDS: tuple[ClaimKind, ...] = ("evidence", "interpretation")
+# How a conversation turn relates to the earlier ones (asked for only in conversation mode).
+RELATIONS = ("continue", "update", "compare", "new_topic")
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*(.*?)\s*```$", re.DOTALL)
 
 
@@ -47,6 +49,8 @@ class Answer:
     structured: bool = True
     # Numerical evidence: cited rainfall analyses, in order of first citation.
     data_references: tuple[DataRecord, ...] = ()
+    # The model's label for a conversation turn (one of RELATIONS), or None if absent/invalid.
+    relation: str | None = None
 
 
 def _load_json(text: str) -> Any:
@@ -165,12 +169,14 @@ def parse_answer(
     if not isinstance(raw_limits, list) or not all(isinstance(x, str) for x in raw_limits):
         raise AnswerFormatError("'limitations' is not a list of strings")
     claims, rejected, citation_notes = validate_citations(parsed, evidence, analyses)
+    relation = data.get("relation")
     return Answer(
         claims=claims,
         references=_references(claims, evidence),
         data_references=_data_references(claims, analyses or {}),
         limitations=_dedupe([*(x.strip() for x in raw_limits), *notes, *citation_notes]),
         rejected_citations=rejected,
+        relation=relation if relation in RELATIONS else None,
     )
 
 

@@ -42,6 +42,7 @@ def evidence_limitations(
     today: date,
     analyses: Sequence[DataRecord] = (),
     rainfall_calls: int = 0,
+    reused: int = 0,
 ) -> list[str]:
     """Limitations implied by the searches, the works seen and the rainfall analyses shown.
 
@@ -49,7 +50,12 @@ def evidence_limitations(
     answer is not described as OpenAlex evidence.
     """
     notes: list[str] = []
-    if searches or not rainfall_calls:
+    if reused:
+        notes.append(
+            f"{reused} item(s) were reused from earlier turns of this conversation (shown again, "
+            "not retrieved anew)."
+        )
+    if searches or evidence or not (rainfall_calls or analyses):
         notes.extend(_literature_limitations(searches, evidence, limits, reporting, today))
     if rainfall_calls and not analyses:
         notes.append(
@@ -71,7 +77,7 @@ def _literature_limitations(
     notes = [ALWAYS]
     works = list(evidence.values())
 
-    if not searches:
+    if not searches and not works:
         notes.append(
             "No literature search was run, so this answer is not backed by retrieved evidence."
         )
@@ -88,8 +94,8 @@ def _literature_limitations(
             f"Only {len(works)} distinct work(s) were retrieved; the evidence base is thin."
         )
 
-    widest = max(searches, key=lambda s: s.total_count - s.returned)
-    if widest.total_count > widest.returned:
+    widest = max(searches, key=lambda s: s.total_count - s.returned, default=None)
+    if widest and widest.total_count > widest.returned:
         notes.append(
             "Only the top-ranked results of each search were read (for example "
             f'{widest.returned} of {widest.total_count:,} matches for "{widest.query}"); '
@@ -97,7 +103,7 @@ def _literature_limitations(
         )
 
     cutoffs = [s.year_from for s in searches]
-    if all(year is not None for year in cutoffs):
+    if cutoffs and all(year is not None for year in cutoffs):
         notes.append(f"All searches excluded works published before {min(cutoffs)}.")
 
     missing = sum(1 for w in works if w.abstract is None)

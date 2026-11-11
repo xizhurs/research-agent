@@ -13,6 +13,7 @@ from research_agent.rainfall import (
 )
 from research_agent.rainfall.geocoding import (
     build_geocode_params,
+    distance_km,
     parse_candidates,
     resolve_location,
 )
@@ -24,8 +25,10 @@ def load(name):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
-def resolve(candidates, city="X", region=None, ratio=10.0):
-    return resolve_location(candidates, city=city, region=region, dominance_ratio=ratio)
+def resolve(candidates, city="X", region=None, ratio=10.0, same_place_km=25.0):
+    return resolve_location(
+        candidates, city=city, region=region, dominance_ratio=ratio, same_place_km=same_place_km
+    )
 
 
 def test_params_include_country_code_only_when_given():
@@ -104,14 +107,58 @@ def test_single_candidate_is_accepted_even_without_population(make_location):
 
 def test_unknown_population_cannot_win_a_dominance_contest(make_location):
     a = make_location(id=1, population=None)
-    b = make_location(id=2, population=None)
+    b = make_location(id=2, population=None, latitude=40.0)  # far apart: not merged
     with pytest.raises(AmbiguousLocationError):
         resolve([a, b])
 
 
 def test_dominance_needs_the_configured_ratio(make_location):
     big = make_location(id=1, population=900_000)
-    small = make_location(id=2, population=100_000)
+    small = make_location(id=2, population=100_000, latitude=40.0)  # far apart: not merged
     with pytest.raises(AmbiguousLocationError):
         resolve([big, small], ratio=10.0)  # only 9x
     assert resolve([big, small], ratio=9.0)[0].id == 1
+
+
+# --- nearby candidates (a city's districts) are the same place ------------------------------------
+
+
+def test_distance_km_matches_a_known_pair(make_location):
+    amsterdam = make_location(latitude=52.374, longitude=4.890)
+    rotterdam = make_location(latitude=51.923, longitude=4.479)
+    assert distance_km(amsterdam, rotterdam) == pytest.approx(57.8, abs=1.0)
+    assert distance_km(amsterdam, amsterdam) == 0
+
+
+def test_amsterdam_districts_merge_into_the_city():
+    # Recorded response: Amsterdam (741,636) plus 6 districts within ~10 km (New West 151,677,
+    # only 4.9x smaller), a heliport and Amsterdamscheveld (Drenthe, 190 people, ~150 km away).
+    found = parse_candidates(load("openmeteo_geocode_amsterdam.json"))
+    chosen, others = resolve(found, city="Amsterdam")
+    assert chosen.id == 2759794 and chosen.admin1 == "North Holland"
+    assert len(others) == len(found) - 1 == 9
+    with pytest.raises(AmbiguousLocationError):  # the old rule (no merging) could not decide
+        resolve(found, city="Amsterdam", same_place_km=0.0)
+
+
+def test_a_nearby_place_without_population_is_merged(make_location):
+    city = make_location(id=1, population=500_000)
+    heliport = make_location(id=2, population=None, latitude=city.latitude + 0.05)
+    assert resolve([heliport, city]) == (city, (heliport,))
+
+
+def test_far_apart_places_of_similar_size_stay_ambiguous(make_location):
+    a = make_location(id=1, population=170_000)
+    b = make_location(id=2, population=114_000, latitude=a.latitude + 1.0)  # ~111 km
+    with pytest.raises(AmbiguousLocationError) as err:
+        resolve([a, b])
+    assert len(err.value.candidates) == 2
+
+
+def test_merged_districts_are_not_listed_as_ambiguous_options(make_location):
+    a = make_location(id=1, name="A", population=300_000)
+    a_district = make_location(id=2, name="A-North", population=200_000, latitude=a.latitude + 0.05)
+    b = make_location(id=3, name="B", population=250_000, latitude=a.latitude + 2.0)
+    with pytest.raises(AmbiguousLocationError) as err:
+        resolve([a, a_district, b])
+    assert [c.id for c in err.value.candidates] == [1, 3]

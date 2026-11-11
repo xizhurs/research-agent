@@ -235,7 +235,11 @@ def compute_dry_analysis(
             "make the totals of those years slightly low."
         )
     if other_matches:
-        caveats.append(other_matches_caveat(location, other_matches, config.dominance_ratio))
+        caveats.append(
+            other_matches_caveat(
+                location, other_matches, config.dominance_ratio, config.same_place_km
+            )
+        )
 
     return DryAnalysis(
         id="",

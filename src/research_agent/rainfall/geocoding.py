@@ -1,13 +1,16 @@
 """City geocoding with Open-Meteo: request building, parsing and disambiguation. Pure.
 
-Disambiguation never guesses silently: one candidate, or one that clearly dominates by population
-(``dominance_ratio``), is accepted and the alternatives are reported; otherwise
-``AmbiguousLocationError`` lists the candidates and no analysis runs.
+Disambiguation never guesses silently. Candidates within ``same_place_km`` of a larger one (for
+example a city's districts, which the geocoder lists separately) are merged into it first. Then
+one candidate, or one that clearly dominates by population (``dominance_ratio``), is accepted and
+the alternatives are reported; otherwise ``AmbiguousLocationError`` lists the candidates and no
+analysis runs.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -21,6 +24,7 @@ from research_agent.rainfall.models import Location
 log = logging.getLogger(__name__)
 
 MAX_LISTED = 10
+EARTH_RADIUS_KM = 6371.0
 
 
 def build_geocode_params(city: str, country_code: str | None, count: int) -> dict[str, str]:
@@ -91,15 +95,26 @@ def _describe(loc: Location) -> str:
     return f"{loc.label} ({pop})"
 
 
+def distance_km(a: Location, b: Location) -> float:
+    """Great-circle (haversine) distance between two places."""
+    lat1, lon1, lat2, lon2 = map(math.radians, (a.latitude, a.longitude, b.latitude, b.longitude))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(
+        (lon2 - lon1) / 2
+    ) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(h))
+
+
 def resolve_location(
     candidates: Sequence[Location],
     *,
     city: str,
     region: str | None,
     dominance_ratio: float,
+    same_place_km: float,
 ) -> tuple[Location, tuple[Location, ...]]:
     """Pick the place to analyse. Returns ``(chosen, other_matches)``.
 
+    ``other_matches`` holds every other candidate, including the ones merged as nearby.
     Raises LocationNotFoundError (no match) or AmbiguousLocationError (no clear winner).
     """
     pool = list(candidates)
@@ -109,11 +124,18 @@ def resolve_location(
         where = f" in region '{region}'" if region else ""
         raise LocationNotFoundError(f"no place named '{city}'{where} was found")
     pool.sort(key=lambda c: c.population or 0, reverse=True)  # stable: ties keep API order
-    if len(pool) == 1:
-        return pool[0], ()
-    top, second = pool[0], pool[1]
+    kept: list[Location] = []
+    merged: list[Location] = []
+    for candidate in pool:  # larger places first, so a district merges into its city
+        near = any(distance_km(candidate, k) <= same_place_km for k in kept)
+        (merged if near else kept).append(candidate)
+    others = tuple(c for c in pool if c is not kept[0])
+    if len(kept) == 1:
+        return kept[0], others
+    top, second = kept[0], kept[1]
     if top.population and top.population >= dominance_ratio * (second.population or 0):
-        return top, tuple(pool[1:])
+        return top, others
+    pool = kept
     listed = "; ".join(f"{i}) {_describe(c)}" for i, c in enumerate(pool[:MAX_LISTED], start=1))
     raise AmbiguousLocationError(
         f"'{city}' matches {len(pool)} places and none clearly dominates: {listed}. Do not guess: "

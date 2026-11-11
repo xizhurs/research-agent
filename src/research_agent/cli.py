@@ -15,8 +15,10 @@ from typing import TextIO
 import typer
 
 from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
+from research_agent.agent.events import TurnContext
 from research_agent.agent.tools import format_enso, format_rainfall
 from research_agent.config import Config, ConfigError, load_config
+from research_agent.conversation import ConversationService, InMemorySessionStore
 from research_agent.credentials import (
     DEFAULT_ENV_FILE,
     ENV_FILE_ENV_VAR,
@@ -29,10 +31,10 @@ from research_agent.credentials import (
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import EvalError, load_cases, run_case, summarize
-from research_agent.llm import LLMError, OpenAIClient
+from research_agent.llm import LLMAuthError, LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
-from research_agent.retrieval import OpenAlexClient, RetrievalError
+from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
 from research_agent.tracing import (
     TracingError,
     answer_json,
@@ -325,10 +327,12 @@ def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
         )
 
 
-def _run_agent(cfg: Config, creds: Credentials, question: str) -> AgentResult:
+def _run_agent(
+    cfg: Config, creds: Credentials, question: str, context: TurnContext | None = None
+) -> AgentResult:
     """Answer one question with the real clients. Patched out in CLI tests."""
     with _open_agent(cfg, creds) as agent:
-        return agent.run(question)
+        return agent.run(question, context) if context is not None else agent.run(question)
 
 
 @app.command("ask")
@@ -357,7 +361,11 @@ def ask(
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    _print_result(result)
 
+
+def _print_result(result: AgentResult) -> None:
+    """The answer on stdout; the tool trace and usage footer on stderr."""
     answer = result.answer
     typer.echo("Answer")
     for claim in answer.claims:
@@ -421,6 +429,60 @@ def format_trace(trace: tuple[tuple[str, ...], ...]) -> str:
 
     turns = [", ".join(shorten(n) for n in names) or "answer" for names in trace]
     return " | ".join(f"{i}: {turn}" for i, turn in enumerate(turns, start=1))
+
+
+CHAT_EXIT = {"", "exit", "quit"}
+
+
+@app.command("chat")
+def chat(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Ask questions with follow-ups ("what about Rotterdam?"). Empty line or 'exit' ends it.
+
+    Each turn has the same budgets and citation checks as `ask`; earlier turns are sent as a
+    capped summary (see [conversation] in the config) and kept in memory only.
+    """
+    cfg = _load_or_exit(config)
+    creds = _credentials_or_exit(env_file)
+    _tracing_or_exit(env_file)
+    try:
+        creds.require_openai_key()
+    except CredentialError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    conv = cfg.conversation
+    store = InMemorySessionStore(conv.max_sessions, conv.session_ttl_minutes * 60)
+    session_id: str | None = None
+    typer.echo("Ask a question; follow-ups keep the context. Empty line or 'exit' ends.", err=True)
+    with _open_agent(cfg, creds) as agent:
+        service = ConversationService(lambda q, ctx: agent.run(q, ctx), store, conv)
+        while True:
+            try:
+                question = input("you> ")
+            except EOFError:
+                break
+            if question.strip().lower() in CHAT_EXIT:
+                break
+            try:
+                outcome = service.ask(session_id, question)
+            except (LLMAuthError, AuthError) as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            except (LLMError, RetrievalError, InvalidQuestionError) as exc:
+                typer.echo(f"error: {exc} (the conversation continues)", err=True)
+                continue
+            session_id = outcome.session_id
+            _print_result(outcome.result)
+            turn = outcome.turn
+            sent = outcome.context.tokens if outcome.context else 0
+            typer.echo(
+                f"turn {turn.number} ({turn.relation}): ~{sent} context tokens from earlier turns",
+                err=True,
+            )
 
 
 DEFAULT_CASES = Path("evals/cases.toml")

@@ -7,9 +7,36 @@ from research_agent.config import Limits
 MAX_CLAIMS = 6
 
 
-def build_instructions(limits: Limits, *, rainfall: bool = False, enso: bool = False) -> str:
+CONVERSATION_RULES = """
+This question is part of a conversation. Before the current question you get:
+- earlier questions and your earlier answers. Earlier answers are model-written and are NOT \
+evidence: never cite them or repeat their numbers as facts.
+- "Conversation state": places, periods, metrics and sources from earlier tool calls (written by \
+code). Keep these settings for a follow-up unless the user changes them; for example "what about \
+Rotterdam?" after a rainfall analysis means the same analysis and period for Rotterdam.
+- "Stored evidence": works (W...) and analyses (R...) retrieved in earlier turns, by ID only. \
+To use one, show it again with recall_evidence; to compare with an earlier analysis, recall it \
+instead of running it again.
+- "Pending clarification": a place that was ambiguous last time and its candidates. If the \
+current question says which one is meant, call the tool again with its region or country_code.
+Cite only IDs shown in THIS turn by a tool result or by recall_evidence; other citations are \
+removed. In the JSON reply, also give "relation": "continue" (same task, more detail or a \
+clarification), "update" (same task with a changed setting, such as another place or period), \
+"compare" (comparing with earlier results), or "new_topic" (unrelated to the earlier turns).
+"""
+
+
+def build_instructions(
+    limits: Limits, *, rainfall: bool = False, enso: bool = False, conversation: bool = False
+) -> str:
     """The literature-only prompt, the two-tool prompt (rainfall tool offered), or, with ENSO
-    too, the same prompt extended for the ENSO tool. Without ``enso`` the text is unchanged."""
+    too, the same prompt extended for the ENSO tool. Without ``enso`` the text is unchanged.
+    ``conversation`` appends the follow-up rules; without it the text is unchanged too."""
+    text = _base_instructions(limits, rainfall=rainfall, enso=enso)
+    return text + CONVERSATION_RULES if conversation else text
+
+
+def _base_instructions(limits: Limits, *, rainfall: bool, enso: bool) -> str:
     if enso and not rainfall:
         raise ValueError("the ENSO tool is offered together with the rainfall tool")
     if rainfall:
