@@ -276,7 +276,9 @@ def test_case_file_rejects_an_unknown_tool_name(tmp_path, key):
 def test_shipped_cases_cover_the_enso_tool_choices():
     root = Path(__file__).resolve().parents[1]
     cases = {c.id: c for c in load_cases(root / "evals" / "cases.toml")}
-    assert len(cases) == 26
+    assert len(cases) == 30  # 26 + 4 time-scale cases (2026-11-11)
+    scales = {c.id: c.expect_metric for c in cases.values() if c.id.startswith("scale-")}
+    assert sorted(scales.values()) == ["monthly", "wet", "yearly", "yearly"]
     for case_id in (
         "enso-events-since-1990",
         "enso-year-2010",

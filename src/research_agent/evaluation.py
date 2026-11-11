@@ -88,8 +88,10 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
     if not isinstance(question, str) or not question.strip():
         raise EvalError(f"case {case_id!r}: 'question' is required")
     expect_metric = raw.get("expect_metric")
-    if expect_metric is not None and expect_metric not in ("wet", "dry"):
-        raise EvalError(f"case {case_id!r}: expect_metric must be 'wet' or 'dry'")
+    if expect_metric is not None and expect_metric not in ("wet", "dry", "yearly", "monthly"):
+        raise EvalError(
+            f"case {case_id!r}: expect_metric must be 'wet', 'dry', 'yearly' or 'monthly'"
+        )
     tools: dict[str, str | None] = {}
     for key in ("expect_tool", "forbid_tool"):
         name = raw.get(key)

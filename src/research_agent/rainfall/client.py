@@ -34,12 +34,14 @@ from research_agent.rainfall.geocoding import (
     resolve_location,
 )
 from research_agent.rainfall.models import Location, Provenance, RainfallRecord
+from research_agent.rainfall.totals import compute_monthly_analysis, compute_yearly_analysis
 from research_agent.retrieval.cache import ResponseCache, cache_key
 
 log = logging.getLogger(__name__)
 
 MAX_CITY_CHARS = 200
 METRICS = ("wet", "dry")
+SCALES = ("daily", "monthly", "yearly")
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _COUNTRY_CODE = re.compile(r"^[A-Za-z]{2}$")
 VARIABLE = "precipitation_sum: daily total precipitation in mm, local calendar day"
@@ -200,19 +202,35 @@ class RainfallClient:
         event_date: date | None = None,
         metric: str = "wet",
         event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
     ) -> tuple[RainfallRecord, Archive]:
         """Analyse ``city``: returns the statistics and the daily series they were computed from.
 
-        ``metric`` is ``"wet"`` (Rx1day) or ``"dry"`` (CDD, annual totals). ``event_year`` (dry
-        only) asks how one year compares; ``event_date`` asks about one day. The archive covers
-        the requested period, so a plot of the daily values needs no second request.
+        ``scale`` ``"daily"``: ``metric`` ``"wet"`` (Rx1day) or ``"dry"`` (CDD, annual totals);
+        ``event_date`` asks about one day, ``event_year`` (dry only) about one year. ``"yearly"``:
+        annual totals; ``event_year`` asks about one year. ``"monthly"``: monthly totals;
+        ``event_year`` (with ``event_month``) asks about one month, or each month of a year. For
+        yearly and monthly the series starts at the baseline period at the latest, so the
+        baseline is always available. A plot of the daily values needs no second request.
         """
         cfg = self._config
         today = self._today()
         last_complete_year = today.year - 1
         city, country_code, region, start_year, end_year = self._validate(
-            city, country_code, region, start_year, end_year, event_date, today, metric, event_year
+            city,
+            country_code,
+            region,
+            start_year,
+            end_year,
+            event_date,
+            today,
+            metric,
+            event_year,
+            scale,
+            event_month,
         )
+        series_start = start_year if scale == "daily" else min(start_year, cfg.baseline_start_year)
 
         geo_params = build_geocode_params(city, country_code, cfg.geocode_candidates)
         candidates, geo_cached = self._cached(cfg.geocoding_url, geo_params, parse_candidates)
@@ -224,7 +242,7 @@ class RainfallClient:
             same_place_km=cfg.same_place_km,
         )
 
-        params = self._archive_params(location, start_year, end_year)
+        params = self._archive_params(location, series_start, end_year)
         archive, archive_cached = self._cached(cfg.archive_url, params, parse_archive)
         provenance = Provenance(
             dataset=(
@@ -242,8 +260,38 @@ class RainfallClient:
             data_end=archive.dates[-1].isoformat(),
             from_cache=geo_cached and archive_cached,
         )
-        if metric == "dry":
-            record: RainfallRecord = compute_dry_analysis(
+        if scale == "yearly":
+            record: RainfallRecord = compute_yearly_analysis(
+                location,
+                archive.dates,
+                archive.values,
+                start_year=start_year,
+                end_year=end_year,
+                last_complete_year=last_complete_year,
+                config=cfg,
+                provenance=provenance,
+                baseline_from_year=series_start,
+                event_year=event_year,
+                other_matches=others,
+            )
+        elif scale == "monthly":
+            last_month = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+            record = compute_monthly_analysis(
+                location,
+                archive.dates,
+                archive.values,
+                start_year=start_year,
+                end_year=end_year,
+                last_complete_month=last_month,
+                config=cfg,
+                provenance=provenance,
+                baseline_from_year=series_start,
+                event_year=event_year,
+                event_month=event_month,
+                other_matches=others,
+            )
+        elif metric == "dry":
+            record = compute_dry_analysis(
                 location,
                 archive.dates,
                 archive.values,
@@ -282,10 +330,14 @@ class RainfallClient:
         today: date,
         metric: object,
         event_year: object,
+        scale: object = "daily",
+        event_month: object = None,
     ) -> tuple[str, str | None, str | None, int, int]:
         cfg = self._config
         if metric not in METRICS:
             raise InvalidRainfallQueryError("metric must be 'wet' or 'dry'")
+        if scale not in SCALES:
+            raise InvalidRainfallQueryError("scale must be 'daily', 'monthly' or 'yearly'")
         if not isinstance(city, str) or not city.strip():
             raise InvalidRainfallQueryError("city must be a non-empty string")
         city = city.strip()
@@ -299,7 +351,9 @@ class RainfallClient:
             raise InvalidRainfallQueryError("region must be a non-empty string")
 
         first = cfg.default_start_year if start_year is None else start_year
-        last = today.year - 1 if end_year is None else end_year
+        # Monthly questions may be about this year's finished months; the others need whole years.
+        default_last = today.year if scale == "monthly" else today.year - 1
+        last = default_last if end_year is None else end_year
         for name, year in (("start_year", first), ("end_year", last)):
             if isinstance(year, bool) or not isinstance(year, int):
                 raise InvalidRainfallQueryError(f"{name} must be an integer year")
@@ -310,8 +364,11 @@ class RainfallClient:
         if first > last:
             raise InvalidRainfallQueryError("start_year must not be after end_year")
         if event_year is not None:
-            if metric != "dry":
-                raise InvalidRainfallQueryError("event_year can only be used with metric 'dry'")
+            if scale == "daily" and metric != "dry":
+                raise InvalidRainfallQueryError(
+                    "event_year needs scale 'yearly' or 'monthly' (or metric 'dry'); for one day "
+                    "use event_date"
+                )
             if (
                 isinstance(event_year, bool)
                 or not isinstance(event_year, int)
@@ -320,7 +377,19 @@ class RainfallClient:
                 raise InvalidRainfallQueryError(
                     f"event_year must be an integer between {first} and {last}"
                 )
+        if event_month is not None:
+            if scale != "monthly" or event_year is None:
+                raise InvalidRainfallQueryError(
+                    "event_month needs scale 'monthly' and event_year"
+                )
+            if isinstance(event_month, bool) or event_month not in range(1, 13):
+                raise InvalidRainfallQueryError("event_month must be an integer from 1 to 12")
         if event_date is not None:
+            if scale != "daily":
+                raise InvalidRainfallQueryError(
+                    "event_date is for scale 'daily'; for a month or year use event_year "
+                    "(and event_month)"
+                )
             latest = min(date(last, 12, 31), today)
             if not isinstance(event_date, date) or not date(first, 1, 1) <= event_date <= latest:
                 raise InvalidRainfallQueryError(

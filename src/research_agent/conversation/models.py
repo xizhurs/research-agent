@@ -47,7 +47,8 @@ class TaskState:
     period: tuple[int | None, int | None] | None = None  # (start_year, end_year) as requested
     event_date: str | None = None
     event_year: int | None = None
-    metrics: tuple[str, ...] = ()  # "wet", "dry", "enso"
+    event_month: int | None = None
+    metrics: tuple[str, ...] = ()  # "wet", "dry" (daily), "yearly", "monthly", "enso"
     sources: tuple[str, ...] = ()  # "OpenAlex", "ERA5 (Open-Meteo)", "NOAA CPC RONI"
     queries: tuple[str, ...] = ()  # literature searches that ran
     pending: Clarification | None = None

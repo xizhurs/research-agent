@@ -186,13 +186,21 @@ def rainfall(
     event_date: str | None = typer.Option(
         None, "--event-date", help="A day to assess, as YYYY-MM-DD."
     ),
-    metric: str = typer.Option("wet", "--metric", help="'wet' (Rx1day) or 'dry' (CDD, totals)."),
+    scale: str = typer.Option(
+        "daily", "--scale", help="'daily' (see --metric), 'monthly' or 'yearly' totals."
+    ),
+    metric: str = typer.Option(
+        "wet", "--metric", help="Daily scale: 'wet' (Rx1day) or 'dry' (CDD, totals)."
+    ),
     event_year: int | None = typer.Option(
-        None, "--event-year", help="With --metric dry: a year to compare."
+        None, "--event-year", help="A year to assess (--scale yearly/monthly, or --metric dry)."
+    ),
+    event_month: int | None = typer.Option(
+        None, "--event-month", help="With --scale monthly and --event-year: a month, 1-12."
     ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
 ) -> None:
-    """Analyse extreme rainfall or dry spells (ERA5) for a city deterministically (no LLM)."""
+    """Analyse rainfall (ERA5) for a city at a daily, monthly or yearly scale (no LLM)."""
     cfg = _load_or_exit(config)
     try:
         day = date.fromisoformat(event_date) if event_date else None
@@ -210,6 +218,8 @@ def rainfall(
                 event_date=day,
                 metric=metric,
                 event_year=event_year,
+                scale=scale,
+                event_month=event_month,
             )
     except RainfallError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -404,9 +414,8 @@ def _print_result(result: AgentResult) -> None:
                 typer.echo(f"    {a.source_url}")
                 continue
             p = a.provenance
-            what = "dry spells and annual totals" if a.metric == "dry" else "Rx1day"
             typer.echo(
-                f"[{a.id}] {a.location.label}: {what} {a.valid_years[0]}-"
+                f"[{a.id}] {a.location.label}: {a.summary} {a.valid_years[0]}-"
                 f"{a.valid_years[-1]}. {p.dataset}; grid cell "
                 f"({p.grid_latitude:.2f}, {p.grid_longitude:.2f})."
             )

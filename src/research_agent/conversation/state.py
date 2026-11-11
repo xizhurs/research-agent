@@ -81,10 +81,11 @@ def turn_settings(events: Iterable[ToolEvent]) -> dict:
             queries.append(str(args.get("query", "")))
         elif event.tool == RAINFALL_TOOL_NAME and event.location is not None:
             places.append(place_ref(event.location))
-            metrics.append(str(args.get("metric") or "wet"))
+            scale = str(args.get("scale") or "daily")
+            metrics.append(str(args.get("metric") or "wet") if scale == "daily" else scale)
             if _period(args):
                 settings["period"] = _period(args)
-            for key in ("event_date", "event_year"):
+            for key in ("event_date", "event_year", "event_month"):
                 if args.get(key) is not None:
                     settings[key] = args[key]
         elif event.tool == ENSO_TOOL_NAME:
@@ -144,7 +145,7 @@ def evidence_label(item: Work | object) -> str:
         return f"ENSO events ({item.index_name}), starting {item.first_year}-{item.last_year}"
     years = item.valid_years  # a RainfallRecord
     span = f"{years[0]}-{years[-1]}" if years else "no valid years"
-    return f"{item.location.label}, {item.metric} {span}"
+    return f"{item.location.label}, {item.summary} {span}"
 
 
 def _kind(item) -> str:

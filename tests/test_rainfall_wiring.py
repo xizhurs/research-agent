@@ -33,11 +33,13 @@ def r1(make_analysis):
 # --- tool schema, arguments and formatting ------------------------------------------------------
 
 
-def test_tool_schema_requires_city_only():
+def test_tool_schema_requires_city_and_scale():
     assert RAINFALL_TOOL.name == "analyze_rainfall_extremes"
-    assert RAINFALL_TOOL.parameters["required"] == ["city"]
+    assert RAINFALL_TOOL.parameters["required"] == ["city", "scale"]
     assert set(RAINFALL_TOOL.parameters["properties"]) == {
         "city",
+        "scale",
+        "event_month",
         "country_code",
         "region",
         "start_year",
@@ -390,7 +392,8 @@ def test_parse_rejects_bad_metric_or_event_year(arguments):
 def test_schema_offers_both_metrics():
     props = RAINFALL_TOOL.parameters["properties"]
     assert props["metric"]["enum"] == ["wet", "dry"] and "event_year" in props
-    assert RAINFALL_TOOL.parameters["required"] == ["city"]  # metric stays optional (wet)
+    assert props["scale"]["enum"] == ["yearly", "monthly", "daily"]
+    assert "metric" not in RAINFALL_TOOL.parameters["required"]  # metric stays optional (wet)
 
 
 def test_format_dry_contains_every_number_the_model_may_quote(d1):

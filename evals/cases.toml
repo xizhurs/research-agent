@@ -10,8 +10,9 @@
 #   forbidden_phrases   none of these may appear in the claims
 #   min_rainfall_calls  the agent must have run at least this many rainfall analyses
 #   min_data_references the answer must cite at least this many rainfall analyses (R1, R2...)
-#   expect_metric       the rainfall tool must have been requested with this metric ("wet" or
-#                       "dry"); judged on the tool trace, i.e. on the model's choice
+#   expect_metric       the rainfall tool must have been requested with this kind: "wet" or "dry"
+#                       (daily scale), "yearly" or "monthly"; judged on the tool trace, i.e. on
+#                       the model's choice
 #   expect_tool         this tool must have been requested at least once (judged on the trace);
 #                       one of search_literature, analyze_rainfall_extremes, analyze_enso_events
 #   forbid_tool         this tool must never have been requested
@@ -233,3 +234,38 @@ expect_tool = "analyze_enso_events"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["not yet", "ongoing", "fewer than", "so far", "developing", "has not"]
+
+# --- Time scales (added 2026-11-11): yearly and monthly totals on the same tool. DRAFT cases:
+# --- expect_metric judges the model's choice of scale. Values are never asserted exactly.
+
+[[case]]
+id = "scale-yearly-vague-amsterdam"
+question = "How was the rainfall in the last 10 years in Amsterdam?"
+expect_metric = "yearly"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["mm", "baseline", "wettest", "driest"]
+
+[[case]]
+id = "scale-yearly-year-madrid"
+question = "Was 2023 a wet or a dry year in Madrid, Spain, compared with normal?"
+expect_metric = "yearly"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["mm", "baseline", "rank"]
+
+[[case]]
+id = "scale-monthly-zhengzhou"
+question = "Was July 2021 an unusually wet month in Zhengzhou, China?"
+expect_metric = "monthly"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["mm", "july", "band", "rank"]
+
+[[case]]
+id = "scale-daily-still-daily"
+question = "What was the heaviest single day of rain in Amsterdam since 2000?"
+expect_metric = "wet"
+min_rainfall_calls = 1
+min_data_references = 1
+keywords_any = ["mm"]

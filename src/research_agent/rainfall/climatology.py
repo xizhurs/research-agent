@@ -113,7 +113,7 @@ BAND_LOW_PERCENTILE = 10
 BAND_HIGH_PERCENTILE = 90
 
 
-def _month_totals(
+def all_month_totals(
     dates: Sequence[date], values: Sequence[float | None], min_year_coverage: float
 ) -> dict[tuple[int, int], float]:
     """Total precipitation of every ``(year, month)`` that has enough days with data.
@@ -144,7 +144,7 @@ def monthly_totals(
     min_year_coverage: float,
 ) -> tuple[float | None, ...]:
     """The 12 monthly totals (mm) of ``year``; None for a month without enough data."""
-    totals = _month_totals(dates, values, min_year_coverage)
+    totals = all_month_totals(dates, values, min_year_coverage)
     return tuple(totals.get((year, month)) for month in range(1, 13))
 
 
@@ -185,7 +185,7 @@ def monthly_baseline(
     )
     if valid is None:
         return None
-    totals = _month_totals(dates, values, min_year_coverage)
+    totals = all_month_totals(dates, values, min_year_coverage)
 
     low: list[float | None] = []
     high: list[float | None] = []

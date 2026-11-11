@@ -27,6 +27,7 @@ def _view_radio() -> gr.Radio:
         [
             ("Daily values vs smoothed day-of-year mean", "daily"),
             ("Monthly totals vs 10th-90th percentile band", "monthly"),
+            ("Annual totals vs baseline band", "yearly"),
         ],
         value="daily",
         label="Plot view (switching redraws the last analysis)",
@@ -78,12 +79,19 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
                 ask_session = gr.State()  # this browser tab's conversation ID
                 ask_outputs = [ask_status, ask_answer, ask_plot, ask_note, ask_series]
+                def ask_turn(text, session_id):  # the plot view follows the analysis's scale
+                    return handlers.ask_turn(cfg, creds, service, text, None, session_id)
+
+                def shown(series, current_view):  # the year and view that were plotted
+                    view = handlers.view_for(series[0]) if series else current_view
+                    return handlers.plotted_year(series), view
+
                 ask_button.click(
-                    partial(handlers.ask_turn, cfg, creds, service),
-                    [question, ask_view, ask_session],
+                    ask_turn,
+                    [question, ask_session],
                     [*ask_outputs, ask_session, ask_transcript],
                     api_name="ask",
-                ).then(handlers.plotted_year, ask_series, ask_year)  # show the year plotted
+                ).then(shown, [ask_series, ask_view], [ask_year, ask_view])
                 new_button.click(
                     lambda: ("", "", None, "", None, None, "", None),
                     None,
@@ -132,13 +140,22 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         label="Country code (optional)", placeholder="CN", max_length=2
                     )
                     region = gr.Textbox(label="Region (optional)", placeholder="Henan")
+                scale = gr.Radio(
+                    [
+                        ("Daily (heavy-rain days or dry spells)", "daily"),
+                        ("Monthly totals", "monthly"),
+                        ("Yearly totals", "yearly"),
+                    ],
+                    value="daily",
+                    label="Time scale",
+                )
                 metric = gr.Radio(
                     [
                         ("Wet: heaviest day of each year (Rx1day)", "wet"),
                         ("Dry: spells and totals", "dry"),
                     ],
                     value="wet",
-                    label="Metric",
+                    label="Metric (daily scale only)",
                 )
                 with gr.Row():
                     start_year = gr.Number(
@@ -149,7 +166,12 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     )
                 with gr.Row():
                     event_date = gr.Textbox(label="Event date (optional)", placeholder="YYYY-MM-DD")
-                    event_year = gr.Number(label="Event year (dry metric only)", precision=0)
+                    event_year = gr.Number(
+                        label="Event year (monthly, yearly, or daily dry)", precision=0
+                    )
+                    event_month = gr.Number(
+                        label="Event month 1-12 (monthly, with event year)", precision=0
+                    )
                 view = _view_radio()
                 with gr.Accordion("Plot options", open=False):
                     plot_year = gr.Number(
@@ -183,10 +205,13 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         plot_year,
                         window,
                         view,
+                        scale,
+                        event_month,
                     ],
                     [rain_status, rain_text, rain_plot, rain_note, rain_series],
                     api_name="rainfall",
                 )
+                scale.change(lambda value: value, scale, view)  # the plot follows the scale
                 view.change(
                     partial(handlers.replot, cfg),
                     [rain_series, plot_year, window, view],

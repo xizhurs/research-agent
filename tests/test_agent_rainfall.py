@@ -200,6 +200,8 @@ def test_tool_arguments_reach_the_analyzer_with_parsed_types(limits, make_analys
             "event_date": date(2021, 7, 20),
             "metric": "wet",  # the default when the model omits it
             "event_year": None,
+            "scale": "daily",  # required in the schema; a call without it stays daily
+            "event_month": None,
         }
     ]
 
