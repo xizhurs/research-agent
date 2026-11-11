@@ -253,6 +253,12 @@ def ui(
         "127.0.0.1", "--host", help="Interface to listen on. Whoever can reach it can spend tokens."
     ),
     port: int = typer.Option(7860, "--port", help="Port to listen on."),
+    share: bool = typer.Option(
+        False,
+        "--share",
+        help="Also open a temporary public *.gradio.live link to this machine. Needs "
+        "UI_USERNAME and UI_PASSWORD.",
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
@@ -269,12 +275,21 @@ def ui(
             raise
         typer.echo("error: the web interface needs the extra: uv sync --extra ui", err=True)
         raise typer.Exit(code=1) from exc
-    # Optional login, from the environment only (never a flag, so it stays out of shell history).
-    username, password = os.environ.get("UI_USERNAME"), os.environ.get("UI_PASSWORD")
+    # Optional login, from the environment or the .env file (never a flag, so it stays out of
+    # shell history).
+    env = read_env(env_file)
+    username, password = env.get("UI_USERNAME"), env.get("UI_PASSWORD")
     if bool(username) != bool(password):
         typer.echo("error: set both UI_USERNAME and UI_PASSWORD, or neither.", err=True)
         raise typer.Exit(code=1)
+    if share and not username:
+        typer.echo(
+            "error: --share makes the app public; set UI_USERNAME and UI_PASSWORD first.", err=True
+        )
+        raise typer.Exit(code=1)
     launch_args: dict = {"server_name": host, "server_port": port}
+    if share:
+        launch_args["share"] = True
     if username and password:
         launch_args["auth"] = (username, password)
     elif host not in {"127.0.0.1", "localhost", "::1"}:

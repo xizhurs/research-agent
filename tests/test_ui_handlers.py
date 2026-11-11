@@ -298,6 +298,12 @@ def test_replot_redraws_from_the_stored_series_without_any_request(
     assert rain.calls == [] and rain.archive_calls == []  # nothing was analysed or fetched
 
 
+def test_plotted_year_is_the_default_year_of_the_stored_analysis(make_analysis):
+    assert handlers.plotted_year(None) is None
+    assert handlers.plotted_year((make_analysis(event_date=date(2002, 7, 1)), "S")) == 2002
+    assert handlers.plotted_year((make_analysis(), "S")) == 2004  # latest valid year
+
+
 def test_replot_before_any_analysis_does_nothing(rain, base_config):
     assert handlers.replot(base_config, None, None, 15.0, "monthly") == (None, "")
     assert FakeFigure.calls == []

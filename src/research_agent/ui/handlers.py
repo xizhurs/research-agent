@@ -161,6 +161,11 @@ def _plot(
         return None, f"No plot: {md(exc)}"
 
 
+def plotted_year(series: tuple[RainfallRecord, Archive] | None) -> int | None:
+    """The year a new plot shows by default, to fill the year box (None: nothing plotted)."""
+    return default_plot_year(series[0]) if series else None
+
+
 def replot(
     cfg: Config,
     series: tuple[RainfallRecord, Archive] | None,
@@ -168,7 +173,10 @@ def replot(
     window_days: float,
     view: str,
 ) -> tuple[Figure | None, str]:
-    """Redraw the Rainfall plot from the last analysis (no request) when the view changes."""
+    """Redraw a plot from the stored analysis and daily series (no request, no tokens).
+
+    Used when the view or the year changes; an empty ``plot_year`` means the default year.
+    """
     if series is None:
         return None, ""
     try:
