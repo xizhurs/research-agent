@@ -44,6 +44,47 @@ def test_ui_command_launches_on_localhost_by_default(monkeypatch, tmp_path):
     assert launched == {"server_name": "0.0.0.0", "server_port": 9000}  # noqa: S104
 
 
+def _capture_launch(monkeypatch):
+    launched = {}
+
+    class FakeDemo:
+        def launch(self, **kwargs):
+            launched.update(kwargs)
+
+    monkeypatch.setattr("research_agent.ui.app.build_app", lambda cfg, creds: FakeDemo())
+    return launched
+
+
+def test_ui_login_comes_from_the_environment(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    launched = _capture_launch(monkeypatch)
+    monkeypatch.setenv("UI_USERNAME", "alice")
+    monkeypatch.setenv("UI_PASSWORD", "s3cret-pw")
+    assert runner.invoke(app, ui_args(tmp_path, "--host", "0.0.0.0")).exit_code == 0  # noqa: S104
+    assert launched["auth"] == ("alice", "s3cret-pw")
+
+
+def test_ui_refuses_half_a_login(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    launched = _capture_launch(monkeypatch)
+    monkeypatch.setenv("UI_USERNAME", "alice")
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
+    result = runner.invoke(app, ui_args(tmp_path))
+    assert result.exit_code == 1
+    assert "UI_PASSWORD" in result.output
+    assert launched == {}
+
+
+def test_ui_warns_when_public_without_login(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    _capture_launch(monkeypatch)
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
+    result = runner.invoke(app, ui_args(tmp_path, "--host", "0.0.0.0"))  # noqa: S104
+    assert result.exit_code == 0
+    assert "no login" in result.output
+
+
 def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
     gr = pytest.importorskip("gradio")
     from research_agent.ui.app import build_app
