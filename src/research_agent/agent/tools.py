@@ -144,8 +144,52 @@ ENSO_TOOL = ToolSpec(
 )
 
 
+RECALL_TOOL_NAME = "recall_evidence"
+
+RECALL_TOOL = ToolSpec(
+    name=RECALL_TOOL_NAME,
+    description=(
+        "Show again, in full, works (W...) or analyses (R...) retrieved in earlier turns of this "
+        "conversation, as listed under 'Stored evidence'. Only items shown in this turn, by a "
+        "new tool call or by this tool, may be cited. It runs no new search or analysis."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "IDs from the stored-evidence list, for example [\"R1\", \"W123\"].",
+            }
+        },
+        "required": ["ids"],
+    },
+)
+
+
 class ToolArgumentError(ValueError):
     """The model supplied unusable tool arguments. The message is safe to show the model."""
+
+
+def parse_recall_args(arguments: dict[str, Any], max_ids: int) -> tuple[str, ...]:
+    ids = arguments.get("ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+        raise ToolArgumentError("'ids' is required and must be a non-empty list of strings")
+    unique = tuple(dict.fromkeys(i.strip() for i in ids if i.strip()))
+    if not unique:
+        raise ToolArgumentError("'ids' must contain at least one ID")
+    if len(unique) > max_ids:
+        raise ToolArgumentError(f"at most {max_ids} IDs per call")
+    return unique
+
+
+def format_recalled(item: Work | RainfallRecord | EnsoAnalysis) -> str:
+    """The full text the model saw when the item was first retrieved."""
+    if isinstance(item, Work):
+        return _format_work(item)
+    if isinstance(item, EnsoAnalysis):
+        return format_enso(item)
+    return format_rainfall(item)
 
 
 @dataclass(frozen=True)

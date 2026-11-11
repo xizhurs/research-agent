@@ -320,14 +320,15 @@ def agent_result(answer, **stats):
 def run_agent(monkeypatch):
     calls, outcome = [], {}
 
-    def fake(cfg, creds, question):
+    def fake(cfg, creds, question, context=None):
         calls.append(question)
+        fake.contexts.append(context)
         if isinstance(outcome["value"], Exception):
             raise outcome["value"]
         return outcome["value"]
 
     monkeypatch.setattr(handlers, "_run_agent", fake)
-    fake.calls, fake.outcome = calls, outcome
+    fake.calls, fake.outcome, fake.contexts = calls, outcome, []
     return fake
 
 
@@ -467,3 +468,53 @@ def test_ask_keeps_the_answer_when_the_daily_series_cannot_be_fetched(
     assert status.startswith("**LLM used: yes**") and "### Answer" in body
     assert figure is None and series is None and FakeFigure.calls == []
     assert note == "No plot: Open-Meteo is unreachable"
+
+
+# --- Ask tab conversation -----------------------------------------------------------------------
+
+
+def _service(cfg):
+    from research_agent.conversation import InMemorySessionStore
+
+    return handlers.make_service(cfg, CREDS, InMemorySessionStore(10, 3600))
+
+
+def test_ask_turn_keeps_the_conversation_in_its_session(run_agent, base_config):
+    answer = Answer(claims=(Claim("Done.", "interpretation", ()),), references=(), limitations=())
+    run_agent.outcome["value"] = agent_result(answer)
+    service = _service(base_config)
+
+    *_, sid, transcript = handlers.ask_turn(base_config, CREDS, service, "Amsterdam <rain>?")
+    status, *_, sid2, transcript2 = handlers.ask_turn(
+        base_config, CREDS, service, "What about Rotterdam?", "daily", sid
+    )
+
+    assert sid2 == sid and run_agent.contexts[0] is None
+    assert run_agent.contexts[1].messages[0].text == "Amsterdam <rain>?"
+    assert r"1. Amsterdam \<rain\>?" in transcript  # escaped
+    assert "2. What about Rotterdam?" in transcript2
+    assert "turn 2 (update)" in status
+
+
+def test_ask_turn_errors_keep_the_session_unchanged(run_agent, base_config):
+    answer = Answer(claims=(Claim("Done.", "interpretation", ()),), references=(), limitations=())
+    run_agent.outcome["value"] = agent_result(answer)
+    service = _service(base_config)
+    *_, sid, transcript = handlers.ask_turn(base_config, CREDS, service, "first")
+    run_agent.outcome["value"] = LLMError("provider is down")
+    status, *_, sid2, transcript2 = handlers.ask_turn(
+        base_config, CREDS, service, "second", "daily", sid
+    )
+    assert "provider is down" in status
+    assert (sid2, transcript2) == (sid, transcript)
+    assert [t.question for t in service.turns(sid)] == ["first"]
+
+
+def test_separate_browser_tabs_do_not_share_a_conversation(run_agent, base_config):
+    answer = Answer(claims=(Claim("Done.", "interpretation", ()),), references=(), limitations=())
+    run_agent.outcome["value"] = agent_result(answer)
+    service = _service(base_config)
+    *_, tab_a, _ = handlers.ask_turn(base_config, CREDS, service, "question in tab A")
+    *_, tab_b, transcript_b = handlers.ask_turn(base_config, CREDS, service, "question in tab B")
+    assert tab_a != tab_b and "tab A" not in transcript_b
+    assert run_agent.contexts == [None, None]

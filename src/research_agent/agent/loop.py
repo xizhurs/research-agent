@@ -20,6 +20,7 @@ from typing import Any, Protocol
 from research_agent import tracing
 from research_agent.agent.answer import Answer, DataRecord, build_answer
 from research_agent.agent.budget import Budget, estimate_tokens
+from research_agent.agent.events import ToolEvent, TurnContext
 from research_agent.agent.limitations import SearchRecord, evidence_limitations
 from research_agent.agent.prompt import build_instructions
 from research_agent.agent.tools import (
@@ -27,14 +28,18 @@ from research_agent.agent.tools import (
     ENSO_TOOL_NAME,
     RAINFALL_TOOL,
     RAINFALL_TOOL_NAME,
+    RECALL_TOOL,
+    RECALL_TOOL_NAME,
     SEARCH_TOOL,
     SEARCH_TOOL_NAME,
     ToolArgumentError,
     format_enso,
     format_rainfall,
+    format_recalled,
     format_results,
     parse_enso_args,
     parse_rainfall_args,
+    parse_recall_args,
     parse_search_args,
 )
 from research_agent.config import Limits, ReportingConfig
@@ -52,6 +57,7 @@ from research_agent.rainfall import (
     AmbiguousLocationError,
     Archive,
     InvalidRainfallQueryError,
+    Location,
     LocationNotFoundError,
     RainfallError,
     RainfallRecord,
@@ -151,6 +157,9 @@ class RunStats:
 class AgentResult:
     answer: Answer
     stats: RunStats
+    events: tuple[ToolEvent, ...] = ()  # every tool call and its outcome, in order
+    # Every work and analysis shown to the model in full this turn (new or recalled).
+    retrieved: tuple[Work | DataRecord, ...] = ()
 
 
 @dataclass
@@ -163,6 +172,11 @@ class _RunState:
     searches: list[SearchRecord] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     trace: list[tuple[str, ...]] = field(default_factory=list)
+    events: list[ToolEvent] = field(default_factory=list)
+    context: TurnContext | None = None  # earlier turns of a conversation, if any
+    next_data_number: int = 1  # the number of the next R ID
+    reused: set[str] = field(default_factory=set)  # stored items shown again this turn
+    ambiguous: tuple[Location, ...] = ()  # set by a rainfall call whose place was ambiguous
 
 
 class ResearchAgent:
@@ -187,11 +201,16 @@ class ResearchAgent:
         self._reporting = reporting
         self._today = today
 
-    def run(self, question: str) -> AgentResult:
-        """Answer ``question``. Raises LLMError (or AuthError from search) on hard failures."""
+    def run(self, question: str, context: TurnContext | None = None) -> AgentResult:
+        """Answer ``question``. Raises LLMError (or AuthError from search) on hard failures.
+
+        ``context`` carries earlier turns of a conversation. Budgets, error handling and citation
+        validation are the same for every turn; earlier items become citable only when shown
+        again in this turn.
+        """
         with tracing.observe("invoke_agent", "agent") as span:
             tracing.set_content(span, input=question)
-            result = self._run(question)
+            result = self._run(question, context)
             stats = result.stats
             span.set_attributes(
                 {
@@ -211,7 +230,7 @@ class ResearchAgent:
             tracing.set_content(span, output=tracing.answer_json(result.answer))
             return result
 
-    def _run(self, question: str) -> AgentResult:
+    def _run(self, question: str, context: TurnContext | None) -> AgentResult:
         question = question.strip()
         if not question:
             raise InvalidQuestionError("question must be a non-empty string")
@@ -224,7 +243,10 @@ class ResearchAgent:
         state = _RunState(Budget(limits, rainfall_enabled=self._rainfall is not None))
         budget = state.budget
         instructions = build_instructions(
-            limits, rainfall=self._rainfall is not None, enso=self._enso is not None
+            limits,
+            rainfall=self._rainfall is not None,
+            enso=self._enso is not None,
+            conversation=context is not None,
         )
         tools = [SEARCH_TOOL]
         if self._rainfall is not None:
@@ -233,6 +255,19 @@ class ResearchAgent:
             tools.append(ENSO_TOOL)
         messages: list[Message] = [UserMessage(question)]
         next_input = estimate_tokens(instructions) + estimate_tokens(question)
+        if context is not None:
+            state.context = context
+            state.next_data_number = context.next_data_number
+            if context.recallable:
+                tools.append(RECALL_TOOL)
+            text = f"{context.block}\n\nCurrent question: {question}" if context.block else question
+            messages = [*context.messages, UserMessage(text)]
+            next_input += context.tokens
+            if context.omitted:
+                state.notes.append(
+                    f"{context.omitted} earlier part(s) of the conversation were left out to stay "
+                    "within the conversation context limit."
+                )
 
         # Terminates: force_final_reason() is non-None once iterations + 1 >= max_iterations,
         # and a forced call always ends the loop.
@@ -320,6 +355,7 @@ class ResearchAgent:
                 today=self._today(),
                 analyses=list(state.analyses.values()),
                 rainfall_calls=budget.rainfall_calls,
+                reused=len(state.reused),
             )
         )
         answer = build_answer(response.text, state.evidence, notes, state.analyses)
@@ -344,7 +380,12 @@ class ResearchAgent:
             stats.cached_rainfall,
             stats.total_tokens,
         )
-        return AgentResult(answer=answer, stats=stats)
+        return AgentResult(
+            answer=answer,
+            stats=stats,
+            events=tuple(state.events),
+            retrieved=(*state.evidence.values(), *state.analyses.values()),
+        )
 
     def _run_tools(self, calls: Sequence[ToolCall], state: _RunState) -> list[ToolResultMessage]:
         """Answer every tool call (the API requires a result for each call ID)."""
@@ -363,6 +404,34 @@ class ResearchAgent:
         return results
 
     def _run_tool(self, call: ToolCall, state: _RunState) -> str:
+        """Run one call and record what it did, read from what it added to the run state."""
+        works_before, analyses_before = set(state.evidence), set(state.analyses)
+        state.ambiguous = ()
+        content = self._dispatch(call, state)
+        new_works = tuple(w for w in state.evidence if w not in works_before)
+        new_analyses = tuple(a for a in state.analyses if a not in analyses_before)
+        recalled = tuple(i for i in (*new_works, *new_analyses) if i in state.reused)
+        fresh = [a for a in new_analyses if a not in recalled]
+        record = state.analyses[fresh[0]] if fresh else None
+        if state.ambiguous:
+            status = "ambiguous"
+        else:
+            status = "error" if content.startswith("Error:") else "ok"
+        state.events.append(
+            ToolEvent(
+                tool=call.name,
+                arguments=dict(call.arguments),
+                status=status,
+                result_id=fresh[0] if fresh else None,
+                work_ids=tuple(w for w in new_works if w not in recalled),
+                location=getattr(record, "location", None),
+                candidates=state.ambiguous,
+                recalled_ids=recalled,
+            )
+        )
+        return content
+
+    def _dispatch(self, call: ToolCall, state: _RunState) -> str:
         if call.error:
             return f"Error: {call.error}. Call the tool again with valid JSON arguments."
         if call.name == SEARCH_TOOL_NAME:
@@ -371,6 +440,8 @@ class ResearchAgent:
             return self._do_rainfall(call, self._rainfall, state)
         if call.name == ENSO_TOOL_NAME and self._enso is not None:
             return self._do_enso(call, self._enso, state)
+        if call.name == RECALL_TOOL_NAME and state.context and state.context.recallable:
+            return self._do_recall(call, state)
         return f"Error: unknown tool '{call.name}'."
 
     def _do_search(self, call: ToolCall, state: _RunState) -> str:
@@ -461,6 +532,8 @@ class ResearchAgent:
             return f"Error: {exc}."  # rejected before any request, so it costs no analysis
         except (AmbiguousLocationError, LocationNotFoundError) as exc:
             budget.record_rainfall()
+            if isinstance(exc, AmbiguousLocationError):
+                state.ambiguous = tuple(c for c in exc.candidates if isinstance(c, Location))
             kind = "ambiguous" if isinstance(exc, AmbiguousLocationError) else "not found"
             notes.append(
                 f"The location '{args.city}' was {kind}; no rainfall analysis was run for it."
@@ -479,7 +552,7 @@ class ResearchAgent:
             )
 
         budget.record_rainfall(cached=analysis.provenance.from_cache)
-        analysis = replace(analysis, id=f"R{len(state.analyses) + 1}")
+        analysis = replace(analysis, id=f"R{state.next_data_number}")
         text = format_rainfall(analysis)
         tokens = estimate_tokens(text)
         log.info(
@@ -498,6 +571,7 @@ class ResearchAgent:
             return "Error: result omitted because the retrieved-context budget is used up."
         budget.record_context(tokens)
         state.analyses[analysis.id] = analysis  # only results the model saw in full are citable
+        state.next_data_number += 1
         return text
 
     def _do_enso(self, call: ToolCall, analyzer: EnsoAnalyzer, state: _RunState) -> str:
@@ -539,7 +613,7 @@ class ResearchAgent:
             )
 
         budget.record_rainfall(cached=analysis.from_cache)
-        analysis = replace(analysis, id=f"R{len(state.analyses) + 1}")
+        analysis = replace(analysis, id=f"R{state.next_data_number}")
         text = format_enso(analysis)
         tokens = estimate_tokens(text)
         log.info(
@@ -557,4 +631,49 @@ class ResearchAgent:
             return "Error: result omitted because the retrieved-context budget is used up."
         budget.record_context(tokens)
         state.analyses[analysis.id] = analysis  # only results the model saw in full are citable
+        state.next_data_number += 1
         return text
+
+    def _do_recall(self, call: ToolCall, state: _RunState) -> str:
+        """Show stored items from earlier turns again. Costs context tokens, no search/analysis."""
+        assert state.context is not None
+        stored = state.context.recallable
+        try:
+            ids = parse_recall_args(call.arguments, state.context.max_recall_per_call)
+        except ToolArgumentError as exc:
+            return f"Error: {exc}."
+        unknown = [i for i in ids if i not in stored]
+        if len(unknown) == len(ids):
+            return (
+                f"Error: not in the stored evidence: {', '.join(unknown)}. Use IDs from the "
+                "'Stored evidence' list, or run the tool again."
+            )
+        parts: list[str] = []
+        for item_id in ids:
+            if item_id in unknown:
+                continue
+            if item_id in state.evidence or item_id in state.analyses:
+                parts.append(f"[{item_id}] (already shown in this turn)")
+                continue
+            item = stored[item_id]
+            text = format_recalled(item)
+            tokens = estimate_tokens(text)
+            if tokens > state.budget.context_left:
+                parts.append(f"[{item_id}] not shown: the retrieved-context budget is used up.")
+                state.notes.append(
+                    "An item from an earlier turn was not shown again because the "
+                    f"retrieved-context limit ({self._limits.max_context_tokens} tokens) was "
+                    "reached."
+                )
+                continue
+            state.budget.record_context(tokens)
+            if isinstance(item, Work):
+                state.evidence[item_id] = item
+            else:
+                state.analyses[item_id] = item
+            state.reused.add(item_id)
+            parts.append(text)
+        if unknown:
+            parts.append(f"Not in the stored evidence: {', '.join(unknown)}.")
+        log.info("recall: %d item(s) requested, %d reused so far", len(ids), len(state.reused))
+        return "\n\n".join(parts)

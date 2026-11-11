@@ -217,7 +217,11 @@ class RainfallClient:
         geo_params = build_geocode_params(city, country_code, cfg.geocode_candidates)
         candidates, geo_cached = self._cached(cfg.geocoding_url, geo_params, parse_candidates)
         location, others = resolve_location(
-            candidates, city=city, region=region, dominance_ratio=cfg.dominance_ratio
+            candidates,
+            city=city,
+            region=region,
+            dominance_ratio=cfg.dominance_ratio,
+            same_place_km=cfg.same_place_km,
         )
 
         params = self._archive_params(location, start_year, end_year)

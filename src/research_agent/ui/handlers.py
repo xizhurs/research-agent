@@ -17,12 +17,17 @@ from research_agent.agent import InvalidQuestionError
 from research_agent.agent.tools import format_rainfall
 from research_agent.cli import _run_agent, format_trace
 from research_agent.config import Config
+from research_agent.conversation import (
+    ConversationService,
+    InMemorySessionStore,
+    SessionStore,
+)
 from research_agent.credentials import CredentialError, Credentials
 from research_agent.enso import EnsoAnalysis
 from research_agent.llm import LLMError
 from research_agent.rainfall import Archive, RainfallClient, RainfallError, RainfallRecord
 from research_agent.retrieval import OpenAlexClient, RetrievalError, Work
-from research_agent.tracing import answer_json, observe, set_content
+from research_agent.tracing import observe, set_content
 from research_agent.ui.plots import (
     DEFAULT_WINDOW_DAYS,
     PlotError,
@@ -297,25 +302,65 @@ def _ask_status(cfg: Config, stats) -> str:
     return " · ".join(parts)
 
 
+def make_service(cfg: Config, creds: Credentials, store: SessionStore) -> ConversationService:
+    """The conversation service the Ask tab uses; one store per app, one session per browser tab."""
+    return ConversationService(
+        lambda question, context: _run_agent(cfg, creds, question, context),
+        store,
+        cfg.conversation,
+        span_name="ui.ask",
+        tags=("ui",),
+    )
+
+
+def _transcript(service: ConversationService, session_id: str | None) -> str:
+    turns = service.turns(session_id)
+    if not turns:
+        return ""
+    lines = [f"{t.number}. {md(t.question)} *({t.relation})*" for t in turns]
+    return "**Conversation so far**\n\n" + "\n".join(lines)
+
+
 def ask(
     cfg: Config, creds: Credentials, question: str, view: str = "daily"
 ) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
-    """Run the agent. Returns ``(status, answer, figure, plot note, series)``.
+    """One question without follow-ups. Returns ``(status, answer, figure, plot note, series)``."""
+    store = InMemorySessionStore(1, 60)
+    return ask_turn(cfg, creds, make_service(cfg, creds, store), question, view, None)[:5]
 
-    The figure plots the first rainfall analysis the answer cites, in ``view`` (``"daily"`` or
+
+def ask_turn(
+    cfg: Config,
+    creds: Credentials,
+    service: ConversationService,
+    question: str,
+    view: str = "daily",
+    session_id: str | None = None,
+) -> tuple[
+    str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None, str | None, str
+]:
+    """Run one conversation turn.
+
+    Returns ``(status, answer, figure, plot note, series, session_id, transcript)``. The figure
+    plots the first rainfall analysis the answer cites, in ``view`` (``"daily"`` or
     ``"monthly"``), from the same cached daily series; the language model never sees or draws it.
     ``series`` is that analysis and its daily data, for ``replot`` (None if nothing was plotted).
+    On an error the session is unchanged.
     """
+    transcript = _transcript(service, session_id)
     if not question.strip():
-        return "**Error:** the question must not be empty", "", None, "", None
+        return (
+            "**Error:** the question must not be empty", "", None, "", None, session_id, transcript
+        )
     try:
         creds.require_openai_key()
-        with observe("ui.ask", "span", tags=("ui",)) as span:
-            set_content(span, input=question)
-            result = _run_agent(cfg, creds, question)
-            set_content(span, output=answer_json(result.answer))
+        outcome = service.ask(session_id, question)
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
-        return f"**LLM used: no** (stopped before an answer) · {_error(exc)}", "", None, "", None
+        status = f"**LLM used: no** (stopped before an answer) · {_error(exc)}"
+        return status, "", None, "", None, session_id, transcript
+    result = outcome.result
+    session_id = outcome.session_id
+    transcript = _transcript(service, session_id)
 
     body = _format_answer(result)
     records = [a for a in result.answer.data_references if not isinstance(a, EnsoAnalysis)]
@@ -335,4 +380,11 @@ def ask(
                     f"\n\n*Only {record.id} is plotted; "
                     f"{len(records) - 1} other analysis(es) not plotted.*"
                 )
-    return _ask_status(cfg, result.stats), body, figure, note, series
+    status = _ask_status(cfg, result.stats)
+    if outcome.turn.number > 1:
+        sent = outcome.context.tokens if outcome.context else 0
+        status += (
+            f" · turn {outcome.turn.number} ({outcome.turn.relation}), ~{sent:,} context tokens "
+            "from earlier turns"
+        )
+    return status, body, figure, note, series, session_id, transcript

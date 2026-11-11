@@ -51,6 +51,15 @@ strength_moderate = 1.0
 strength_strong = 1.5
 strength_very_strong = 2.0
 
+[conversation]
+max_context_tokens = 2000
+recent_turns = 3
+answer_digest_chars = 600
+max_stored_evidence = 50
+max_recall_per_call = 5
+max_sessions = 100
+session_ttl_minutes = 120
+
 [rainfall]
 geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
 archive_url = "https://archive-api.open-meteo.com/v1/archive"
@@ -70,6 +79,7 @@ min_year_coverage = 0.9
 top_events = 5
 geocode_candidates = 10
 dominance_ratio = 10.0
+same_place_km = 25.0
 dry_day_mm = 1.0
 """
 

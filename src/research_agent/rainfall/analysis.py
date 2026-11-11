@@ -91,13 +91,17 @@ def excluded_years_caveat(label: str, excluded: Sequence[tuple[int, str]], what:
 
 
 def other_matches_caveat(
-    location: Location, other_matches: Sequence[Location], dominance_ratio: float
+    location: Location,
+    other_matches: Sequence[Location],
+    dominance_ratio: float,
+    same_place_km: float,
 ) -> str:
     names = "; ".join(m.label for m in other_matches[:3])
     return (
         f"'{location.name}' also matched {len(other_matches)} other place(s) (for example "
-        f"{names}); {location.label} was used because its population is at least "
-        f"{dominance_ratio:g} times larger."
+        f"{names}); {location.label} was used because each other match lies within "
+        f"{same_place_km:g} km of a larger match (treated as the same place, about one ERA5 grid "
+        f"cell) or has at most 1/{dominance_ratio:g} of its population."
     )
 
 
@@ -205,7 +209,11 @@ def compute_analysis(
             "years' record only."
         )
     if other_matches:
-        caveats.append(other_matches_caveat(location, other_matches, config.dominance_ratio))
+        caveats.append(
+            other_matches_caveat(
+                location, other_matches, config.dominance_ratio, config.same_place_km
+            )
+        )
 
     return RainfallAnalysis(
         id="",

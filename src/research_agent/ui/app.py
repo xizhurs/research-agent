@@ -7,6 +7,7 @@ from functools import partial
 import gradio as gr
 
 from research_agent.config import Config
+from research_agent.conversation import InMemorySessionStore
 from research_agent.credentials import Credentials
 from research_agent.ui import handlers
 from research_agent.ui.plots import DEFAULT_WINDOW_DAYS
@@ -33,7 +34,15 @@ def _view_radio() -> gr.Radio:
 
 
 def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
-    """Build the interface. Handlers get the config and credentials; nothing is global."""
+    """Build the interface. Handlers get the config and credentials; nothing is global.
+
+    Ask-tab conversations live in one in-memory store per app; each browser tab holds only its
+    own session ID (``gr.State``), so tabs and users never see each other's turns.
+    """
+    conv = cfg.conversation
+    service = handlers.make_service(
+        cfg, creds, InMemorySessionStore(conv.max_sessions, conv.session_ttl_minutes * 60)
+    )
     with gr.Blocks(title="GeoAI research agent", analytics_enabled=False) as demo:
         gr.Markdown("# GeoAI research agent")
 
@@ -42,23 +51,38 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 gr.HTML(_badge(True, f"Uses the LLM ({cfg.llm.model}): costs tokens"))
                 gr.Markdown(
                     "A GeoAI / remote-sensing literature or extreme-rainfall question. The model "
-                    "decides which tools to call; the numbers come from code, not from the model."
+                    "decides which tools to call; the numbers come from code, not from the model. "
+                    "Follow-ups keep the context (for example *what about Rotterdam?*); press "
+                    "*New conversation* to start over."
                 )
+                ask_transcript = gr.Markdown()
                 question = gr.Textbox(
-                    label="Question", lines=3, max_length=cfg.limits.max_question_chars
+                    label="Question or follow-up",
+                    lines=3,
+                    max_length=cfg.limits.max_question_chars,
                 )
-                ask_button = gr.Button("Ask", variant="primary")
+                with gr.Row():
+                    ask_button = gr.Button("Ask", variant="primary")
+                    new_button = gr.Button("New conversation")
                 ask_status = gr.Markdown()
                 ask_answer = gr.Markdown()
                 ask_view = _view_radio()
                 ask_plot = gr.Plot(label="Rainfall vs baseline")
                 ask_note = gr.Markdown()
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
+                ask_session = gr.State()  # this browser tab's conversation ID
+                ask_outputs = [ask_status, ask_answer, ask_plot, ask_note, ask_series]
                 ask_button.click(
-                    partial(handlers.ask, cfg, creds),
-                    [question, ask_view],
-                    [ask_status, ask_answer, ask_plot, ask_note, ask_series],
+                    partial(handlers.ask_turn, cfg, creds, service),
+                    [question, ask_view, ask_session],
+                    [*ask_outputs, ask_session, ask_transcript],
                     api_name="ask",
+                )
+                new_button.click(
+                    lambda: ("", "", None, "", None, None, ""),
+                    None,
+                    [*ask_outputs, ask_session, ask_transcript],
+                    api_name="new_conversation",
                 )
 
                 def redraw_ask(series, view):

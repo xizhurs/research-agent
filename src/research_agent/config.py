@@ -93,6 +93,7 @@ class RainfallConfig:
     top_events: int
     geocode_candidates: int
     dominance_ratio: float  # top candidate wins only if its population is this many times larger
+    same_place_km: float  # a candidate this close to a larger one is merged into it (districts)
     dry_day_mm: float  # a day with less precipitation than this is dry (ETCCDI CDD uses 1 mm)
 
     def __post_init__(self) -> None:
@@ -110,6 +111,7 @@ class RainfallConfig:
             "max_backoff_seconds",
             "cache_ttl_days",
             "dominance_ratio",
+            "same_place_km",
             "dry_day_mm",
         ):
             value = getattr(self, name)
@@ -232,6 +234,27 @@ class ReportingConfig:
 
 
 @dataclass(frozen=True)
+class ConversationConfig:
+    """Follow-up questions: how much of earlier turns is sent, and how sessions are kept."""
+
+    max_context_tokens: int  # earlier turns, task state and evidence index sent with a follow-up
+    recent_turns: int  # turns sent as messages; older ones become one-line summaries
+    answer_digest_chars: int  # an earlier answer is cut to this many characters
+    max_stored_evidence: int  # works and analyses kept per session for recall_evidence
+    max_recall_per_call: int
+    max_sessions: int  # in-memory sessions kept (least recently used dropped first)
+    session_ttl_minutes: int  # a session idle this long is dropped
+
+    def __post_init__(self) -> None:
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(
+                    f"conversation.{f.name} must be a positive integer, got {value!r}"
+                )
+
+
+@dataclass(frozen=True)
 class Config:
     limits: Limits
     openalex: OpenAlexConfig
@@ -239,6 +262,7 @@ class Config:
     reporting: ReportingConfig
     rainfall: RainfallConfig
     enso: EnsoConfig
+    conversation: ConversationConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -272,4 +296,5 @@ def load_config(path: Path) -> Config:
         reporting=_build_section(ReportingConfig, raw, "reporting", path),
         rainfall=_build_section(RainfallConfig, raw, "rainfall", path),
         enso=_build_section(EnsoConfig, raw, "enso", path),
+        conversation=_build_section(ConversationConfig, raw, "conversation", path),
     )
