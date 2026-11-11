@@ -172,6 +172,7 @@ def rain(monkeypatch):
     monkeypatch.setattr(handlers, "RainfallClient", FakeRainfall)
     monkeypatch.setattr(handlers, "daily_figure", FakeFigure("daily"))
     monkeypatch.setattr(handlers, "monthly_figure", FakeFigure("monthly"))
+    monkeypatch.setattr(handlers, "yearly_figure", FakeFigure("yearly"))
     return FakeRainfall
 
 
@@ -215,6 +216,8 @@ def test_rainfall_passes_options_and_returns_statistics_figure_and_note(
             "event_date": date(2002, 7, 1),
             "metric": "wet",
             "event_year": None,
+            "scale": "daily",
+            "event_month": None,
         }
     ]
     assert status.startswith(handlers.NO_LLM) and "Zhengzhou, Henan, China" in status
@@ -524,3 +527,26 @@ def test_separate_browser_tabs_do_not_share_a_conversation(run_agent, base_confi
     *_, tab_b, transcript_b = handlers.ask_turn(base_config, CREDS, service, "question in tab B")
     assert tab_a != tab_b and "tab A" not in transcript_b
     assert run_agent.contexts == [None, None]
+
+
+def test_the_ask_plot_follows_the_scale_of_the_analysis(
+    run_agent, rain, base_config, make_analysis
+):
+    from research_agent.rainfall import PeriodTotal, YearlyAnalysis
+
+    daily = replace(make_analysis(), id="R1")
+    yearly = YearlyAnalysis(
+        id="R1", location=daily.location, provenance=daily.provenance, start_year=2016,
+        end_year=2025, baseline_from_year=1991, totals=(PeriodTotal(2024, None, 900.0),),
+        excluded_years=(), baseline=None,
+        ranking_available=False, wettest=(), driest=(), year_focus=None, caveats=(),
+    )
+    for record, view in ((yearly, "yearly"), (daily, "daily")):
+        answer = Answer((Claim("x", "evidence", ("R1",)),), (), (), data_references=(record,))
+        run_agent.outcome["value"] = agent_result(answer)
+        FakeFigure.calls = []
+        _, _, figure, _, series, *_ = handlers.ask_turn(
+            base_config, CREDS, _service(base_config), "q"
+        )
+        assert figure == f"{view.upper()} FIGURE" and handlers.view_for(series[0]) == view
+    assert rain.archive_calls[0] == ("Zhengzhou", 1991, 2025)  # the series the analysis used

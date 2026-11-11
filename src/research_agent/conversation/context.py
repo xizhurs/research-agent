@@ -44,6 +44,8 @@ def render_state(state: TaskState) -> str:
         lines.append(f"- Event date: {state.event_date}")
     if state.event_year:
         lines.append(f"- Event year: {state.event_year}")
+    if state.event_month:
+        lines.append(f"- Event month: {state.event_month}")
     if state.metrics:
         lines.append("- Metrics: " + ", ".join(state.metrics))
     if state.sources:

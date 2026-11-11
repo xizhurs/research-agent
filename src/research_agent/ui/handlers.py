@@ -34,6 +34,7 @@ from research_agent.ui.plots import (
     daily_figure,
     default_plot_year,
     monthly_figure,
+    yearly_figure,
 )
 
 if TYPE_CHECKING:
@@ -156,6 +157,8 @@ def _plot(
             )
         if view == "monthly":
             return monthly_figure(record, archive, year=year, config=cfg.rainfall)
+        if view == "yearly":
+            return yearly_figure(record, archive, year=year, config=cfg.rainfall)
         raise ValueError(f"unknown plot view {view!r}")
     except (PlotError, RainfallError, ValueError) as exc:
         return None, f"No plot: {md(exc)}"
@@ -164,6 +167,11 @@ def _plot(
 def plotted_year(series: tuple[RainfallRecord, Archive] | None) -> int | None:
     """The year a new plot shows by default, to fill the year box (None: nothing plotted)."""
     return default_plot_year(series[0]) if series else None
+
+
+def view_for(record: RainfallRecord) -> str:
+    """The plot view that matches an analysis: its scale (daily, monthly or yearly)."""
+    return record.scale
 
 
 def replot(
@@ -201,8 +209,10 @@ def rainfall(
     plot_year: float | None,
     window_days: float,
     view: str = "daily",
+    scale: str = "daily",
+    event_month: float | None = None,
 ) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
-    """ERA5 rainfall analysis.
+    """ERA5 rainfall analysis at a daily, monthly or yearly ``scale``.
 
     Returns ``(status, statistics, figure, plot note, series)``; ``series`` is the record and
     daily data for ``replot`` (None when the analysis failed).
@@ -217,6 +227,7 @@ def rainfall(
             _whole(end_year, "end year"),
             _whole(event_year, "event year"),
             _whole(plot_year, "plot year"),
+            _whole(event_month, "event month"),
         )
         window = _whole(window_days, "smoothing window") or DEFAULT_WINDOW_DAYS
         with (
@@ -233,6 +244,8 @@ def rainfall(
                 event_date=day,
                 metric=metric,
                 event_year=years[2],
+                scale=scale,
+                event_month=years[4],
             )
             span.set_attribute("research_agent.cached", record.provenance.from_cache)
             set_content(span, output=format_rainfall(replace(record, id="R1")))
@@ -283,9 +296,8 @@ def _format_answer(result) -> str:
                 )
                 continue
             p = a.provenance
-            what = "dry spells and annual totals" if a.metric == "dry" else "Rx1day"
             out.append(
-                f"- **[{a.id}]** {md(a.location.label)}: {what} {a.valid_years[0]}-"
+                f"- **[{a.id}]** {md(a.location.label)}: {a.summary} {a.valid_years[0]}-"
                 f"{a.valid_years[-1]}. {md(p.dataset)}; grid cell "
                 f"({p.grid_latitude:.2f}, {p.grid_longitude:.2f}). {md(p.license)}."
             )
@@ -342,7 +354,7 @@ def ask_turn(
     creds: Credentials,
     service: ConversationService,
     question: str,
-    view: str = "daily",
+    view: str | None = None,
     session_id: str | None = None,
 ) -> tuple[
     str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None, str | None, str
@@ -350,8 +362,9 @@ def ask_turn(
     """Run one conversation turn.
 
     Returns ``(status, answer, figure, plot note, series, session_id, transcript)``. The figure
-    plots the first rainfall analysis the answer cites, in ``view`` (``"daily"`` or
-    ``"monthly"``), from the same cached daily series; the language model never sees or draws it.
+    plots the first rainfall analysis the answer cites, in ``view`` (``"daily"``, ``"monthly"``
+    or ``"yearly"``; None: the analysis's own scale), from the same cached daily series; the
+    language model never sees or draws it.
     ``series`` is that analysis and its daily data, for ``replot`` (None if nothing was plotted).
     On an error the session is unchanged.
     """
@@ -377,11 +390,14 @@ def ask_turn(
         record = records[0]
         try:
             with RainfallClient(cfg.rainfall) as client:
-                archive = client.fetch_archive(record.location, record.start_year, record.end_year)
+                archive = client.fetch_archive(
+                    record.location, record.series_start_year, record.end_year
+                )
         except RainfallError as exc:
             note = f"No plot: {md(exc)}"
         else:
             series = (record, archive)
+            view = view or view_for(record)
             figure, note = _plot(cfg, record, None, None, DEFAULT_WINDOW_DAYS, archive, view)
             if len(records) > 1:  # said here, not in the note, which a redraw replaces
                 body += (

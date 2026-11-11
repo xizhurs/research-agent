@@ -91,6 +91,8 @@ class RainfallAnalyzer(Protocol):
         event_date: date | None = None,
         metric: str = "wet",
         event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
     ) -> tuple[RainfallRecord, Archive]: ...
 
 
@@ -106,10 +108,13 @@ class EnsoAnalyzer(Protocol):
 
 
 def _trace_name(call: ToolCall) -> str:
-    """The tool as the model chose it; the rainfall tool also shows its metric, e.g. ``[dry]``."""
+    """The tool as the model chose it; the rainfall tool also shows its kind: ``[wet]`` or
+    ``[dry]`` for the daily scale, ``[yearly]`` or ``[monthly]`` otherwise."""
     if call.name != RAINFALL_TOOL_NAME:
         return call.name
-    return f"{call.name}[{call.arguments.get('metric') or 'wet'}]"
+    scale = call.arguments.get("scale") or "daily"
+    kind = call.arguments.get("metric") or "wet" if scale == "daily" else scale
+    return f"{call.name}[{kind}]"
 
 
 def _tool_calls_json(calls: Sequence[ToolCall]) -> list[dict[str, Any]]:
@@ -527,6 +532,8 @@ class ResearchAgent:
                 event_date=args.event_date,
                 metric=args.metric,
                 event_year=args.event_year,
+                scale=args.scale,
+                event_month=args.event_month,
             )
         except InvalidRainfallQueryError as exc:
             return f"Error: {exc}."  # rejected before any request, so it costs no analysis
@@ -557,7 +564,7 @@ class ResearchAgent:
         tokens = estimate_tokens(text)
         log.info(
             'rainfall[%s] "%s": %d valid year(s), ~%d tokens (%s)',
-            analysis.metric,
+            analysis.summary,
             analysis.location.label,
             len(analysis.valid_years),
             tokens,

@@ -95,6 +95,13 @@ class RainfallAnalysis:
     event: EventContext | None
     caveats: tuple[str, ...]
     metric: ClassVar[str] = "wet"
+    scale: ClassVar[str] = "daily"
+    summary: ClassVar[str] = "Rx1day"
+
+    @property
+    def series_start_year(self) -> int:
+        """First year of the daily series this was computed from (to fetch it again)."""
+        return self.start_year
 
     @property
     def valid_years(self) -> tuple[int, ...]:
@@ -177,10 +184,119 @@ class DryAnalysis:
     event: DryEventContext | None
     caveats: tuple[str, ...]
     metric: ClassVar[str] = "dry"
+    scale: ClassVar[str] = "daily"
+    summary: ClassVar[str] = "dry spells and annual totals"
+
+    @property
+    def series_start_year(self) -> int:
+        return self.start_year
 
     @property
     def valid_years(self) -> tuple[int, ...]:
         return tuple(a.year for a in self.annual)
 
 
-RainfallRecord = RainfallAnalysis | DryAnalysis
+# --- totals per year and per month ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PeriodTotal:
+    """Precipitation summed over one year (``month`` None) or one month."""
+
+    year: int
+    month: int | None
+    total_mm: float
+
+
+@dataclass(frozen=True)
+class TotalsBaseline:
+    """Typical totals over the baseline years: mean, median and a percentile band."""
+
+    start_year: int
+    end_year: int
+    years: int  # totals in the baseline period that were used
+    mean_mm: float
+    median_mm: float
+    low_percentile: int
+    high_percentile: int
+    low_mm: float
+    high_mm: float
+
+
+@dataclass(frozen=True)
+class TotalContext:
+    """How one year's or one month's total compares."""
+
+    year: int
+    month: int | None
+    total_mm: float | None  # None: not enough daily data for this period
+    rank_wettest: int | None  # 1 = wettest of ``compared``; None when ranks are withheld
+    compared: int  # totals it was ranked against (same calendar month for a month)
+    percent_drier: float | None  # % of compared totals strictly lower
+    ratio_to_baseline_mean: float | None
+    band_position: str | None  # "below", "within" or "above" the baseline band; None without one
+
+
+@dataclass(frozen=True)
+class YearlyAnalysis:
+    """Annual totals: wettest and driest years, an optional year in focus. Cited as ``R…``."""
+
+    id: str
+    location: Location
+    provenance: Provenance
+    start_year: int  # requested period
+    end_year: int
+    baseline_from_year: int  # the series starts here so the baseline is always available
+    totals: tuple[PeriodTotal, ...]  # valid years of the requested period, in year order
+    excluded_years: tuple[tuple[int, str], ...]
+    baseline: TotalsBaseline | None
+    ranking_available: bool
+    wettest: tuple[PeriodTotal, ...]
+    driest: tuple[PeriodTotal, ...]
+    year_focus: TotalContext | None
+    caveats: tuple[str, ...]
+    metric: ClassVar[str] = "total"
+    scale: ClassVar[str] = "yearly"
+    summary: ClassVar[str] = "annual totals"
+
+    @property
+    def series_start_year(self) -> int:
+        return self.baseline_from_year
+
+    @property
+    def valid_years(self) -> tuple[int, ...]:
+        return tuple(t.year for t in self.totals)
+
+
+@dataclass(frozen=True)
+class MonthlyAnalysis:
+    """Monthly totals against the same calendar month in other years. Cited as ``R…``."""
+
+    id: str
+    location: Location
+    provenance: Provenance
+    start_year: int  # requested period
+    end_year: int
+    baseline_from_year: int
+    years: tuple[int, ...]  # years of the period with at least one month of enough data
+    months_used: int  # months of the period with enough daily data
+    months_missing: int  # complete months of the period left out for lack of data
+    climate: tuple[TotalsBaseline | None, ...]  # per calendar month, January first
+    wettest: tuple[PeriodTotal, ...]  # wettest months of the period
+    month_focus: TotalContext | None
+    year_months: tuple[TotalContext, ...]  # the 12 months of a year in focus (no month given)
+    caveats: tuple[str, ...]
+    metric: ClassVar[str] = "total"
+    scale: ClassVar[str] = "monthly"
+    summary: ClassVar[str] = "monthly totals"
+
+    @property
+    def series_start_year(self) -> int:
+        return self.baseline_from_year
+
+    @property
+    def valid_years(self) -> tuple[int, ...]:
+        return self.years
+
+
+RainfallRecord = RainfallAnalysis | DryAnalysis | YearlyAnalysis | MonthlyAnalysis

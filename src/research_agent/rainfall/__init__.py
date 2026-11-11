@@ -22,9 +22,14 @@ from research_agent.rainfall.models import (
     DryYearContext,
     EventContext,
     Location,
+    MonthlyAnalysis,
+    PeriodTotal,
     Provenance,
     RainfallAnalysis,
     RainfallRecord,
+    TotalContext,
+    TotalsBaseline,
+    YearlyAnalysis,
 )
 
 __all__ = [
@@ -43,6 +48,8 @@ __all__ = [
     "InvalidRainfallQueryError",
     "Location",
     "LocationNotFoundError",
+    "MonthlyAnalysis",
+    "PeriodTotal",
     "Provenance",
     "RainfallAnalysis",
     "RainfallApiError",
@@ -51,4 +58,7 @@ __all__ = [
     "RainfallNetworkError",
     "RainfallRateLimitError",
     "RainfallRecord",
+    "TotalContext",
+    "TotalsBaseline",
+    "YearlyAnalysis",
 ]

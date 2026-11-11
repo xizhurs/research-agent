@@ -1,7 +1,9 @@
-"""The precipitation plots: one year of ERA5 values against a baseline, daily or monthly.
+"""The precipitation plots: ERA5 values against a baseline, daily, monthly or yearly.
 
-Daily: bars against a smoothed day-of-year mean. Monthly: bars of monthly totals against the
-10th-90th percentile band of the baseline years (see ``rainfall/climatology.py``). Plotly is
+Daily: one year's bars against a smoothed day-of-year mean. Monthly: one year's monthly totals
+against the 10th-90th percentile band of the baseline years (see ``rainfall/climatology.py``).
+Yearly: the annual totals of the analysed period against the band and mean of the baseline
+years' totals. Plotly is
 imported inside the figure functions so the rest of the interface (and its tests) work without
 the optional ``ui`` extra.
 """
@@ -14,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from research_agent.config import RainfallConfig
 from research_agent.rainfall import Archive, RainfallRecord
+from research_agent.rainfall.analysis import classify_years
 from research_agent.rainfall.climatology import daily_baseline, monthly_baseline, monthly_totals
 
 if TYPE_CHECKING:
@@ -31,12 +34,18 @@ class PlotError(ValueError):
 
 
 def default_plot_year(record: RainfallRecord) -> int:
-    """The year a question is about: the event's year, else the compared year, else the latest."""
-    if record.event is not None:
-        return int(record.event.date[:4])
-    year_focus = getattr(record, "year_focus", None)  # dry analyses only
-    if year_focus is not None:
-        return year_focus.year
+    """The year a question is about: the event's year, else the year or month in focus, else the
+    latest valid year."""
+    event = getattr(record, "event", None)  # daily analyses
+    if event is not None:
+        return int(event.date[:4])
+    for name in ("year_focus", "month_focus"):  # dry, yearly; monthly
+        focus = getattr(record, name, None)
+        if focus is not None:
+            return focus.year
+    year_months = getattr(record, "year_months", ())  # monthly, a whole year in focus
+    if year_months:
+        return year_months[0].year
     return record.valid_years[-1]
 
 
@@ -216,5 +225,86 @@ def monthly_figure(
         height=420,
         margin={"l": 50, "r": 20, "t": 60, "b": 40},
         legend={"orientation": "h", "y": -0.15},
+    )
+    return fig, note.strip()
+
+
+def yearly_figure(
+    record: RainfallRecord,
+    archive: Archive,
+    *,
+    year: int | None,
+    config: RainfallConfig,
+    today: Callable[[], date] = date.today,
+) -> tuple[Figure, str]:
+    """Return ``(figure, note)``: annual totals of the analysed years against the baseline.
+
+    Bars are the totals of the valid years of the analysed period (complete years with enough
+    daily data); the band is the 10th to 90th percentile and the line the mean of the baseline
+    years' totals in the daily series. ``year``, if valid, is highlighted. Raises ``PlotError``
+    if no year of the period has enough data.
+    """
+    import plotly.graph_objects as go
+
+    from research_agent.rainfall.totals import baseline_of
+
+    last_complete = today().year - 1
+    counts: dict[int, int] = {}
+    sums: dict[int, float] = {}
+    for day, mm in zip(archive.dates, archive.values, strict=True):
+        if mm is not None:
+            counts[day.year] = counts.get(day.year, 0) + 1
+            sums[day.year] = sums.get(day.year, 0.0) + mm
+    cov = config.min_year_coverage
+    years, _ = classify_years(counts, record.start_year, record.end_year, last_complete, cov)
+    if not years:
+        raise PlotError(
+            f"no complete year with enough data between {record.start_year} and "
+            f"{record.end_year}"
+        )
+    base_years, _ = classify_years(
+        counts, config.baseline_start_year, config.baseline_end_year, last_complete, cov
+    )
+    base = baseline_of([sums[y] for y in base_years], config)
+
+    fig = go.Figure()
+    if base is None:
+        note = (
+            f"No baseline: fewer than {config.min_years} valid years of "
+            f"{config.baseline_start_year}-{config.baseline_end_year} are in the daily series."
+        )
+    else:
+        fig.add_hrect(
+            y0=base.low_mm,
+            y1=base.high_mm,
+            fillcolor=BAND_COLOR,
+            line_width=0,
+            layer="below",
+        )
+        fig.add_hline(y=base.mean_mm, line_color=BASELINE_COLOR, line_dash="dash")
+        outside = base.low_percentile + 100 - base.high_percentile
+        note = (
+            f"Shaded: percentile {base.low_percentile} to {base.high_percentile} of the annual "
+            f"totals of {base.years} valid years of {base.start_year}-{base.end_year} (about "
+            f"{outside}% of years fall outside it by construction); dashed line: their mean, "
+            f"{base.mean_mm:.0f} mm."
+        )
+    fig.add_bar(
+        x=years,
+        y=[sums[y] for y in years],
+        name="annual total",
+        marker_color=[BASELINE_COLOR if y == year else BAR_COLOR for y in years],
+        hovertemplate="%{x}: %{y:.0f} mm<extra></extra>",
+    )
+    if year in years:
+        note += f" {year} is highlighted."
+    note += " Source: ERA5 reanalysis grid cell, not a rain gauge."
+    fig.update_layout(
+        title=f"{record.location.label}: annual precipitation {years[0]}-{years[-1]}",
+        yaxis_title="mm per year",
+        template="plotly_white",
+        height=420,
+        margin={"l": 50, "r": 20, "t": 60, "b": 40},
+        showlegend=False,
     )
     return fig, note.strip()

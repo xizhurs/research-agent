@@ -14,7 +14,15 @@ from typing import Any
 from research_agent.agent.budget import estimate_tokens
 from research_agent.enso import PHASE_LABELS, EnsoAnalysis, EnsoRun
 from research_agent.llm import ToolSpec
-from research_agent.rainfall import DryAnalysis, RainfallAnalysis, RainfallRecord
+from research_agent.rainfall import (
+    DryAnalysis,
+    MonthlyAnalysis,
+    RainfallAnalysis,
+    RainfallRecord,
+    TotalContext,
+    TotalsBaseline,
+    YearlyAnalysis,
+)
 from research_agent.retrieval import SearchResult, Work
 
 SEARCH_TOOL_NAME = "search_literature"
@@ -49,22 +57,33 @@ RAINFALL_TOOL_NAME = "analyze_rainfall_extremes"
 RAINFALL_TOOL = ToolSpec(
     name=RAINFALL_TOOL_NAME,
     description=(
-        "Quantify historical rainfall extremes in one city from ERA5 reanalysis (daily "
-        "precipitation). metric='wet' (default): Rx1day, the largest one-day rainfall of each "
-        "year, a climatological baseline, the largest events and, if event_date is given, how "
-        "extreme that day was. metric='dry': consecutive dry days (CDD, longest run of days "
-        "under 1 mm), the longest dry spells, the driest years by annual total and, with "
-        "event_year or event_date, how dry that year or dry spell was. A dry spell is not a "
-        "drought index. Returns a numeric record with an ID such as R1. Use it for quantitative "
-        "questions about past rainfall or dry spells at a place; use search_literature for "
-        "explanations and mechanisms. Put only the place name in 'city' and use 'country_code' "
-        "(ISO alpha-2, e.g. FR) and 'region' (state or province) to disambiguate. Not for "
-        "forecasts."
+        "Quantify past rainfall in one city from ERA5 reanalysis (daily precipitation), at one "
+        "time scale. scale='yearly': annual totals, the wettest and driest years, how a year "
+        "(event_year) compares with the 1991-2020 baseline; use it for general questions such as "
+        "'how was the rainfall in the last 10 years' or 'how wet was 2023'. scale='monthly': "
+        "monthly totals, the wettest months, how a month (event_year + event_month) or each "
+        "month of a year (event_year) compares with the same calendar month. scale='daily': "
+        "single days and spells; metric='wet' gives Rx1day (largest one-day rainfall of each "
+        "year), the largest events and how extreme a day (event_date) was; metric='dry' gives "
+        "consecutive dry days (CDD), the longest dry spells, the driest years and how dry a year "
+        "or spell was. A dry spell is not a drought index. Returns a numeric record with an ID "
+        "such as R1. Use search_literature for explanations and mechanisms. Put only the place "
+        "name in 'city' and use 'country_code' (ISO alpha-2, e.g. FR) and 'region' (state or "
+        "province) to disambiguate. Not for forecasts."
     ),
     parameters={
         "type": "object",
         "properties": {
             "city": {"type": "string", "description": "City name only, e.g. 'Zhengzhou'."},
+            "scale": {
+                "type": "string",
+                "enum": ["yearly", "monthly", "daily"],
+                "description": (
+                    "'yearly' for annual amounts and general questions, 'monthly' for months or "
+                    "seasons, 'daily' for heavy-rain days (metric 'wet') or dry spells (metric "
+                    "'dry')."
+                ),
+            },
             "country_code": {
                 "type": "string",
                 "description": "Optional. ISO 3166-1 alpha-2 country code, e.g. 'CN'.",
@@ -81,21 +100,31 @@ RAINFALL_TOOL = ToolSpec(
             "event_date": {
                 "type": "string",
                 "description": (
-                    "Optional. A day to assess, as YYYY-MM-DD (metric 'dry': a day inside the "
-                    "dry spell of interest)."
+                    "Optional, scale 'daily' only. A day to assess, as YYYY-MM-DD (metric 'dry': "
+                    "a day inside the dry spell of interest)."
                 ),
             },
             "metric": {
                 "type": "string",
                 "enum": ["wet", "dry"],
-                "description": "Optional. 'wet' (default) for heavy rain, 'dry' for dry spells.",
+                "description": (
+                    "Optional, scale 'daily' only. 'wet' (default) for heavy-rain days, 'dry' "
+                    "for dry spells."
+                ),
             },
             "event_year": {
                 "type": "integer",
-                "description": "Optional, metric 'dry' only. A year to compare, e.g. 2022.",
+                "description": (
+                    "Optional. A year to assess, e.g. 2022 (scale 'yearly' or 'monthly', or "
+                    "scale 'daily' with metric 'dry')."
+                ),
+            },
+            "event_month": {
+                "type": "integer",
+                "description": "Optional, scale 'monthly' with event_year. A month, 1-12.",
             },
         },
-        "required": ["city"],
+        "required": ["city", "scale"],
     },
 )
 
@@ -288,6 +317,8 @@ class RainfallArgs:
     event_date: date | None
     metric: str
     event_year: int | None
+    scale: str = "daily"
+    event_month: int | None = None
 
 
 def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
@@ -311,6 +342,10 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
     metric = _optional_str(arguments, "metric") or "wet"
     if metric not in ("wet", "dry"):
         raise ToolArgumentError("'metric' must be 'wet' or 'dry'")
+    # Required in the schema; a call without it keeps the original (daily) behaviour.
+    scale = _optional_str(arguments, "scale") or "daily"
+    if scale not in ("daily", "monthly", "yearly"):
+        raise ToolArgumentError("'scale' must be 'yearly', 'monthly' or 'daily'")
     return RainfallArgs(
         city=city,
         country_code=_optional_str(arguments, "country_code"),
@@ -320,6 +355,8 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
         event_date=event_date,
         metric=metric,
         event_year=_optional_int(arguments, "event_year"),
+        scale=scale,
+        event_month=_optional_int(arguments, "event_month"),
     )
 
 
@@ -349,9 +386,120 @@ def _mm(value: float) -> str:
 
 def format_rainfall(record: RainfallRecord) -> str:
     """Render one analysis for the model: compact, deterministic, numbers only from code."""
+    if isinstance(record, YearlyAnalysis):
+        return _format_yearly(record)
+    if isinstance(record, MonthlyAnalysis):
+        return _format_monthly(record)
     if isinstance(record, DryAnalysis):
         return _format_dry(record)
     return _format_wet(record)
+
+
+MAX_YEARS_LISTED = 30  # a yearly result lists every year of a period up to this long
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _band(b: TotalsBaseline) -> str:
+    return (
+        f"mean {_mm(b.mean_mm)}, median {_mm(b.median_mm)}, {b.low_percentile}th-"
+        f"{b.high_percentile}th percentile band {_mm(b.low_mm)} to {_mm(b.high_mm)}"
+    )
+
+
+def _total_context(c: TotalContext, what: str) -> str:
+    if c.total_mm is None:
+        return f"{what}: not assessed (not ended or too little data)"
+    parts = [f"{what}: {_mm(c.total_mm)}"]
+    if c.rank_wettest is not None and c.percent_drier is not None:
+        parts.append(
+            f"rank {c.rank_wettest} of {c.compared} (1 = wettest; {c.percent_drier:.0f}% were "
+            "drier)"
+        )
+    else:
+        parts.append("rank withheld: too few comparable totals")
+    if c.ratio_to_baseline_mean is not None:
+        parts.append(f"{c.ratio_to_baseline_mean:.2f}x the baseline mean")
+    if c.band_position is not None:
+        parts.append(f"{c.band_position} the baseline band")
+    return ", ".join(parts)
+
+
+def _header(record: RainfallRecord, title: str) -> list[str]:
+    loc, prov = record.location, record.provenance
+    return [
+        f"[{record.id}] {title} for {loc.label} ({loc.latitude:.3f}, {loc.longitude:.3f}).",
+        f"Data: {prov.dataset}; grid cell centre ({prov.grid_latitude:.2f}, "
+        f"{prov.grid_longitude:.2f}); {prov.variable}.",
+    ]
+
+
+def _format_yearly(a: YearlyAnalysis) -> str:
+    lines = _header(a, "Annual precipitation totals")
+    lines.append(
+        f"Valid years: {len(a.totals)} ({a.valid_years[0]}-{a.valid_years[-1]}), "
+        f"{len(a.excluded_years)} excluded."
+    )
+    base = a.baseline
+    if base:
+        lines.append(
+            f"Baseline {base.start_year}-{base.end_year} annual total ({base.years} years): "
+            f"{_band(base)}."
+        )
+    if len(a.totals) <= MAX_YEARS_LISTED:
+        listed = []
+        for t in a.totals:
+            ratio = f" ({t.total_mm / base.mean_mm:.2f}x)" if base and base.mean_mm > 0 else ""
+            listed.append(f"{t.year} {_mm(t.total_mm)}{ratio}")
+        suffix = " (x = times the baseline mean)" if base else ""
+        lines.append(f"Every year{suffix}: " + "; ".join(listed) + ".")
+    lines.append(
+        "Wettest years: "
+        + "; ".join(f"{i}) {t.year} {_mm(t.total_mm)}" for i, t in enumerate(a.wettest, 1))
+        + "."
+    )
+    lines.append(
+        "Driest years: "
+        + "; ".join(f"{i}) {t.year} {_mm(t.total_mm)}" for i, t in enumerate(a.driest, 1))
+        + "."
+    )
+    if a.year_focus:
+        lines.append(_total_context(a.year_focus, f"Year {a.year_focus.year}") + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
+
+
+def _format_monthly(a: MonthlyAnalysis) -> str:
+    lines = _header(a, "Monthly precipitation totals")
+    lines.append(
+        f"Months with enough data: {a.months_used} ({a.years[0]}-{a.years[-1]}), "
+        f"{a.months_missing} left out."
+    )
+    climate = [
+        f"{MONTHS[i]} {_band(b)}" for i, b in enumerate(a.climate) if b is not None
+    ]
+    if climate:
+        first = next(b for b in a.climate if b is not None)
+        lines.append(
+            f"Baseline {first.start_year}-{first.end_year} per calendar month: "
+            + "; ".join(climate)
+            + "."
+        )
+    lines.append(
+        "Wettest months: "
+        + "; ".join(
+            f"{i}) {MONTHS[t.month - 1]} {t.year} {_mm(t.total_mm)}"
+            for i, t in enumerate(a.wettest, 1)
+            if t.month is not None
+        )
+        + "."
+    )
+    if a.month_focus:
+        c = a.month_focus
+        lines.append(_total_context(c, f"{MONTHS[c.month - 1]} {c.year}") + ".")
+    for c in a.year_months:
+        lines.append(_total_context(c, f"{MONTHS[c.month - 1]} {c.year}") + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
 
 
 def _format_wet(analysis: RainfallAnalysis) -> str:
