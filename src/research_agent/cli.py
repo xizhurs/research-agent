@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -248,7 +249,21 @@ def ui(
             raise
         typer.echo("error: the web interface needs the extra: uv sync --extra ui", err=True)
         raise typer.Exit(code=1) from exc
-    build_app(cfg, creds).launch(server_name=host, server_port=port)
+    # Optional login, from the environment only (never a flag, so it stays out of shell history).
+    username, password = os.environ.get("UI_USERNAME"), os.environ.get("UI_PASSWORD")
+    if bool(username) != bool(password):
+        typer.echo("error: set both UI_USERNAME and UI_PASSWORD, or neither.", err=True)
+        raise typer.Exit(code=1)
+    launch_args: dict = {"server_name": host, "server_port": port}
+    if username and password:
+        launch_args["auth"] = (username, password)
+    elif host not in {"127.0.0.1", "localhost", "::1"}:
+        typer.echo(
+            "warning: no login set (UI_USERNAME/UI_PASSWORD) and the server is not local: "
+            "anyone who can reach it can spend the OpenAI budget.",
+            err=True,
+        )
+    build_app(cfg, creds).launch(**launch_args)
 
 
 @app.command("check-credentials")

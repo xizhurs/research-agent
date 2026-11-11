@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
@@ -11,13 +10,11 @@ WORKDIR /app
 
 # Dependencies first, so this layer is cached until uv.lock changes.
 COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --extra ui --no-dev --no-install-project
+RUN uv sync --locked --extra ui --no-dev --no-install-project
 
 COPY src ./src
 COPY configs ./configs
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --extra ui --no-dev
+RUN uv sync --locked --extra ui --no-dev
 
 # Config and cache paths are relative to the working directory (/app).
 RUN useradd --system --uid 10001 --home-dir /app app \
