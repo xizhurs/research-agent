@@ -1,19 +1,23 @@
 name: CI
 
-# Runs on every pull request that targets main. It uses no secrets and makes no calls to
-# OpenAI or OpenAlex: the default test run is fully offline (live tests and `eval` are opt-in
-# and are intentionally NOT run here, because they cost money and need API keys).
+# Runs on every pull request that targets main and on every push to main. It uses no secrets
+# and makes no calls to OpenAI or OpenAlex: the default test run is fully offline (live tests
+# and `eval` are opt-in and are intentionally NOT run here, because they cost money and need
+# API keys).
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
 
 permissions:
   contents: read
 
-# A new push to the same PR cancels the older, now outdated run.
+# A new push to the same PR cancels the older, now outdated run. Runs on main are never
+# cancelled, so every commit on main gets a result.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -48,16 +52,49 @@ jobs:
       - name: Test
         run: uv run pytest
 
-  # One stable check name for branch protection, independent of the matrix above.
+  # Builds the production image (not pushed anywhere) and checks the UI answers over HTTP.
+  # No API keys are passed: the UI starts without them, and nothing here calls a model.
+  docker:
+    name: docker build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: docker build -t research-agent:ci .
+
+      - name: Start the container and wait for the UI
+        run: |
+          docker run -d --name ra -p 8080:8080 research-agent:ci
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:8080/; then
+              echo "UI answered after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "UI did not answer within 60s"
+          docker logs ra
+          exit 1
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f ra || true
+
+  # One stable check name for branch protection, independent of the jobs above.
   ci-passed:
     name: CI passed
-    needs: test
+    needs: [test, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Fail unless every test job succeeded
+      - name: Fail unless every job succeeded
         run: |
-          if [ "${{ needs.test.result }}" != "success" ]; then
-            echo "test jobs finished with: ${{ needs.test.result }}"
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.docker.result }}" != "success" ]; then
+            echo "test: ${{ needs.test.result }}, docker: ${{ needs.docker.result }}"
             exit 1
           fi

@@ -15,8 +15,9 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
+from research_agent import tracing
 from research_agent.agent.answer import Answer, DataRecord, build_answer
 from research_agent.agent.budget import Budget, estimate_tokens
 from research_agent.agent.limitations import SearchRecord, evidence_limitations
@@ -39,6 +40,7 @@ from research_agent.agent.tools import (
 from research_agent.config import Limits, ReportingConfig
 from research_agent.enso import EnsoAnalysis, EnsoError, InvalidEnsoQueryError
 from research_agent.llm import (
+    AssistantMessage,
     LLMClient,
     LLMResponse,
     Message,
@@ -102,6 +104,24 @@ def _trace_name(call: ToolCall) -> str:
     if call.name != RAINFALL_TOOL_NAME:
         return call.name
     return f"{call.name}[{call.arguments.get('metric') or 'wet'}]"
+
+
+def _tool_calls_json(calls: Sequence[ToolCall]) -> list[dict[str, Any]]:
+    return [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in calls]
+
+
+def _messages_json(instructions: str, messages: Sequence[Message]) -> list[dict[str, Any]]:
+    """The conversation as role/content records for a trace. ``provider_state`` is left out."""
+    out: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
+    for m in messages:
+        if isinstance(m, UserMessage):
+            out.append({"role": "user", "content": m.text})
+        elif isinstance(m, AssistantMessage):
+            calls = _tool_calls_json(m.tool_calls)
+            out.append({"role": "assistant", "content": m.text, "tool_calls": calls})
+        else:
+            out.append({"role": "tool", "tool_call_id": m.call_id, "content": m.content})
+    return out
 
 
 class InvalidQuestionError(ValueError):
@@ -169,6 +189,29 @@ class ResearchAgent:
 
     def run(self, question: str) -> AgentResult:
         """Answer ``question``. Raises LLMError (or AuthError from search) on hard failures."""
+        with tracing.observe("invoke_agent", "agent") as span:
+            tracing.set_content(span, input=question)
+            result = self._run(question)
+            stats = result.stats
+            span.set_attributes(
+                {
+                    "research_agent.iterations": stats.iterations,
+                    "research_agent.search_calls": stats.search_calls,
+                    "research_agent.cached_searches": stats.cached_searches,
+                    "research_agent.rainfall_calls": stats.rainfall_calls,
+                    "research_agent.cached_rainfall": stats.cached_rainfall,
+                    "research_agent.works_shown": stats.works_shown,
+                    "research_agent.input_tokens": stats.input_tokens,
+                    "research_agent.output_tokens": stats.output_tokens,
+                    "research_agent.structured": result.answer.structured,
+                    "research_agent.limitations": len(result.answer.limitations),
+                    "research_agent.rejected_citations": len(result.answer.rejected_citations),
+                }
+            )
+            tracing.set_content(span, output=tracing.answer_json(result.answer))
+            return result
+
+    def _run(self, question: str) -> AgentResult:
         question = question.strip()
         if not question:
             raise InvalidQuestionError("question must be a non-empty string")
@@ -199,13 +242,37 @@ class ResearchAgent:
             if reason:
                 log.info("forcing final answer: %s", reason)
                 state.notes.append(reason)
-            response = self._llm.complete(
-                instructions=instructions,
-                messages=messages,
-                tools=tools,
-                max_output_tokens=limits.max_output_tokens,
-                allow_tools=allow_tools,
-            )
+            turn = {
+                "research_agent.turn": budget.iterations + 1,
+                "research_agent.allow_tools": allow_tools,
+            }
+            with tracing.observe("chat", "generation", turn) as span:
+                if span.is_recording():
+                    tracing.set_content(span, input=_messages_json(instructions, messages))
+                response = self._llm.complete(
+                    instructions=instructions,
+                    messages=messages,
+                    tools=tools,
+                    max_output_tokens=limits.max_output_tokens,
+                    allow_tools=allow_tools,
+                )
+                usage = response.usage
+                span.set_attributes(
+                    {
+                        "gen_ai.usage.input_tokens": usage.input_tokens,
+                        "gen_ai.usage.output_tokens": usage.output_tokens,
+                        "gen_ai.response.finish_reasons": [response.stop_reason],
+                        "research_agent.tool_calls": len(response.tool_calls),
+                    }
+                )
+                tracing.set_content(
+                    span,
+                    output={
+                        "role": "assistant",
+                        "content": response.text,
+                        "tool_calls": _tool_calls_json(response.tool_calls),
+                    },
+                )
             budget.record_call(response.usage)
             state.trace.append(tuple(_trace_name(c) for c in response.tool_calls))
             log.info(
@@ -283,18 +350,28 @@ class ResearchAgent:
         """Answer every tool call (the API requires a result for each call ID)."""
         results = []
         for call in calls:
-            if call.error:
-                content = f"Error: {call.error}. Call the tool again with valid JSON arguments."
-            elif call.name == SEARCH_TOOL_NAME:
-                content = self._do_search(call, state)
-            elif call.name == RAINFALL_TOOL_NAME and self._rainfall is not None:
-                content = self._do_rainfall(call, self._rainfall, state)
-            elif call.name == ENSO_TOOL_NAME and self._enso is not None:
-                content = self._do_enso(call, self._enso, state)
-            else:
-                content = f"Error: unknown tool '{call.name}'."
+            attrs = {"gen_ai.tool.name": call.name, "gen_ai.tool.call.id": call.id}
+            with tracing.observe(f"execute_tool {call.name}", "tool", attrs) as span:
+                tracing.set_content(span, input=call.arguments)
+                content = self._run_tool(call, state)
+                failed = content.startswith("Error:")  # every refused or failed call says so
+                span.set_attribute("research_agent.tool.error", failed)
+                if failed:
+                    tracing.mark_failed(span, content)
+                tracing.set_content(span, output=content)
             results.append(ToolResultMessage(call_id=call.id, content=content))
         return results
+
+    def _run_tool(self, call: ToolCall, state: _RunState) -> str:
+        if call.error:
+            return f"Error: {call.error}. Call the tool again with valid JSON arguments."
+        if call.name == SEARCH_TOOL_NAME:
+            return self._do_search(call, state)
+        if call.name == RAINFALL_TOOL_NAME and self._rainfall is not None:
+            return self._do_rainfall(call, self._rainfall, state)
+        if call.name == ENSO_TOOL_NAME and self._enso is not None:
+            return self._do_enso(call, self._enso, state)
+        return f"Error: unknown tool '{call.name}'."
 
     def _do_search(self, call: ToolCall, state: _RunState) -> str:
         budget, notes = state.budget, state.notes

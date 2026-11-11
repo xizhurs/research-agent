@@ -1,5 +1,6 @@
 """EnsoClient: validation, caching, retries and error mapping. Mock HTTP, no network."""
 
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,12 +37,13 @@ def cached_files(cfg):
     return list(cfg.cache_dir.glob("*.json")) if cfg.cache_dir.exists() else []
 
 
-def make_client(cfg, server, sleeps=None):
+def make_client(cfg, server, sleeps=None, now=time.time):
     sleeps = sleeps if sleeps is not None else []
     return EnsoClient(
         cfg,
         http_client=httpx.Client(transport=httpx.MockTransport(server)),
         sleep=sleeps.append,
+        now=now,
     )
 
 
@@ -77,8 +79,9 @@ def test_a_new_client_shares_the_cache_on_disk(enso_config):
 def test_an_expired_cache_entry_is_downloaded_again(enso_config):
     make_client(enso_config, FakeServer()).analyze()
     server = FakeServer()
-    stale = replace(enso_config, cache_ttl_days=1e-9)
-    assert make_client(stale, server).analyze().from_cache is False
+    # A clock moved past the TTL, not a tiny TTL: Windows file times are too coarse for that.
+    later = time.time() + (enso_config.cache_ttl_days + 1) * 86400
+    assert make_client(enso_config, server, now=lambda: later).analyze().from_cache is False
     assert len(server.requests) == 1
 
 

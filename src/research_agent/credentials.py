@@ -64,7 +64,7 @@ class Credentials:
         return self.openai_api_key
 
 
-def _validate(name: str, raw: str | None) -> Secret | None:
+def validate_secret(name: str, raw: str | None) -> Secret | None:
     """Return a Secret, or None when unset/blank. Raise CredentialError when malformed."""
     if raw is None:
         return None
@@ -82,15 +82,23 @@ def _validate(name: str, raw: str | None) -> Secret | None:
     return Secret(value)
 
 
-def load_credentials(
+def read_env(
     env_file: Path | None = DEFAULT_ENV_FILE, environ: Mapping[str, str] | None = None
-) -> Credentials:
-    """Load and validate credentials. The process environment overrides the .env file."""
+) -> dict[str, str | None]:
+    """The .env file's values, overridden by the process environment. Never mutates either."""
     merged: dict[str, str | None] = {}
     if env_file is not None and env_file.is_file():
         merged.update(dotenv_values(env_file))
     merged.update(os.environ if environ is None else environ)
+    return merged
+
+
+def load_credentials(
+    env_file: Path | None = DEFAULT_ENV_FILE, environ: Mapping[str, str] | None = None
+) -> Credentials:
+    """Load and validate credentials. The process environment overrides the .env file."""
+    merged = read_env(env_file, environ)
     return Credentials(
-        openalex_api_key=_validate(OPENALEX_VAR, merged.get(OPENALEX_VAR)),
-        openai_api_key=_validate(OPENAI_VAR, merged.get(OPENAI_VAR)),
+        openalex_api_key=validate_secret(OPENALEX_VAR, merged.get(OPENALEX_VAR)),
+        openai_api_key=validate_secret(OPENAI_VAR, merged.get(OPENAI_VAR)),
     )

@@ -17,6 +17,7 @@ Layout:
 - `src/research_agent/rainfall/`: no-LLM extreme-rainfall analysis. `client.py` (`RainfallClient.analyze` returns `(record, Archive)`, `fetch_archive`, `parse_archive`, `build_archive_params`), `climatology.py` (pure baselines for the plots: smoothed day-of-year mean, monthly totals and their percentile band), `geocoding.py` (pure parse and disambiguation), `analysis.py` (pure Rx1day statistics, shared year-validity and caveat helpers), `dryness.py` (pure CDD and annual-total statistics), `models.py` (`Location`, `RainfallAnalysis`, `Provenance`...), `errors.py` (all derive from `RainfallError`).
 - `src/research_agent/enso/`: no-LLM El Nino / La Nina event detection on NOAA CPC's RONI file. `analysis.py` (pure: strict `parse_roni`, `find` runs, strength, caveats), `client.py` (`EnsoClient.analyze`, cached download with bounded retries), `models.py` (`EnsoRun`, `EnsoFocus`, `EnsoAnalysis`), `errors.py` (all derive from `EnsoError`).
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `app.py` (layout only, the only module that imports Gradio).
+- `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/evaluation.py` and `evals/cases.toml`: evaluation harness and the case set (see Evaluation).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
@@ -156,10 +157,19 @@ Ask the user before the milestone that needs each one. Do not assume.
 ## Logging, errors and exit codes (M5)
 
 - Logs go to stderr; answers go to stdout. Default level is WARNING. `research-agent -v ...` logs each model turn, token counts and each search; `-vv` adds debug details. The flag goes before the command: `research-agent -v ask "..."`.
-- Only `research_agent.*` loggers follow the flag. `httpx`, `openai` and friends stay at WARNING because their debug output can contain full prompts. The question text is never logged.
+- Only `research_agent.*` loggers follow the flag. `httpx`, `openai` and friends stay at WARNING because their debug output can contain full prompts (`opentelemetry` too). The question text is never logged; it is sent to the tracing backend when tracing is on, unless `RESEARCH_AGENT_TRACE_CONTENT=false` (see Tracing).
 - `REDACTOR` (`logging_setup.py`) replaces any loaded API key with `<redacted>` in log messages and tracebacks. It is fed by `_credentials_or_exit`; any new code path that loads credentials must go through that function.
 - Typer is configured with `pretty_exceptions_enable=False` and `pretty_exceptions_show_locals=False`: Typer's default crash output prints local variables, which can include API keys (verified). Do not turn this back on.
 - Exit codes: 0 success; 1 any failure (expected failures print one `error: ...` line; unexpected exceptions print one redacted `error: unexpected failure (...)` line, with a traceback only under `-vv`); 2 command-line usage error (Click). `eval` exits 1 if any case fails.
+
+## Tracing (added 2026-11-11)
+
+- Off unless configured; then every `ask` run, UI request (Ask, Search, Rainfall) and eval case is one trace. Install with `uv sync --extra tracing` (the Docker image includes it). Plain OpenTelemetry API + OTLP/HTTP exporter, not the Langfuse SDK.
+- Langfuse: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (all three or none; no default host, so no region is chosen for you), from the environment or `.env`. Spans go to `{host}/api/public/otel/v1/traces` with `Authorization: Basic base64(pk:sk)` and `x-langfuse-ingestion-version: 4` (without it Langfuse may delay ingestion by up to 10 min; from langfuse.com/integrations/native/opentelemetry, read 2026-11-11). Other backends: `OTEL_EXPORTER_OTLP_ENDPOINT`/`..._TRACES_ENDPOINT` + `..._HEADERS`, process environment only (the SDK reads them; `.env` is ignored for these). Both kinds set at once is an error.
+- Spans: root `ask` / `ui.ask` / `ui.search` / `ui.rainfall` / `eval.case` (tags: cli/ui/eval and the case ID) > `invoke_agent` (Langfuse type agent; RunStats as `research_agent.*`) > `chat` (generation; `gen_ai.usage.*`, turn, `gen_ai.request.model` set by `OpenAIClient`) and `execute_tool {name}` (tool; `research_agent.tool.error` and ERROR status when the result starts with `Error:`).
+- Content (question, answer summary, full model messages without `provider_state`, tool arguments and results) is attached by default, by the owner's choice; `RESEARCH_AGENT_TRACE_CONTENT=false` keeps metadata only. Exceptions set ERROR status with `REDACTOR`-redacted text; the SDK's own exception recording is off (it stores unredacted text and tracebacks). Langfuse and OTLP header values are added to `REDACTOR`.
+- Spans are batched and flushed by the SDK at process exit. Tests use an in-memory exporter; `tests/conftest.py` removes all tracing variables, so pytest and CI never export.
+- Verified: offline tests (span tree, types, tokens, content on/off, redaction, settings); one span exported to a local fake endpoint arrived on the Langfuse path with both headers. Not yet verified against a real Langfuse project: trace rendering and cost (Langfuse prices from model + tokens; `gpt-6-luna` probably needs a custom model price in the project settings).
 
 ## Credentials
 
@@ -236,7 +246,7 @@ Behavioural contract for answers:
 - OpenAlex tests use recorded fixture responses.
 - The default `uv run pytest` makes no network calls and costs nothing.
 - Live smoke tests are opt-in behind an explicit marker or flag.
-- CI (`.github/workflows/ci.yml`) runs on pull requests to `main`: `uv sync --locked`, `ruff check`, `pytest`, on Ubuntu and Windows with Python 3.12 and 3.13. It has no secrets and must stay offline: never add the `live` marker, `eval` or API keys to it. Actions are pinned by commit SHA with the version in a comment; update them deliberately. The `CI passed` job is the single check to require in branch protection. Keep `uv.lock` committed and current, or `--locked` fails the job.
+- CI (`.github/workflows/ci.yml`) runs on pull requests to `main` and on every push to `main`: `uv sync --locked`, `ruff check`, `pytest`, on Ubuntu and Windows with Python 3.12 and 3.13, plus a `docker` job that builds the image (not pushed) and checks the UI answers HTTP on port 8080 within 60 s, with no keys. Runs on `main` are never cancelled by later pushes. It has no secrets and must stay offline: never add the `live` marker, `eval` or API keys to it. Actions are pinned by commit SHA with the version in a comment; update them deliberately. The `CI passed` job is the single check to require in branch protection. Keep `uv.lock` committed and current, or `--locked` fails the job.
 - From M4, keep a small hand-written evaluation set (about 10–20 questions) with expected properties, not exact text.
 
 ## Commands
