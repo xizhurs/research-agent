@@ -85,6 +85,38 @@ def test_ui_warns_when_public_without_login(monkeypatch, tmp_path):
     assert "no login" in result.output
 
 
+def test_ui_login_can_come_from_the_env_file(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    launched = _capture_launch(monkeypatch)
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
+    args = ui_args(tmp_path)
+    login = "UI_USERNAME=bob\nUI_PASSWORD=long-pass-word\n"
+    (tmp_path / ".env").write_text(login, encoding="utf-8")
+    assert runner.invoke(app, args).exit_code == 0
+    assert launched["auth"] == ("bob", "long-pass-word")
+
+
+def test_share_needs_a_login(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    launched = _capture_launch(monkeypatch)
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
+    result = runner.invoke(app, ui_args(tmp_path, "--share"))
+    assert result.exit_code == 1 and "--share makes the app public" in result.output
+    assert launched == {}
+
+
+def test_share_with_a_login_asks_gradio_for_a_public_link(monkeypatch, tmp_path):
+    pytest.importorskip("gradio")
+    launched = _capture_launch(monkeypatch)
+    monkeypatch.setenv("UI_USERNAME", "alice")
+    monkeypatch.setenv("UI_PASSWORD", "s3cret-pw")
+    assert runner.invoke(app, ui_args(tmp_path, "--share")).exit_code == 0
+    assert launched["share"] is True and launched["auth"] == ("alice", "s3cret-pw")
+    assert launched["server_name"] == "127.0.0.1"  # the local server itself stays local
+
+
 def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
     gr = pytest.importorskip("gradio")
     from research_agent.ui.app import build_app
