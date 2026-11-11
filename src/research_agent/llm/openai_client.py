@@ -14,6 +14,7 @@ from typing import Any
 
 import openai
 
+from research_agent import tracing
 from research_agent.config import LLMConfig
 from research_agent.credentials import Credentials
 from research_agent.llm.errors import (
@@ -193,6 +194,7 @@ class OpenAIClient:
             max_output_tokens,
             "on" if allow_tools else "off",
         )
+        tracing.set_model(self._config.model)
         try:
             response = self._client.responses.create(**kwargs)
         except (openai.AuthenticationError, openai.PermissionDeniedError):

@@ -10,11 +10,11 @@ WORKDIR /app
 
 # Dependencies first, so this layer is cached until uv.lock changes.
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --locked --extra ui --no-dev --no-install-project
+RUN uv sync --locked --extra ui --extra tracing --no-dev --no-install-project
 
 COPY src ./src
 COPY configs ./configs
-RUN uv sync --locked --extra ui --no-dev
+RUN uv sync --locked --extra ui --extra tracing --no-dev
 
 # Config and cache paths are relative to the working directory (/app).
 RUN useradd --system --uid 10001 --home-dir /app app \

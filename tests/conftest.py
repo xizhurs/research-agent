@@ -14,6 +14,24 @@ from research_agent.retrieval import SearchResult, Work
 
 BASE_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "base.toml"
 
+TRACING_VARS = (
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "RESEARCH_AGENT_TRACE_CONTENT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_tracing_export(monkeypatch):
+    """Tests never send traces, even if the developer's shell has tracing variables set."""
+    for name in TRACING_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 @pytest.fixture
 def base_config():

@@ -22,6 +22,7 @@ from research_agent.enso import EnsoAnalysis
 from research_agent.llm import LLMError
 from research_agent.rainfall import Archive, RainfallClient, RainfallError, RainfallRecord
 from research_agent.retrieval import OpenAlexClient, RetrievalError, Work
+from research_agent.tracing import answer_json, observe, set_content
 from research_agent.ui.plots import (
     DEFAULT_WINDOW_DAYS,
     PlotError,
@@ -83,15 +84,21 @@ def search(
 ) -> tuple[str, str]:
     """OpenAlex search. Returns ``(status, results)`` as Markdown."""
     key = creds.openalex_api_key
+    api_key = key.reveal() if key else None
     try:
-        with OpenAlexClient(
-            cfg.openalex, cfg.limits, api_key=key.reveal() if key else None
-        ) as client:
+        with (
+            observe("ui.search", "span", tags=("ui",)) as span,
+            OpenAlexClient(cfg.openalex, cfg.limits, api_key=api_key) as client,
+        ):
+            set_content(span, input={"query": query, "year_from": year_from})
             result = client.search(
                 query,
                 year_from=_whole(year_from, "year from"),
                 max_results=_whole(max_results, "results"),
             )
+            span.set_attribute("research_agent.works", len(result.works))
+            span.set_attribute("research_agent.cached", result.from_cache)
+            set_content(span, output=[{"id": w.id, "title": w.title} for w in result.works])
     except (RetrievalError, ValueError) as exc:
         return _error(exc), ""
 
@@ -199,7 +206,11 @@ def rainfall(
             _whole(plot_year, "plot year"),
         )
         window = _whole(window_days, "smoothing window") or DEFAULT_WINDOW_DAYS
-        with RainfallClient(cfg.rainfall) as client:
+        with (
+            observe("ui.rainfall", "span", tags=("ui",)) as span,
+            RainfallClient(cfg.rainfall) as client,
+        ):
+            set_content(span, input={"city": city, "metric": metric, "event_date": event_date})
             record, archive = client.analyze(
                 city,
                 country_code=_text(country_code),
@@ -210,6 +221,8 @@ def rainfall(
                 metric=metric,
                 event_year=years[2],
             )
+            span.set_attribute("research_agent.cached", record.provenance.from_cache)
+            set_content(span, output=format_rainfall(replace(record, id="R1")))
             figure, note = _plot(cfg, record, client, years[3], window, archive, view)
     except (RainfallError, ValueError) as exc:
         return _error(exc), "", None, "", None
@@ -297,7 +310,10 @@ def ask(
         return "**Error:** the question must not be empty", "", None, "", None
     try:
         creds.require_openai_key()
-        result = _run_agent(cfg, creds, question)
+        with observe("ui.ask", "span", tags=("ui",)) as span:
+            set_content(span, input=question)
+            result = _run_agent(cfg, creds, question)
+            set_content(span, output=answer_json(result.answer))
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
         return f"**LLM used: no** (stopped before an answer) · {_error(exc)}", "", None, "", None
 

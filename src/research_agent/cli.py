@@ -25,6 +25,7 @@ from research_agent.credentials import (
     CredentialError,
     Credentials,
     load_credentials,
+    read_env,
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import EvalError, load_cases, run_case, summarize
@@ -32,6 +33,13 @@ from research_agent.llm import LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import OpenAlexClient, RetrievalError
+from research_agent.tracing import (
+    TracingError,
+    answer_json,
+    configure_tracing,
+    observe,
+    set_content,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +63,15 @@ def _credentials_or_exit(env_file: Path) -> Credentials:
         raise typer.Exit(code=1) from exc
     REDACTOR.add_credentials(creds)  # from here on, keys never appear in logs
     return creds
+
+
+def _tracing_or_exit(env_file: Path) -> None:
+    """Turn on tracing if LANGFUSE_* or OTEL_* settings are present (see tracing.py)."""
+    try:
+        configure_tracing(read_env(env_file), os.environ)
+    except (TracingError, CredentialError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 # Typer's default crash output prints local variables, which can include API keys. Keep that
@@ -242,6 +259,7 @@ def ui(
     """Serve the web interface (Ask, Search, Rainfall). Needs the extra: uv sync --extra ui."""
     cfg = _load_or_exit(config)
     creds = _credentials_or_exit(env_file)
+    _tracing_or_exit(env_file)
     try:
         from research_agent.ui.app import build_app
     except ModuleNotFoundError as exc:
@@ -329,9 +347,13 @@ def ask(
         raise typer.Exit(code=1)
     cfg = _load_or_exit(config)
     creds = _credentials_or_exit(env_file)
+    _tracing_or_exit(env_file)
     try:
         creds.require_openai_key()
-        result = _run_agent(cfg, creds, question)
+        with observe("ask", "span", tags=("cli",)) as span:
+            set_content(span, input=question)
+            result = _run_agent(cfg, creds, question)
+            set_content(span, output=answer_json(result.answer))
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -421,6 +443,7 @@ def evaluate(
     """
     cfg = _load_or_exit(config)
     creds = _credentials_or_exit(env_file)
+    _tracing_or_exit(env_file)
     try:
         selected = load_cases(cases)
     except EvalError as exc:
@@ -438,7 +461,12 @@ def evaluate(
         creds.require_openai_key()
         with _open_agent(cfg, creds) as agent:
             for case in selected:
-                report = run_case(agent, case, cfg.limits)
+                with observe("eval.case", "span", tags=("eval", case.id)) as span:
+                    set_content(span, input=case.question)
+                    report = run_case(agent, case, cfg.limits)
+                    span.set_attribute("research_agent.eval.passed", report.passed)
+                    if report.result:
+                        set_content(span, output=answer_json(report.result.answer))
                 reports.append(report)
                 if report.result:
                     st = report.result.stats

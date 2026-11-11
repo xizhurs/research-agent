@@ -17,7 +17,7 @@ from research_agent.credentials import Credentials
 REDACTED = "<redacted>"
 MIN_SECRET_CHARS = 8  # never "redact" tiny strings: that would mangle ordinary text
 _HANDLER_TAG = "_research_agent_handler"
-_THIRD_PARTY = ("httpx", "httpx2", "httpcore", "httpcore2", "openai")
+_THIRD_PARTY = ("httpx", "httpx2", "httpcore", "httpcore2", "openai", "opentelemetry")
 
 
 class SecretRedactor(logging.Filter):
