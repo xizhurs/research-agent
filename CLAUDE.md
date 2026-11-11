@@ -97,6 +97,14 @@ UI facts (M9; Gradio 6.31, plotly 7.1; smoke-tested live on 2026-11-03):
 - Safety: titles, abstracts and model text are escaped before they reach Markdown (`handlers.md`); only `http(s)` links are clickable. The server binds to 127.0.0.1 by default; Gradio analytics are off (`analytics_enabled=False`); events queue one at a time, which also caps parallel token spend. There is no authentication: anyone who can reach the port can spend the OpenAI budget, so do not expose it until the deployment decision is made.
 - Known gaps: the Ask tab was tested with a stubbed agent, offline and through the running app (answer, plot and Daily/Monthly redraw checked; no live model run, it costs tokens); the plot was checked by its numbers (79.0 mm on 2021-07-20 for Zhengzhou, baseline 6.2 mm/day that day), not by eye; `handlers.py` imports the private `cli._run_agent` and `cli.format_trace`.
 
+Container (added 2026-11-11; image built and served on localhost:8080, page checked in a browser; Ask tab with real keys inside the container not yet tested):
+- `Dockerfile` (python:3.12-slim, uv, `uv sync --locked --extra ui --no-dev`) runs `research-agent ui --host 0.0.0.0 --port ${PORT:-8080}` as non-root user `app`. Cloud Run sets `PORT`; on Azure Container Apps set the ingress target port to 8080. Config and `.cache/` are relative to `/app`.
+- `.dockerignore` excludes `.env`, `secrets/`, `.cache/`, `.git`, tests and evals. Keys are passed as environment variables or platform secrets, never baked into the image (env vars take priority over `.env`).
+- Gradio logs `http://0.0.0.0:8080`, which browsers cannot open: use `http://localhost:8080`.
+- Local check: `docker build -t research-agent:local .` then `docker run --rm -p 8080:8080 --env-file .env research-agent:local`.
+- The UI has no authentication: do not deploy it publicly. Use Cloud Run IAM/IAP or Azure built-in auth, and cap max replicas, since each replica can spend tokens.
+- The cache is lost on restart or scale-out (only costs repeated calls). The deployment platform is still undecided; the image only prepares for it.
+
 Retrieval facts (verified against the live API on 2026-11-01):
 - The OpenAlex key is optional (small anonymous budget without it: $0.10/day shared per IP). It is sent as an `Authorization: Bearer` header and never put in URLs or cache keys; the client also redacts it from server error text.
 - Searches use `search.title_and_abstract`, so every match is on text we can show as evidence.
