@@ -473,7 +473,7 @@ def test_ask_plots_the_first_rainfall_analysis_from_the_cached_series(
         answer, rainfall_calls=2, cached_rainfall=1, search_calls=0
     )
     status, body, figure, note, series = handlers.ask(base_config, CREDS, "q")
-    assert "2 rainfall/ENSO analysis(es) (1 from cache)" in status
+    assert "2 rainfall/temperature/ENSO analysis(es) (1 from cache)" in status
     assert "**[R1]** Zhengzhou, Henan, China: Rx1day 2000-2004" in body
     assert rain.archive_calls == [("Zhengzhou", 2000, 2004)]  # no new analysis, no geocoding
     call = FakeFigure.calls[0]

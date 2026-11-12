@@ -14,7 +14,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from research_agent.agent import InvalidQuestionError
-from research_agent.agent.tools import format_rainfall
+from research_agent.agent.tools import format_rainfall, format_temperature
 from research_agent.cli import _run_agent, format_trace
 from research_agent.config import Config
 from research_agent.conversation import (
@@ -27,6 +27,14 @@ from research_agent.enso import EnsoAnalysis
 from research_agent.llm import LLMError
 from research_agent.rainfall import Archive, RainfallClient, RainfallError, RainfallRecord
 from research_agent.retrieval import OpenAlexClient, RetrievalError, Work
+from research_agent.temperature import (
+    TemperatureArchive,
+    TemperatureClient,
+    TemperatureExtremes,
+    TemperatureMonthly,
+    TemperatureRecord,
+    TemperatureYearly,
+)
 from research_agent.tracing import observe, set_content
 from research_agent.ui.plots import (
     DEFAULT_WINDOW_DAYS,
@@ -36,11 +44,19 @@ from research_agent.ui.plots import (
     monthly_figure,
     yearly_figure,
 )
+from research_agent.ui.temperature_plots import (
+    temperature_daily_figure,
+    temperature_monthly_figure,
+    temperature_yearly_figure,
+)
 
 if TYPE_CHECKING:
     from plotly.graph_objects import Figure
 
 log = logging.getLogger(__name__)
+
+# An analysis and the daily series it came from, kept for redraws.
+Series = tuple[RainfallRecord, Archive] | tuple[TemperatureRecord, TemperatureArchive]
 
 NO_LLM = "**LLM used: no** (deterministic code only)"
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+!|<>~$])")
@@ -131,19 +147,23 @@ def search(
 # --- Rainfall -----------------------------------------------------------------------------------
 
 
+def is_temperature(record: object) -> bool:
+    return isinstance(record, TemperatureYearly | TemperatureMonthly | TemperatureExtremes)
+
+
 def _plot(
     cfg: Config,
-    record: RainfallRecord,
+    record: RainfallRecord | TemperatureRecord,
     client: RainfallClient | None,
     year: int | None,
     window_days: int,
-    archive: Archive | None = None,
+    archive: Archive | TemperatureArchive | None = None,
     view: str = "daily",
 ) -> tuple[Figure | None, str]:
     """The plot for ``record``, or ``(None, why not)``.
 
-    ``view`` is ``"daily"`` or ``"monthly"``. ``archive`` is the daily series; without it the
-    client fetches it (from the cache, normally).
+    ``view`` is ``"daily"``, ``"monthly"`` or ``"yearly"``. ``archive`` is the daily series;
+    without it the (rainfall) client fetches it (from the cache, normally).
     """
     try:
         if archive is None:
@@ -151,6 +171,8 @@ def _plot(
                 raise ValueError("no daily series to plot")
             archive = client.fetch_archive(record.location, record.start_year, record.end_year)
         year = year if year is not None else default_plot_year(record)
+        if is_temperature(record):
+            return _temperature_plot(cfg, record, archive, year, window_days, view)
         if view == "daily":
             return daily_figure(
                 record, archive, year=year, window_days=window_days, config=cfg.rainfall
@@ -164,19 +186,38 @@ def _plot(
         return None, f"No plot: {md(exc)}"
 
 
-def plotted_year(series: tuple[RainfallRecord, Archive] | None) -> int | None:
+def _temperature_plot(
+    cfg: Config,
+    record: TemperatureRecord,
+    archive: TemperatureArchive,
+    year: int,
+    window_days: int,
+    view: str,
+) -> tuple[Figure, str]:
+    if view == "daily":
+        return temperature_daily_figure(
+            record, archive, year=year, window_days=window_days, config=cfg.rainfall
+        )
+    if view == "monthly":
+        return temperature_monthly_figure(record, archive, year=year, config=cfg.rainfall)
+    if view == "yearly":
+        return temperature_yearly_figure(record, archive, year=year, config=cfg.rainfall)
+    raise ValueError(f"unknown plot view {view!r}")
+
+
+def plotted_year(series: Series | None) -> int | None:
     """The year a new plot shows by default, to fill the year box (None: nothing plotted)."""
     return default_plot_year(series[0]) if series else None
 
 
-def view_for(record: RainfallRecord) -> str:
+def view_for(record: RainfallRecord | TemperatureRecord) -> str:
     """The plot view that matches an analysis: its scale (daily, monthly or yearly)."""
     return record.scale
 
 
 def replot(
     cfg: Config,
-    series: tuple[RainfallRecord, Archive] | None,
+    series: Series | None,
     plot_year: float | None,
     window_days: float,
     view: str,
@@ -303,6 +344,101 @@ def rainfall(
     return status, text, figure, note, (record, archive)
 
 
+# --- Temperature --------------------------------------------------------------------------------
+
+
+def temperature(
+    cfg: Config,
+    city: str,
+    country_code: str,
+    region: str,
+    start_year: float | None,
+    end_year: float | None,
+    event_date: str,
+    metric: str,
+    event_year: float | None,
+    plot_year: float | None,
+    window_days: float,
+    view: str = "daily",
+    scale: str = "daily",
+    event_month: float | None = None,
+    location_mode: str = "city",
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> tuple[str, str, Figure | None, str, Series | None]:
+    """ERA5 temperature analysis at a daily (``metric`` hot or cold), monthly or yearly scale.
+
+    Same inputs and outputs as ``rainfall``: ``(status, statistics, figure, plot note, series)``.
+    """
+    if location_mode not in ("city", "point"):
+        return "**Error:** location must be 'city' or 'point'", "", None, "", None
+    if location_mode == "point" and (latitude is None or longitude is None):
+        return (
+            "**Error:** click the map or enter both latitude and longitude",
+            "",
+            None,
+            "",
+            None,
+        )
+    try:
+        day = date.fromisoformat(event_date.strip()) if event_date and event_date.strip() else None
+    except ValueError:
+        return "**Error:** event date must be formatted YYYY-MM-DD", "", None, "", None
+    try:
+        years = (
+            _whole(start_year, "start year"),
+            _whole(end_year, "end year"),
+            _whole(event_year, "event year"),
+            _whole(plot_year, "plot year"),
+            _whole(event_month, "event month"),
+        )
+        window = _whole(window_days, "smoothing window") or DEFAULT_WINDOW_DAYS
+        with (
+            observe("ui.temperature", "span", tags=("ui",)) as span,
+            TemperatureClient(cfg.rainfall) as client,
+        ):
+            where = (
+                {"latitude": latitude, "longitude": longitude}
+                if location_mode == "point"
+                else {"city": city}
+            )
+            set_content(
+                span, input={**where, "scale": scale, "metric": metric, "event_date": event_date}
+            )
+            options = {
+                "start_year": years[0],
+                "end_year": years[1],
+                "event_date": day,
+                "metric": metric,
+                "event_year": years[2],
+                "scale": scale,
+                "event_month": years[4],
+            }
+            if location_mode == "point":
+                record, archive = client.analyze_point(latitude, longitude, **options)
+            else:
+                record, archive = client.analyze(
+                    city, country_code=_text(country_code), region=_text(region), **options
+                )
+            span.set_attribute("research_agent.cached", record.provenance.from_cache)
+            set_content(span, output=format_temperature(replace(record, id="R1")))
+            figure, note = _plot(cfg, record, None, years[3], window, archive, view)
+    except (RainfallError, ValueError) as exc:  # the Open-Meteo error family, shared
+        return _error(exc), "", None, "", None
+
+    prov = record.provenance
+    origin = "cache" if prov.from_cache else "network"
+    status = (
+        f"{NO_LLM} · {md(record.location.label)} · {origin} · "
+        f"data {prov.data_start} to {prov.data_end}"
+    )
+    text = (
+        f"{format_temperature(replace(record, id='R1'))}\n\n"
+        f"Source: {prov.dataset}. {prov.license}.\nRequest: {prov.request_url}"
+    )
+    return status, text, figure, note, (record, archive)
+
+
 # --- Ask ----------------------------------------------------------------------------------------
 
 
@@ -351,7 +487,7 @@ def _ask_status(cfg: Config, stats) -> str:
     ]
     if stats.rainfall_calls:
         parts.append(
-            f"{stats.rainfall_calls} rainfall/ENSO analysis(es) "
+            f"{stats.rainfall_calls} rainfall/temperature/ENSO analysis(es) "
             f"({stats.cached_rainfall} from cache)"
         )
     if stats.tool_trace:
@@ -382,7 +518,7 @@ def _transcript(service: ConversationService, session_id: str | None) -> str:
 
 def ask(
     cfg: Config, creds: Credentials, question: str, view: str = "daily"
-) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
+) -> tuple[str, str, Figure | None, str, Series | None]:
     """One question without follow-ups. Returns ``(status, answer, figure, plot note, series)``."""
     store = InMemorySessionStore(1, 60)
     return ask_turn(cfg, creds, make_service(cfg, creds, store), question, view, None)[:5]
@@ -398,15 +534,13 @@ def ask_turn(
     use_point: bool = False,
     latitude: float | None = None,
     longitude: float | None = None,
-) -> tuple[
-    str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None, str | None, str
-]:
+) -> tuple[str, str, Figure | None, str, Series | None, str | None, str]:
     """Run one conversation turn.
 
     Returns ``(status, answer, figure, plot note, series, session_id, transcript)``. The figure
-    plots the first rainfall analysis the answer cites, in ``view`` (``"daily"``, ``"monthly"``
-    or ``"yearly"``; None: the analysis's own scale), from the same cached daily series; the
-    language model never sees or draws it.
+    plots the first rainfall or temperature analysis the answer cites, in ``view`` (``"daily"``,
+    ``"monthly"`` or ``"yearly"``; None: the analysis's own scale), from the same cached daily
+    series; the language model never sees or draws it.
     ``series`` is that analysis and its daily data, for ``replot`` (None if nothing was plotted).
     On an error the session is unchanged. With ``use_point`` the map point (``latitude``,
     ``longitude``) goes to the agent, which can analyse it without the model copying numbers.
@@ -438,10 +572,17 @@ def ask_turn(
     if records:
         record = records[0]
         try:
-            with RainfallClient(cfg.rainfall) as client:
-                archive = client.fetch_archive(
-                    record.location, record.series_start_year, record.end_year
-                )
+            archive: Archive | TemperatureArchive
+            if is_temperature(record):
+                with TemperatureClient(cfg.rainfall) as temp_client:
+                    archive = temp_client.fetch_archive(
+                        record.location, record.series_start_year, record.end_year
+                    )
+            else:
+                with RainfallClient(cfg.rainfall) as client:
+                    archive = client.fetch_archive(
+                        record.location, record.series_start_year, record.end_year
+                    )
         except RainfallError as exc:
             note = f"No plot: {md(exc)}"
         else:

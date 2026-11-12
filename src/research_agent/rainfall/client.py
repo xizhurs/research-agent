@@ -9,8 +9,6 @@ before any request, caches raw responses on disk, retries only transient failure
 from __future__ import annotations
 
 import logging
-import math
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -23,30 +21,27 @@ import httpx
 from research_agent.config import RainfallConfig
 from research_agent.rainfall.analysis import compute_analysis
 from research_agent.rainfall.dryness import compute_dry_analysis
-from research_agent.rainfall.errors import (
-    InvalidRainfallQueryError,
-    RainfallApiError,
-    RainfallNetworkError,
-    RainfallRateLimitError,
-)
-from research_agent.rainfall.geocoding import (
-    build_geocode_params,
-    parse_candidates,
-    resolve_location,
-)
+from research_agent.rainfall.errors import InvalidRainfallQueryError, RainfallApiError
 from research_agent.rainfall.models import Location, Provenance, RainfallRecord
+from research_agent.rainfall.openmeteo import (
+    OpenMeteoFetcher,
+    number,
+    point_caveat,
+    point_location,
+    validate_city,
+    validate_period,
+    validate_point,
+)
 from research_agent.rainfall.totals import compute_monthly_analysis, compute_yearly_analysis
-from research_agent.retrieval.cache import ResponseCache, cache_key
 
 log = logging.getLogger(__name__)
 
-MAX_CITY_CHARS = 200
 METRICS = ("wet", "dry")
-SCALES = ("daily", "monthly", "yearly")
-RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-_COUNTRY_CODE = re.compile(r"^[A-Za-z]{2}$")
 VARIABLE = "precipitation_sum: daily total precipitation in mm, local calendar day"
 LICENSE = "CC BY 4.0 (attribution to Open-Meteo.com required)"
+DATASET = "ERA5 reanalysis (ECMWF) via the Open-Meteo Historical Weather API (model={model})"
+
+__all__ = ["Archive", "RainfallClient", "build_archive_params", "parse_archive", "validate_point"]
 
 
 @dataclass(frozen=True)
@@ -76,23 +71,6 @@ def build_archive_params(
     }
 
 
-def _number(value: Any) -> float | None:
-    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
-
-
-def validate_point(latitude: object, longitude: object) -> tuple[float, float]:
-    """Check coordinates before any request: finite numbers within the valid ranges."""
-    checked = []
-    for name, value, limit in (("latitude", latitude, 90), ("longitude", longitude, 180)):
-        number = _number(value)
-        if number is None or not math.isfinite(number):
-            raise InvalidRainfallQueryError(f"{name} must be a number")
-        if not -limit <= number <= limit:
-            raise InvalidRainfallQueryError(f"{name} must be between -{limit} and {limit}")
-        checked.append(number)
-    return checked[0], checked[1]
-
-
 def parse_archive(payload: Any) -> Archive:
     """Validate and parse an archive response. Raises RainfallApiError on any unexpected shape."""
     if not isinstance(payload, dict):
@@ -110,7 +88,7 @@ def parse_archive(payload: Any) -> Archive:
         raise RainfallApiError("unexpected archive response: 'time' and values do not line up")
     if not times:
         raise RainfallApiError("unexpected archive response: the daily series is empty")
-    lat, lon = _number(payload.get("latitude")), _number(payload.get("longitude"))
+    lat, lon = number(payload.get("latitude")), number(payload.get("longitude"))
     if lat is None or lon is None:
         raise RainfallApiError("unexpected archive response: grid latitude/longitude missing")
     try:
@@ -122,37 +100,19 @@ def parse_archive(payload: Any) -> Archive:
         if v is None:
             values.append(None)
             continue
-        number = _number(v)
-        if number is None or number < 0:
+        mm = number(v)
+        if mm is None or mm < 0:
             raise RainfallApiError("unexpected archive response: invalid precipitation value")
-        values.append(number)
+        values.append(mm)
     timezone = payload.get("timezone")
     return Archive(
         dates=days,
         values=tuple(values),
         latitude=lat,
         longitude=lon,
-        elevation_m=_number(payload.get("elevation")),
+        elevation_m=number(payload.get("elevation")),
         timezone=timezone if isinstance(timezone, str) else None,
     )
-
-
-def _retry_after_seconds(response: httpx.Response) -> float | None:
-    try:
-        seconds = float(response.headers.get("Retry-After", ""))
-    except ValueError:
-        return None
-    return seconds if seconds >= 0 else None
-
-
-def _error_detail(response: httpx.Response) -> str:
-    try:
-        body = response.json()
-    except ValueError:
-        return response.text[:200]
-    if isinstance(body, dict) and isinstance(body.get("reason"), str):
-        return body["reason"][:200]
-    return str(body)[:200]
 
 
 class RainfallClient:
@@ -166,15 +126,11 @@ class RainfallClient:
         today: Callable[[], date] = date.today,
     ) -> None:
         self._config = config
-        self._http = http_client or httpx.Client(timeout=config.timeout_seconds)
-        self._owns_http = http_client is None
-        self._sleep = sleep
         self._today = today
-        self._cache = ResponseCache(config.cache_dir, config.cache_ttl_days, now=now)
+        self._fetcher = OpenMeteoFetcher(config, http_client=http_client, sleep=sleep, now=now)
 
     def close(self) -> None:
-        if self._owns_http:
-            self._http.close()
+        self._fetcher.close()
 
     def __enter__(self) -> RainfallClient:
         return self
@@ -198,7 +154,7 @@ class RainfallClient:
         does not geocode again, which could resolve differently). Used to plot an analysis that
         only the statistics were kept for.
         """
-        archive, _ = self._cached(
+        archive, _ = self._fetcher.cached(
             self._config.archive_url,
             self._archive_params(location, start_year, end_year),
             parse_archive,
@@ -228,22 +184,13 @@ class RainfallClient:
         yearly and monthly the series starts at the baseline period at the latest, so the
         baseline is always available. A plot of the daily values needs no second request.
         """
-        cfg = self._config
         today = self._today()
-        city, country_code, region = self._validate_city(city, country_code, region)
+        city, country_code, region = validate_city(city, country_code, region)
         start_year, end_year = self._validate(
             start_year, end_year, event_date, today, metric, event_year, scale, event_month
         )
 
-        geo_params = build_geocode_params(city, country_code, cfg.geocode_candidates)
-        candidates, geo_cached = self._cached(cfg.geocoding_url, geo_params, parse_candidates)
-        location, others = resolve_location(
-            candidates,
-            city=city,
-            region=region,
-            dominance_ratio=cfg.dominance_ratio,
-            same_place_km=cfg.same_place_km,
-        )
+        location, others, geo_cached = self._fetcher.resolve_city(city, country_code, region)
         return self._analyze_location(
             location,
             others,
@@ -281,17 +228,7 @@ class RainfallClient:
         start_year, end_year = self._validate(
             start_year, end_year, event_date, today, metric, event_year, scale, event_month
         )
-        location = Location(
-            id=0,
-            name=f"{latitude:.4f}, {longitude:.4f}",
-            admin1=None,
-            country=None,
-            country_code=None,
-            latitude=latitude,
-            longitude=longitude,
-            population=None,
-            timezone=None,
-        )
+        location = point_location(latitude, longitude)
         record, archive = self._analyze_location(
             location,
             (),
@@ -305,11 +242,7 @@ class RainfallClient:
             scale=scale,
             event_month=event_month,
         )
-        caveat = (
-            f"The location is a point given by coordinates ({location.name}); the values are for "
-            f"the ERA5 grid cell at {archive.latitude:.4f}, {archive.longitude:.4f} (about "
-            "0.25 degrees), not for the exact point."
-        )
+        caveat = point_caveat(location, archive.latitude, archive.longitude)
         return replace(record, caveats=(*record.caveats, caveat)), archive
 
     def _analyze_location(
@@ -332,12 +265,9 @@ class RainfallClient:
         last_complete_year = today.year - 1
         series_start = start_year if scale == "daily" else min(start_year, cfg.baseline_start_year)
         params = self._archive_params(location, series_start, end_year)
-        archive, archive_cached = self._cached(cfg.archive_url, params, parse_archive)
+        archive, archive_cached = self._fetcher.cached(cfg.archive_url, params, parse_archive)
         provenance = Provenance(
-            dataset=(
-                f"ERA5 reanalysis (ECMWF) via the Open-Meteo Historical Weather API "
-                f"(model={cfg.model})"
-            ),
+            dataset=DATASET.format(model=cfg.model),
             variable=VARIABLE,
             license=LICENSE,
             request_url=f"{cfg.archive_url}?{urlencode(params)}",
@@ -408,27 +338,6 @@ class RainfallClient:
             )
         return record, archive
 
-    @staticmethod
-    def _validate_city(
-        city: object, country_code: object, region: object
-    ) -> tuple[str, str | None, str | None]:
-        if not isinstance(city, str) or not city.strip():
-            raise InvalidRainfallQueryError("city must be a non-empty string")
-        city = city.strip()
-        if len(city) > MAX_CITY_CHARS:
-            raise InvalidRainfallQueryError(f"city is longer than {MAX_CITY_CHARS} characters")
-        if country_code is not None and (
-            not isinstance(country_code, str) or not _COUNTRY_CODE.match(country_code.strip())
-        ):
-            raise InvalidRainfallQueryError("country_code must be a 2-letter ISO code, e.g. 'FR'")
-        if region is not None and (not isinstance(region, str) or not region.strip()):
-            raise InvalidRainfallQueryError("region must be a non-empty string")
-        return (
-            city,
-            country_code.strip().upper() if isinstance(country_code, str) else None,
-            region.strip() if isinstance(region, str) else None,
-        )
-
     def _validate(
         self,
         start_year: object,
@@ -440,126 +349,17 @@ class RainfallClient:
         scale: object = "daily",
         event_month: object = None,
     ) -> tuple[int, int]:
-        cfg = self._config
         if metric not in METRICS:
             raise InvalidRainfallQueryError("metric must be 'wet' or 'dry'")
-        if scale not in SCALES:
-            raise InvalidRainfallQueryError("scale must be 'daily', 'monthly' or 'yearly'")
-
-        first = cfg.default_start_year if start_year is None else start_year
-        # Monthly questions may be about this year's finished months; the others need whole years.
-        default_last = today.year if scale == "monthly" else today.year - 1
-        last = default_last if end_year is None else end_year
-        for name, year in (("start_year", first), ("end_year", last)):
-            if isinstance(year, bool) or not isinstance(year, int):
-                raise InvalidRainfallQueryError(f"{name} must be an integer year")
-            if not cfg.earliest_year <= year <= today.year:
-                raise InvalidRainfallQueryError(
-                    f"{name} must be between {cfg.earliest_year} and {today.year}"
-                )
-        if first > last:
-            raise InvalidRainfallQueryError("start_year must not be after end_year")
-        if event_year is not None:
-            if scale == "daily" and metric != "dry":
-                raise InvalidRainfallQueryError(
-                    "event_year needs scale 'yearly' or 'monthly' (or metric 'dry'); for one day "
-                    "use event_date"
-                )
-            if (
-                isinstance(event_year, bool)
-                or not isinstance(event_year, int)
-                or not first <= event_year <= last
-            ):
-                raise InvalidRainfallQueryError(
-                    f"event_year must be an integer between {first} and {last}"
-                )
-        if event_month is not None:
-            if scale != "monthly" or event_year is None:
-                raise InvalidRainfallQueryError(
-                    "event_month needs scale 'monthly' and event_year"
-                )
-            if isinstance(event_month, bool) or event_month not in range(1, 13):
-                raise InvalidRainfallQueryError("event_month must be an integer from 1 to 12")
-        if event_date is not None:
-            if scale != "daily":
-                raise InvalidRainfallQueryError(
-                    "event_date is for scale 'daily'; for a month or year use event_year "
-                    "(and event_month)"
-                )
-            latest = min(date(last, 12, 31), today)
-            if not isinstance(event_date, date) or not date(first, 1, 1) <= event_date <= latest:
-                raise InvalidRainfallQueryError(
-                    f"event_date must lie between {first}-01-01 and {latest.isoformat()} "
-                    "(widen start_year/end_year to include it)"
-                )
-        return first, last
-
-    def _cached[T](
-        self, url: str, params: dict[str, str], parse: Callable[[Any], T]
-    ) -> tuple[T, bool]:
-        """Fetch ``url`` through the cache. Only validated responses are cached."""
-        key = cache_key(url, params)
-        cached = self._cache.get(key)
-        log.debug("rainfall %s: cache %s", url, "hit" if cached is not None else "miss")
-        if cached is not None:
-            try:
-                return parse(cached), True
-            except RainfallApiError as exc:
-                log.warning("ignoring cached response with unexpected shape: %s", exc)
-        payload = self._get_json(url, params)
-        parsed = parse(payload)
-        self._cache.put(key, payload)
-        return parsed, False
-
-    def _get_json(self, url: str, params: dict[str, str]) -> Any:
-        cfg = self._config
-        last_failure = "no attempt made"
-        for attempt in range(cfg.max_retries + 1):
-            try:
-                response = self._http.get(url, params=params, timeout=cfg.timeout_seconds)
-            except httpx.TransportError as exc:  # includes timeouts
-                last_failure = f"{type(exc).__name__}: {exc}"
-                wait = self._backoff(attempt)
-                if attempt == cfg.max_retries:
-                    raise RainfallNetworkError(
-                        f"Open-Meteo request failed after {attempt + 1} attempts: {last_failure}"
-                    ) from exc
-            else:
-                status = response.status_code
-                if status == 200:
-                    try:
-                        return response.json()
-                    except ValueError as exc:
-                        raise RainfallApiError(
-                            "Open-Meteo returned a non-JSON 200 response"
-                        ) from exc
-                if status not in RETRYABLE_STATUS:
-                    raise RainfallApiError(
-                        f"Open-Meteo returned {status}: {_error_detail(response)}"
-                    )
-                last_failure = f"HTTP {status}: {_error_detail(response)}"
-                retry_after = _retry_after_seconds(response)
-                if retry_after is not None and retry_after > cfg.max_backoff_seconds:
-                    raise RainfallRateLimitError(
-                        f"Open-Meteo asked to wait {retry_after:.0f}s (> max "
-                        f"{cfg.max_backoff_seconds:.0f}s); giving up. {last_failure}"
-                    )
-                wait = retry_after if retry_after is not None else self._backoff(attempt)
-                if attempt == cfg.max_retries:
-                    error_cls = RainfallRateLimitError if status == 429 else RainfallApiError
-                    raise error_cls(
-                        f"Open-Meteo request failed after {attempt + 1} attempts: {last_failure}"
-                    )
-            log.warning(
-                "Open-Meteo request failed (%s); retry %d/%d in %.1fs",
-                last_failure,
-                attempt + 1,
-                cfg.max_retries,
-                wait,
-            )
-            self._sleep(wait)
-        raise RainfallApiError(f"Open-Meteo request failed: {last_failure}")  # pragma: no cover
-
-    def _backoff(self, attempt: int) -> float:
-        cfg = self._config
-        return min(cfg.backoff_base_seconds * 2**attempt, cfg.max_backoff_seconds)
+        return validate_period(
+            self._config,
+            today,
+            start_year=start_year,
+            end_year=end_year,
+            event_date=event_date,
+            event_year=event_year,
+            scale=scale,
+            event_month=event_month,
+            daily_event_year=metric == "dry",
+            daily_event_year_hint=" (or metric 'dry')",
+        )

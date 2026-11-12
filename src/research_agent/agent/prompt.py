@@ -27,20 +27,28 @@ clarification), "update" (same task with a changed setting, such as another plac
 
 
 def build_instructions(
-    limits: Limits, *, rainfall: bool = False, enso: bool = False, conversation: bool = False
+    limits: Limits,
+    *,
+    rainfall: bool = False,
+    enso: bool = False,
+    temperature: bool = False,
+    conversation: bool = False,
 ) -> str:
-    """The literature-only prompt, the two-tool prompt (rainfall tool offered), or, with ENSO
-    too, the same prompt extended for the ENSO tool. Without ``enso`` the text is unchanged.
-    ``conversation`` appends the follow-up rules; without it the text is unchanged too."""
-    text = _base_instructions(limits, rainfall=rainfall, enso=enso)
+    """The literature-only prompt, the two-tool prompt (rainfall tool offered), or the same
+    prompt extended for the ENSO and/or temperature tools. Without ``enso`` and ``temperature``
+    the text is unchanged. ``conversation`` appends the follow-up rules; without it the text is
+    unchanged too."""
+    text = _base_instructions(limits, rainfall=rainfall, enso=enso, temperature=temperature)
     return text + CONVERSATION_RULES if conversation else text
 
 
-def _base_instructions(limits: Limits, *, rainfall: bool, enso: bool) -> str:
+def _base_instructions(limits: Limits, *, rainfall: bool, enso: bool, temperature: bool) -> str:
     if enso and not rainfall:
         raise ValueError("the ENSO tool is offered together with the rainfall tool")
+    if temperature and not rainfall:
+        raise ValueError("the temperature tool is offered together with the rainfall tool")
     if rainfall:
-        return _two_tool_instructions(limits, enso=enso)
+        return _two_tool_instructions(limits, enso=enso, temperature=temperature)
     return f"""\
 You are a research assistant for GeoAI and remote-sensing literature. You can search OpenAlex \
 with the search_literature tool. Results contain titles, authors, abstracts and metadata only \
@@ -88,12 +96,46 @@ ENSO_RULE = (
 )
 
 
-def _two_tool_instructions(limits: Limits, *, enso: bool = False) -> str:
-    topics = ", extreme-rainfall and El Nino / La Nina" if enso else " and extreme-rainfall"
-    count = "three" if enso else "two"
+TEMPERATURE_BULLET = """
+- analyze_temperature: computes past air temperature for one city from ERA5 reanalysis (daily \
+maximum, minimum and mean at 2 m), at one time scale. scale "yearly": annual mean temperature, \
+the warmest and coolest years, and how a year (event_year) compares with the baseline. scale \
+"monthly": monthly means and how a month (event_year + event_month) or each month of a year \
+compares with the same calendar month. scale "daily": metric "hot" gives TXx (the hottest day of \
+each year) and how hot a given day (event_date) was; metric "cold" gives TNn (the coldest night \
+of each year) and how cold a day was. Its result has an ID such as R1."""
+TEMPERATURE_CHOICE = (
+    " Questions about temperature, heat, hot days, cold nights or warm and cool years need "
+    'analyze_temperature (same scales: "yearly" for warm or cool years and general questions, '
+    '"monthly" for a month or season, "daily" with metric "hot" or "cold" for single days); '
+    "questions about rain, wet or dry need analyze_rainfall_extremes; a question about both uses "
+    "both."
+)
+TEMPERATURE_RULE = (
+    "\n- Every temperature number must come from an analyze_temperature result, quoted as given. "
+    "Do not describe ERA5 grid-cell temperatures as station measurements, do not compute a trend "
+    "from the listed years, and do not call hot days a heatwave unless a retrieved work does. "
+    "An ambiguous city name is handled as for the rainfall tool."
+)
+
+
+def _two_tool_instructions(limits: Limits, *, enso: bool = False, temperature: bool = False) -> str:
+    if enso and temperature:
+        topics = ", extreme-rainfall, temperature and El Nino / La Nina"
+    elif enso:
+        topics = ", extreme-rainfall and El Nino / La Nina"
+    elif temperature:
+        topics = ", extreme-rainfall and temperature"
+    else:
+        topics = " and extreme-rainfall"
+    count = ("two", "three", "four")[enso + temperature]
     enso_tool, enso_choice, enso_rule = (ENSO_BULLET, ENSO_CHOICE, ENSO_RULE) if enso else ("",) * 3
-    analyses = "rainfall or ENSO analyses" if enso else "rainfall analyses"
-    ids = "rainfall or ENSO" if enso else "rainfall"
+    temp_tool, temp_choice, temp_rule = (
+        (TEMPERATURE_BULLET, TEMPERATURE_CHOICE, TEMPERATURE_RULE) if temperature else ("",) * 3
+    )
+    kinds = ["rainfall", *(["temperature"] if temperature else []), *(["ENSO"] if enso else [])]
+    ids = kinds[0] if len(kinds) == 1 else ", ".join(kinds[:-1]) + " or " + kinds[-1]
+    analyses = f"{ids} analyses"
     return f"""\
 You are a research assistant for GeoAI, remote-sensing{topics} questions. You have \
 {count} tools:
@@ -107,14 +149,14 @@ and how a month (event_year + event_month) or each month of a year (event_year) 
 the same calendar month. scale "daily": metric "wet" gives Rx1day per year, the largest \
 events and how extreme a given day (event_date) was; metric "dry" gives consecutive dry days \
 (CDD), the longest dry spells and how dry a year or spell was. Its result has an ID such as \
-R1.{enso_tool}
+R1.{temp_tool}{enso_tool}
 Choose the tool that fits the question, and use both when the question needs numbers and an \
 explanation. Pick the rainfall scale from the question: amounts per year, wet or dry years, or a \
 general question such as "how was the rainfall in the last 10 years" need scale "yearly"; a \
 month, a season or "which months are wettest" need scale "monthly"; heavy-rain days, floods \
 from one day's rain or a given date need scale "daily" with metric "wet"; dry spells or runs \
 of dry days need scale "daily" with metric "dry". A question about two scales needs two \
-calls.{enso_choice}
+calls.{temp_choice}{enso_choice}
 
 Rules:
 - Base every factual statement on tool results. Do not use outside knowledge as evidence. If \
@@ -123,7 +165,7 @@ the results do not support an answer, say so.
 result. Quote it as given; never compute, adjust or recall rainfall values yourself. ERA5 is a \
 grid-cell model, not a gauge: never describe its values as station measurements. A dry spell \
 (days under 1 mm) is not a drought: do not call a dry spell or a dry year a drought unless a \
-retrieved work says so.{enso_rule}
+retrieved work says so.{temp_rule}{enso_rule}
 - Leave start_year and end_year unset unless the question names a period: the defaults keep \
 results comparable between questions. Do not shorten the record to end at an event's year.
 - If a city name is ambiguous, the rainfall tool lists the candidates. Do not guess a place: \

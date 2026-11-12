@@ -31,16 +31,21 @@ from research_agent.agent.tools import (
     RECALL_TOOL_NAME,
     SEARCH_TOOL,
     SEARCH_TOOL_NAME,
+    TEMPERATURE_TOOL_NAME,
+    PlaceArgs,
     ToolArgumentError,
     format_enso,
     format_rainfall,
     format_recalled,
     format_results,
+    format_temperature,
     parse_enso_args,
     parse_rainfall_args,
     parse_recall_args,
     parse_search_args,
+    parse_temperature_args,
     rainfall_tool,
+    temperature_tool,
 )
 from research_agent.config import Limits, ReportingConfig
 from research_agent.enso import EnsoAnalysis, EnsoError, InvalidEnsoQueryError
@@ -70,6 +75,7 @@ from research_agent.retrieval import (
     SearchResult,
     Work,
 )
+from research_agent.temperature import TemperatureArchive, TemperatureRecord
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +117,37 @@ class RainfallAnalyzer(Protocol):
     ) -> tuple[RainfallRecord, Archive]: ...
 
 
+class TemperatureAnalyzer(Protocol):
+    def analyze(
+        self,
+        city: str,
+        *,
+        country_code: str | None = None,
+        region: str | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        event_date: date | None = None,
+        metric: str = "hot",
+        event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
+    ) -> tuple[TemperatureRecord, TemperatureArchive]: ...
+
+    def analyze_point(
+        self,
+        latitude: float,
+        longitude: float,
+        *,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        event_date: date | None = None,
+        metric: str = "hot",
+        event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
+    ) -> tuple[TemperatureRecord, TemperatureArchive]: ...
+
+
 class EnsoAnalyzer(Protocol):
     def analyze(
         self,
@@ -123,12 +160,14 @@ class EnsoAnalyzer(Protocol):
 
 
 def _trace_name(call: ToolCall) -> str:
-    """The tool as the model chose it; the rainfall tool also shows its kind: ``[wet]`` or
-    ``[dry]`` for the daily scale, ``[yearly]`` or ``[monthly]`` otherwise."""
-    if call.name != RAINFALL_TOOL_NAME:
+    """The tool as the model chose it; the rainfall and temperature tools also show their kind:
+    the metric for the daily scale (``[wet]``/``[dry]``, ``[hot]``/``[cold]``), else the scale
+    (``[yearly]``, ``[monthly]``)."""
+    default_metric = {RAINFALL_TOOL_NAME: "wet", TEMPERATURE_TOOL_NAME: "hot"}.get(call.name)
+    if default_metric is None:
         return call.name
     scale = call.arguments.get("scale") or "daily"
-    kind = call.arguments.get("metric") or "wet" if scale == "daily" else scale
+    kind = call.arguments.get("metric") or default_metric if scale == "daily" else scale
     return f"{call.name}[{kind}]"
 
 
@@ -210,14 +249,18 @@ class ResearchAgent:
         *,
         rainfall: RainfallAnalyzer | None = None,
         enso: EnsoAnalyzer | None = None,
+        temperature: TemperatureAnalyzer | None = None,
         today: Callable[[], date] = date.today,
     ) -> None:
         if enso is not None and rainfall is None:
             raise ValueError("the ENSO tool is offered together with the rainfall tool")
+        if temperature is not None and rainfall is None:
+            raise ValueError("the temperature tool is offered together with the rainfall tool")
         self._llm = llm
         self._search = search
         self._rainfall = rainfall
         self._enso = enso
+        self._temperature = temperature
         self._limits = limits
         self._reporting = reporting
         self._today = today
@@ -281,10 +324,16 @@ class ResearchAgent:
                 map_point = validate_point(*map_point)
             except InvalidRainfallQueryError as exc:
                 raise InvalidQuestionError(f"map point: {exc}") from exc
+            if self._temperature is None:
+                how = f"To analyse rainfall there, call {RAINFALL_TOOL_NAME}"
+            else:
+                how = (
+                    f"To analyse rainfall or temperature there, call {RAINFALL_TOOL_NAME} or "
+                    f"{TEMPERATURE_TOOL_NAME}"
+                )
             question += (
                 f"\n\nSelected map point: {map_point[0]:.4f}, {map_point[1]:.4f} (latitude, "
-                f"longitude). To analyse rainfall there, call {RAINFALL_TOOL_NAME} with "
-                "use_map_point=true and no city."
+                f"longitude). {how} with use_map_point=true and no city."
             )
 
         state = _RunState(Budget(limits, rainfall_enabled=self._rainfall is not None))
@@ -294,11 +343,14 @@ class ResearchAgent:
             limits,
             rainfall=self._rainfall is not None,
             enso=self._enso is not None,
+            temperature=self._temperature is not None,
             conversation=context is not None,
         )
         tools = [SEARCH_TOOL]
         if self._rainfall is not None:
             tools.append(rainfall_tool(map_point is not None))
+        if self._temperature is not None:
+            tools.append(temperature_tool(map_point is not None))
         if self._enso is not None:
             tools.append(ENSO_TOOL)
         messages: list[Message] = [UserMessage(question)]
@@ -486,6 +538,8 @@ class ResearchAgent:
             return self._do_search(call, state)
         if call.name == RAINFALL_TOOL_NAME and self._rainfall is not None:
             return self._do_rainfall(call, self._rainfall, state)
+        if call.name == TEMPERATURE_TOOL_NAME and self._temperature is not None:
+            return self._do_temperature(call, self._temperature, state)
         if call.name == ENSO_TOOL_NAME and self._enso is not None:
             return self._do_enso(call, self._enso, state)
         if call.name == RECALL_TOOL_NAME and state.context and state.context.recallable:
@@ -551,19 +605,64 @@ class ResearchAgent:
         return formatted.text
 
     def _do_rainfall(self, call: ToolCall, analyzer: RainfallAnalyzer, state: _RunState) -> str:
+        return self._do_place_analysis(
+            call,
+            state,
+            parse=parse_rainfall_args,
+            analyzer=analyzer,
+            render=format_rainfall,
+            noun="rainfall",
+            limit_note=(
+                "A requested rainfall analysis was not run because the rainfall-analysis limit "
+                "was reached."
+            ),
+            limit_error=(
+                "Error: rainfall-analysis limit reached; no more analyses are allowed. Answer now."
+            ),
+        )
+
+    def _do_temperature(
+        self, call: ToolCall, analyzer: TemperatureAnalyzer, state: _RunState
+    ) -> str:
+        """Same contract as ``_do_rainfall``; shares the ``max_rainfall_calls`` limit."""
+        return self._do_place_analysis(
+            call,
+            state,
+            parse=parse_temperature_args,
+            analyzer=analyzer,
+            render=format_temperature,
+            noun="temperature",
+            limit_note=(
+                "A requested temperature analysis was not run because the rainfall/temperature/"
+                "ENSO analysis limit was reached."
+            ),
+            limit_error=(
+                "Error: analysis limit reached (rainfall, temperature and ENSO analyses share "
+                "it); no more analyses are allowed. Answer now."
+            ),
+        )
+
+    def _do_place_analysis(
+        self,
+        call: ToolCall,
+        state: _RunState,
+        *,
+        parse: Callable[..., PlaceArgs],
+        analyzer: RainfallAnalyzer | TemperatureAnalyzer,
+        render: Callable[[Any], str],
+        noun: str,
+        limit_note: str,
+        limit_error: str,
+    ) -> str:
+        """A rainfall or temperature call: same budget, ambiguity, R ID and context rules."""
         budget, notes = state.budget, state.notes
         try:
-            args = parse_rainfall_args(call.arguments, map_point=state.map_point is not None)
+            args = parse(call.arguments, map_point=state.map_point is not None)
         except ToolArgumentError as exc:
             return f"Error: {exc}."
         if budget.rainfall_left == 0:
-            notes.append(
-                "A requested rainfall analysis was not run because the rainfall-analysis limit "
-                "was reached."
-            )
-            return (
-                "Error: rainfall-analysis limit reached; no more analyses are allowed. Answer now."
-            )
+            notes.append(limit_note)
+            return limit_error
 
         options: dict[str, Any] = {
             "start_year": args.start_year,
@@ -574,6 +673,7 @@ class ResearchAgent:
             "scale": args.scale,
             "event_month": args.event_month,
         }
+        analysis: Any
         try:  # the model sees statistics, not daily values
             if args.use_map_point and state.map_point is not None:
                 analysis, _daily = analyzer.analyze_point(*state.map_point, **options)
@@ -589,27 +689,28 @@ class ResearchAgent:
                 state.ambiguous = tuple(c for c in exc.candidates if isinstance(c, Location))
             kind = "ambiguous" if isinstance(exc, AmbiguousLocationError) else "not found"
             notes.append(
-                f"The location '{args.city}' was {kind}; no rainfall analysis was run for it."
+                f"The location '{args.city}' was {kind}; no {noun} analysis was run for it."
             )
             return f"Error: {exc}."
         except RainfallError as exc:
             budget.record_rainfall()
-            log.warning("rainfall analysis failed: %s", exc)
+            log.warning("%s analysis failed: %s", noun, exc)
             notes.append(
-                f"A rainfall analysis failed ({type(exc).__name__}); the numerical evidence may "
+                f"A {noun} analysis failed ({type(exc).__name__}); the numerical evidence may "
                 "be incomplete."
             )
             return (
-                f"Error: the rainfall analysis failed ({exc}). You may retry once or answer with "
+                f"Error: the {noun} analysis failed ({exc}). You may retry once or answer with "
                 "what you have."
             )
 
         budget.record_rainfall(cached=analysis.provenance.from_cache)
         analysis = replace(analysis, id=f"R{state.next_data_number}")
-        text = format_rainfall(analysis)
+        text = render(analysis)
         tokens = estimate_tokens(text)
         log.info(
-            'rainfall[%s] "%s": %d valid year(s), ~%d tokens (%s)',
+            '%s[%s] "%s": %d valid year(s), ~%d tokens (%s)',
+            noun,
             analysis.summary,
             analysis.location.label,
             len(analysis.valid_years),
@@ -618,7 +719,7 @@ class ResearchAgent:
         )
         if tokens > budget.context_left:
             notes.append(
-                "A rainfall result was not shown to the model because the retrieved-context "
+                f"A {noun} result was not shown to the model because the retrieved-context "
                 f"limit ({self._limits.max_context_tokens} tokens) was reached."
             )
             return "Error: result omitted because the retrieved-context budget is used up."

@@ -14,12 +14,20 @@ from typing import Any, Protocol
 
 from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.agent.budget import OVERSHOOT_PREFIX
-from research_agent.agent.tools import ENSO_TOOL_NAME, RAINFALL_TOOL_NAME, SEARCH_TOOL_NAME
+from research_agent.agent.tools import (
+    ENSO_TOOL_NAME,
+    RAINFALL_TOOL_NAME,
+    SEARCH_TOOL_NAME,
+    TEMPERATURE_TOOL_NAME,
+)
 from research_agent.config import Limits
 from research_agent.llm import LLMAuthError, LLMError
 from research_agent.retrieval import AuthError, RetrievalError
 
-KNOWN_TOOLS = frozenset({SEARCH_TOOL_NAME, RAINFALL_TOOL_NAME, ENSO_TOOL_NAME})
+KNOWN_TOOLS = frozenset(
+    {SEARCH_TOOL_NAME, RAINFALL_TOOL_NAME, TEMPERATURE_TOOL_NAME, ENSO_TOOL_NAME}
+)
+METRICS = ("wet", "dry", "yearly", "monthly", "hot", "cold")
 
 _ALLOWED_KEYS = {
     "id",
@@ -88,10 +96,8 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
     if not isinstance(question, str) or not question.strip():
         raise EvalError(f"case {case_id!r}: 'question' is required")
     expect_metric = raw.get("expect_metric")
-    if expect_metric is not None and expect_metric not in ("wet", "dry", "yearly", "monthly"):
-        raise EvalError(
-            f"case {case_id!r}: expect_metric must be 'wet', 'dry', 'yearly' or 'monthly'"
-        )
+    if expect_metric is not None and expect_metric not in METRICS:
+        raise EvalError(f"case {case_id!r}: expect_metric must be one of {list(METRICS)}")
     tools: dict[str, str | None] = {}
     for key in ("expect_tool", "forbid_tool"):
         name = raw.get(key)
@@ -176,11 +182,17 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
         failures.append(
             f"expected at least {case.min_searches} search(es), ran {stats.search_calls}"
         )
+    # The metric belongs to the temperature tool when the case expects that tool, else rainfall.
+    metric_tool = (
+        TEMPERATURE_TOOL_NAME if case.expect_tool == TEMPERATURE_TOOL_NAME else RAINFALL_TOOL_NAME
+    )
     if case.expect_metric and not any(
-        name.endswith(f"[{case.expect_metric}]") for turn in stats.tool_trace for name in turn
+        name == f"{metric_tool}[{case.expect_metric}]"
+        for turn in stats.tool_trace
+        for name in turn
     ):
         failures.append(
-            f"expected the rainfall tool to be requested with metric {case.expect_metric!r}; "
+            f"expected {metric_tool} to be requested with metric {case.expect_metric!r}; "
             f"tools requested: {[list(turn) for turn in stats.tool_trace]}"
         )
     requested = {name.partition("[")[0] for turn in stats.tool_trace for name in turn}

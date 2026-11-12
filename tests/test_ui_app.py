@@ -117,32 +117,36 @@ def test_share_with_a_login_asks_gradio_for_a_public_link(monkeypatch, tmp_path)
     assert launched["server_name"] == "127.0.0.1"  # the local server itself stays local
 
 
-def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
+def test_app_builds_with_the_four_tabs_and_no_analytics(base_config):
     gr = pytest.importorskip("gradio")
     from research_agent.ui.app import build_app
 
     demo = build_app(base_config, Credentials(None, None))
     assert isinstance(demo, gr.Blocks)
     tabs = [b.label for b in demo.blocks.values() if isinstance(b, gr.Tab)]
-    assert tabs == ["Ask", "Search", "Rainfall"]
+    assert tabs == ["Ask", "Search", "Rainfall", "Temperature"]
     assert demo.analytics_enabled is False
     html = [b for b in demo.blocks.values() if isinstance(b, gr.HTML)]
     badges = [b.value for b in html if not b.head]
-    assert [("Uses the LLM" in b) for b in badges] == [True, False, False]
-    maps = [b for b in html if b.head]  # one on the Ask tab, one on the Rainfall tab
-    assert len(maps) == 2
+    assert [("Uses the LLM" in b) for b in badges] == [True, False, False, False]
+    maps = [b for b in html if b.head]  # Ask, Rainfall and Temperature tabs
+    assert len(maps) == 3
     for point_map in maps:
         assert "trigger('click'" in point_map.js_on_load and 'integrity="sha256-' in point_map.head
     checks = [b.label for b in demo.blocks.values() if isinstance(b, gr.Checkbox)]
     assert any(label.startswith("Use this point in the question") for label in checks)
     modes = [r for r in demo.blocks.values() if isinstance(r, gr.Radio) and r.label == "Location"]
-    assert [[v for _, v in r.choices] for r in modes] == [["city", "point"]]
+    assert [[v for _, v in r.choices] for r in modes] == [["city", "point"]] * 2
     radios = [b for b in demo.blocks.values() if isinstance(b, gr.Radio)]
     views = [r for r in radios if [v for _, v in r.choices] == ["daily", "monthly", "yearly"]]
-    assert len(views) == 3  # plot view on the Ask and Rainfall tabs, time scale on Rainfall
-    assert sum(r.label == "Time scale" for r in views) == 1
+    assert len(views) == 5  # plot view on Ask, Rainfall, Temperature; time scale on the last two
+    assert sum(r.label == "Time scale" for r in views) == 2
+    metrics = [[v for _, v in r.choices] for r in radios if r.label.startswith("Metric")]
+    assert metrics == [["wet", "dry"], ["hot", "cold"]]
     years = [b.label for b in demo.blocks.values() if isinstance(b, gr.Number)]
     assert any(label.startswith("Year to plot (press Enter") for label in years)  # Ask tab
+    plots = [b.label for b in demo.blocks.values() if isinstance(b, gr.Plot)]
+    assert plots == ["Analysis vs baseline", "Rainfall vs baseline", "Temperature vs baseline"]
 
 
 def test_map_click_fills_the_coordinates_and_switches_to_point_mode():

@@ -1,4 +1,4 @@
-"""The Gradio app: three tabs (Ask, Search, Rainfall) over the handlers in ``handlers.py``."""
+"""The Gradio app: four tabs (Ask, Search, Rainfall, Temperature) over ``handlers.py``."""
 
 from __future__ import annotations
 
@@ -22,12 +22,20 @@ def _badge(uses_llm: bool, text: str) -> str:
     return _BADGE.format(color="#b45309" if uses_llm else "#15803d", text=text)
 
 
-def _view_radio() -> gr.Radio:
+_VIEW_LABELS = {
+    "rainfall": ("Monthly totals", "Annual totals"),
+    "temperature": ("Monthly means", "Annual means"),
+    "any": ("Monthly values", "Annual values"),
+}
+
+
+def _view_radio(kind: str = "rainfall") -> gr.Radio:
+    monthly, annual = _VIEW_LABELS[kind]
     return gr.Radio(
         [
             ("Daily values vs smoothed day-of-year mean", "daily"),
-            ("Monthly totals vs 10th-90th percentile band", "monthly"),
-            ("Annual totals vs baseline band", "yearly"),
+            (f"{monthly} vs 10th-90th percentile band", "monthly"),
+            (f"{annual} vs baseline band", "yearly"),
         ],
         value="daily",
         label="Plot view (switching redraws the last analysis)",
@@ -100,8 +108,9 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
             with gr.Tab("Ask"):
                 gr.HTML(_badge(True, f"Uses the LLM ({cfg.llm.model}): costs tokens"))
                 gr.Markdown(
-                    "A GeoAI / remote-sensing literature or extreme-rainfall question. The model "
-                    "decides which tools to call; the numbers come from code, not from the model. "
+                    "A GeoAI / remote-sensing literature, rainfall or temperature question. The "
+                    "model decides which tools to call; the numbers come from code, not from the "
+                    "model. "
                     "Follow-ups keep the context (for example *what about Rotterdam?*); press "
                     "*New conversation* to start over."
                 )
@@ -114,7 +123,8 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 with gr.Accordion("Map point (optional)", open=False):
                     ask_use_point = gr.Checkbox(
                         label="Use this point in the question (the code passes the exact "
-                        "coordinates to the rainfall tool; the model does not type them)"
+                        "coordinates to the rainfall or temperature tool; the model does not "
+                        "type them)"
                     )
                     with gr.Row():
                         ask_lat = gr.Number(label="Latitude (-90 to 90)")
@@ -127,13 +137,13 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 ask_status = gr.Markdown()
                 ask_answer = gr.Markdown()
                 with gr.Row():
-                    ask_view = _view_radio()
+                    ask_view = _view_radio("any")
                     ask_year = gr.Number(
                         label="Year to plot (press Enter; redraws from the stored data, "
                         "no new question)",
                         precision=0,
                     )
-                ask_plot = gr.Plot(label="Rainfall vs baseline")
+                ask_plot = gr.Plot(label="Analysis vs baseline")
                 ask_note = gr.Markdown()
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
                 ask_session = gr.State()  # this browser tab's conversation ID
@@ -290,5 +300,102 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     [rain_series, plot_year, window, view],
                     [rain_plot, rain_note],
                     api_name="rainfall_plot",
+                )
+
+            with gr.Tab("Temperature"):
+                gr.HTML(_badge(False, "No LLM: deterministic ERA5 analysis (Open-Meteo)"))
+                t_mode = gr.Radio(
+                    [("City", "city"), ("Point on map", "point")], value="city", label="Location"
+                )
+                with gr.Row():
+                    t_city = gr.Textbox(label="City (name only)", placeholder="Madrid")
+                    t_country = gr.Textbox(
+                        label="Country code (optional)", placeholder="ES", max_length=2
+                    )
+                    t_region = gr.Textbox(label="Region (optional)")
+                with gr.Accordion("Point on map (click to choose, or type the coordinates)"):
+                    with gr.Row():
+                        t_lat = gr.Number(label="Latitude (-90 to 90)")
+                        t_lon = gr.Number(label="Longitude (-180 to 180)")
+                    t_map = _point_map()
+                t_map.click(_map_click, None, [t_lat, t_lon, t_mode])
+                t_scale = gr.Radio(
+                    [
+                        ("Daily (hottest days or coldest nights)", "daily"),
+                        ("Monthly means", "monthly"),
+                        ("Yearly means", "yearly"),
+                    ],
+                    value="daily",
+                    label="Time scale",
+                )
+                t_metric = gr.Radio(
+                    [
+                        ("Hot: hottest day of each year (TXx)", "hot"),
+                        ("Cold: coldest night of each year (TNn)", "cold"),
+                    ],
+                    value="hot",
+                    label="Metric (daily scale only)",
+                )
+                with gr.Row():
+                    t_start = gr.Number(
+                        label=f"Start year (default {cfg.rainfall.default_start_year})", precision=0
+                    )
+                    t_end = gr.Number(label="End year (default: last complete year)", precision=0)
+                with gr.Row():
+                    t_date = gr.Textbox(
+                        label="Event date (optional, daily)", placeholder="YYYY-MM-DD"
+                    )
+                    t_year = gr.Number(label="Event year (monthly or yearly)", precision=0)
+                    t_month = gr.Number(
+                        label="Event month 1-12 (monthly, with event year)", precision=0
+                    )
+                t_view = _view_radio("temperature")
+                with gr.Accordion("Plot options", open=False):
+                    t_plot_year = gr.Number(
+                        label="Year to plot (default: event year, else latest valid year)",
+                        precision=0,
+                    )
+                    t_window = gr.Slider(
+                        1,
+                        61,
+                        value=DEFAULT_WINDOW_DAYS,
+                        step=2,
+                        label="Baseline smoothing window (days, daily view only)",
+                    )
+                t_button = gr.Button("Analyse", variant="primary")
+                t_status = gr.Markdown()
+                t_text = gr.Textbox(label="Analysis", lines=18, max_lines=40, interactive=False)
+                t_plot = gr.Plot(label="Temperature vs baseline")
+                t_note = gr.Markdown()
+                t_series = gr.State()  # (record, daily series) of the last analysis, per session
+                t_button.click(
+                    partial(handlers.temperature, cfg),
+                    [
+                        t_city,
+                        t_country,
+                        t_region,
+                        t_start,
+                        t_end,
+                        t_date,
+                        t_metric,
+                        t_year,
+                        t_plot_year,
+                        t_window,
+                        t_view,
+                        t_scale,
+                        t_month,
+                        t_mode,
+                        t_lat,
+                        t_lon,
+                    ],
+                    [t_status, t_text, t_plot, t_note, t_series],
+                    api_name="temperature",
+                )
+                t_scale.change(lambda value: value, t_scale, t_view)  # the plot follows the scale
+                t_view.change(
+                    partial(handlers.replot, cfg),
+                    [t_series, t_plot_year, t_window, t_view],
+                    [t_plot, t_note],
+                    api_name="temperature_plot",
                 )
     return demo
