@@ -73,7 +73,7 @@ Run all commands from the repository root: the default config path is `configs/b
 | `uv run research-agent rainfall "<city>" [--country-code CN] [--region Henan] [--event-date 2021-07-20] [--start-year 1950] [--end-year 2025] [--metric dry] [--event-year 2022]` | Rainfall-extremes analysis only, with no LLM. Default (wet): Rx1day per year, baseline, largest events, how extreme one day was. `--metric dry`: dry spells, driest years, how dry a year or dry spell was |
 | `uv run research-agent enso [--phase el_nino\|la_nina\|both] [--start-year 1990] [--end-year 2020] [--year 2010]` | El Niño / La Niña events from NOAA CPC's RONI only, with no LLM: first and last season, length, peak, strength; `--year` also shows that year's seasonal values and overlapping events |
 | `uv run research-agent ui [--host 127.0.0.1] [--port 7860]` | Web interface with Ask, Search and Rainfall tabs; each says whether the LLM is used, and Rainfall plots one year either as daily values against a smoothed day-of-year mean or as monthly totals against the baseline 10th-90th percentile band (a toggle). Needs `uv sync --extra ui`; local use only, it has no login |
-| `uv run research-agent eval [--only <case-id>]` | Run the evaluation cases in `evals/cases.toml` (costs tokens and searches) |
+| `uv run research-agent eval run --live [--only <case-id>]` | Run the evaluation cases in `evals/cases.toml` within a run budget (costs tokens; without `--live` it only prints the plan) |
 | `uv run research-agent check-credentials [--require-openai]` | Check that keys are present and well formed |
 | `uv run research-agent show-config` | Validate `configs/base.toml` and print the resource limits |
 
@@ -159,9 +159,14 @@ Rainfall and ENSO results count against the same retrieved-text limit as literat
 `evals/cases.toml` holds 26 cases (the 5 ENSO cases are listed after this paragraph): 10 on-topic literature questions, one off-topic question, one prompt-injection attempt, 5 extreme-rainfall cases (event ranking, largest events, rainfall plus literature, an ambiguous city, years before the archive starts) and 4 dry-spell cases (longest spells, how dry a year was, dry spell plus literature, wet and dry together). Cases can state `expect_metric`, which checks the model's choice of `wet` or `dry` on the tool trace, and `expect_tool` / `forbid_tool`, which check which tool it requested. The 5 ENSO cases: events since 1990, was 2010 El Niño or La Niña, a literature-only question that must not call the ENSO tool, strongest La Niña events plus their impacts in the literature, and current conditions (time-dependent: it describes the record as of 2026-11-02). Answers vary between runs, so each case states expected **properties** (it searched, cited enough works, mentions a topic keyword, did not leak the system prompt) and not exact text. Every case is also checked against invariants: structured answer, limitations present, every citation resolves to a reference, budgets respected.
 
 ```bash
-uv run research-agent eval                  # all cases (the 12 literature cases take about 78k tokens and 25 searches; the 5 rainfall cases about 20k tokens)
-uv run research-agent eval --only crop-type-dl
+uv run research-agent eval list                          # free: cases with their split and category
+uv run research-agent eval run                           # free: prints the plan (cases, worst-case tokens, budget)
+uv run research-agent eval run --live                    # the dev split with the real model (about 6.5k tokens per case)
+uv run research-agent eval run --live --only crop-type-dl --max-tokens 30000
+uv run research-agent eval score evals/runs/<run-id>     # free: score stored records again, offline
 ```
+
+Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
 
 The cases are a draft; edit them to match the questions you care about.
 
