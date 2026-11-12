@@ -126,11 +126,29 @@ def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
     tabs = [b.label for b in demo.blocks.values() if isinstance(b, gr.Tab)]
     assert tabs == ["Ask", "Search", "Rainfall"]
     assert demo.analytics_enabled is False
-    badges = [b.value for b in demo.blocks.values() if isinstance(b, gr.HTML)]
+    html = [b for b in demo.blocks.values() if isinstance(b, gr.HTML)]
+    badges = [b.value for b in html if not b.head]
     assert [("Uses the LLM" in b) for b in badges] == [True, False, False]
+    (point_map,) = [b for b in html if b.head]  # the Rainfall tab's map
+    assert "trigger('click'" in point_map.js_on_load and 'integrity="sha256-' in point_map.head
+    modes = [r for r in demo.blocks.values() if isinstance(r, gr.Radio) and r.label == "Location"]
+    assert [[v for _, v in r.choices] for r in modes] == [["city", "point"]]
     radios = [b for b in demo.blocks.values() if isinstance(b, gr.Radio)]
     views = [r for r in radios if [v for _, v in r.choices] == ["daily", "monthly", "yearly"]]
     assert len(views) == 3  # plot view on the Ask and Rainfall tabs, time scale on Rainfall
     assert sum(r.label == "Time scale" for r in views) == 1
     years = [b.label for b in demo.blocks.values() if isinstance(b, gr.Number)]
     assert any(label.startswith("Year to plot (press Enter") for label in years)  # Ask tab
+
+
+def test_map_click_fills_the_coordinates_and_switches_to_point_mode():
+    gr = pytest.importorskip("gradio")
+    from research_agent.ui.app import _map_click
+
+    assert _map_click(gr.EventData(None, {"lat": 34.757781, "lon": 113.64861})) == (
+        34.7578,
+        113.6486,
+        "point",
+    )
+    skipped = _map_click(gr.EventData(None, {"lat": "x"}))
+    assert all(isinstance(s, type(gr.skip())) for s in skipped)  # bad payload changes nothing

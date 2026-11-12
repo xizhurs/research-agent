@@ -34,6 +34,40 @@ def _view_radio() -> gr.Radio:
     )
 
 
+# Leaflet, pinned with subresource integrity, loaded by the viewer's browser (as are the OSM tiles).
+_LEAFLET_HEAD = (
+    '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" '
+    'integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">'
+    '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" '
+    'integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>'
+)
+# A click puts one marker on the map and sends the point to Python as a "click" event.
+_MAP_JS = """
+const box = element.querySelector('.ra-map');
+const map = L.map(box, {worldCopyJump: true}).setView([20, 0], 2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+let marker = null;
+map.on('click', (e) => {
+  const p = e.latlng.wrap();
+  if (marker) { marker.setLatLng(p); } else { marker = L.circleMarker(p, {radius: 7}).addTo(map); }
+  trigger('click', {lat: p.lat, lon: p.lng});
+});
+new ResizeObserver(() => map.invalidateSize()).observe(box);
+"""
+
+
+def _map_click(evt: gr.EventData):
+    """Fill the latitude and longitude boxes from a map click and switch to point mode."""
+    try:
+        lat, lon = handlers.point_from_click(evt._data)
+    except ValueError:
+        return gr.skip(), gr.skip(), gr.skip()
+    return lat, lon, "point"
+
+
 def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
     """Build the interface. Handlers get the config and credentials; nothing is global.
 
@@ -134,12 +168,26 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
 
             with gr.Tab("Rainfall"):
                 gr.HTML(_badge(False, "No LLM: deterministic ERA5 analysis (Open-Meteo)"))
+                location_mode = gr.Radio(
+                    [("City", "city"), ("Point on map", "point")], value="city", label="Location"
+                )
                 with gr.Row():
                     city = gr.Textbox(label="City (name only)", placeholder="Zhengzhou")
                     country_code = gr.Textbox(
                         label="Country code (optional)", placeholder="CN", max_length=2
                     )
                     region = gr.Textbox(label="Region (optional)", placeholder="Henan")
+                with gr.Accordion("Point on map (click to choose, or type the coordinates)"):
+                    with gr.Row():
+                        latitude = gr.Number(label="Latitude (-90 to 90)")
+                        longitude = gr.Number(label="Longitude (-180 to 180)")
+                    point_map = gr.HTML(
+                        html_template='<div class="ra-map" style="height:360px"></div>',
+                        head=_LEAFLET_HEAD,
+                        js_on_load=_MAP_JS,
+                        apply_default_css=False,
+                    )
+                point_map.click(_map_click, None, [latitude, longitude, location_mode])
                 scale = gr.Radio(
                     [
                         ("Daily (heavy-rain days or dry spells)", "daily"),
@@ -207,6 +255,9 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         view,
                         scale,
                         event_month,
+                        location_mode,
+                        latitude,
+                        longitude,
                     ],
                     [rain_status, rain_text, rain_plot, rain_note, rain_series],
                     api_name="rainfall",

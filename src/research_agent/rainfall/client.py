@@ -9,10 +9,11 @@ before any request, caches raw responses on disk, retries only transient failure
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 from urllib.parse import urlencode
@@ -77,6 +78,19 @@ def build_archive_params(
 
 def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _validate_point(latitude: object, longitude: object) -> tuple[float, float]:
+    """Check coordinates before any request: finite numbers within the valid ranges."""
+    checked = []
+    for name, value, limit in (("latitude", latitude, 90), ("longitude", longitude, 180)):
+        number = _number(value)
+        if number is None or not math.isfinite(number):
+            raise InvalidRainfallQueryError(f"{name} must be a number")
+        if not -limit <= number <= limit:
+            raise InvalidRainfallQueryError(f"{name} must be between -{limit} and {limit}")
+        checked.append(number)
+    return checked[0], checked[1]
 
 
 def parse_archive(payload: Any) -> Archive:
@@ -216,21 +230,10 @@ class RainfallClient:
         """
         cfg = self._config
         today = self._today()
-        last_complete_year = today.year - 1
-        city, country_code, region, start_year, end_year = self._validate(
-            city,
-            country_code,
-            region,
-            start_year,
-            end_year,
-            event_date,
-            today,
-            metric,
-            event_year,
-            scale,
-            event_month,
+        city, country_code, region = self._validate_city(city, country_code, region)
+        start_year, end_year = self._validate(
+            start_year, end_year, event_date, today, metric, event_year, scale, event_month
         )
-        series_start = start_year if scale == "daily" else min(start_year, cfg.baseline_start_year)
 
         geo_params = build_geocode_params(city, country_code, cfg.geocode_candidates)
         candidates, geo_cached = self._cached(cfg.geocoding_url, geo_params, parse_candidates)
@@ -241,7 +244,93 @@ class RainfallClient:
             dominance_ratio=cfg.dominance_ratio,
             same_place_km=cfg.same_place_km,
         )
+        return self._analyze_location(
+            location,
+            others,
+            geo_cached,
+            today=today,
+            start_year=start_year,
+            end_year=end_year,
+            event_date=event_date,
+            metric=metric,
+            event_year=event_year,
+            scale=scale,
+            event_month=event_month,
+        )
 
+    def analyze_point(
+        self,
+        latitude: float,
+        longitude: float,
+        *,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        event_date: date | None = None,
+        metric: str = "wet",
+        event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
+    ) -> tuple[RainfallRecord, Archive]:
+        """Like ``analyze``, for a point given by coordinates (for example a map click).
+
+        No geocoding: the archive request goes straight to the point, and the record adds a
+        caveat naming the ERA5 grid cell actually used.
+        """
+        today = self._today()
+        latitude, longitude = _validate_point(latitude, longitude)
+        start_year, end_year = self._validate(
+            start_year, end_year, event_date, today, metric, event_year, scale, event_month
+        )
+        location = Location(
+            id=0,
+            name=f"{latitude:.4f}, {longitude:.4f}",
+            admin1=None,
+            country=None,
+            country_code=None,
+            latitude=latitude,
+            longitude=longitude,
+            population=None,
+            timezone=None,
+        )
+        record, archive = self._analyze_location(
+            location,
+            (),
+            True,
+            today=today,
+            start_year=start_year,
+            end_year=end_year,
+            event_date=event_date,
+            metric=metric,
+            event_year=event_year,
+            scale=scale,
+            event_month=event_month,
+        )
+        caveat = (
+            f"The location is a point given by coordinates ({location.name}); the values are for "
+            f"the ERA5 grid cell at {archive.latitude:.4f}, {archive.longitude:.4f} (about "
+            "0.25 degrees), not for the exact point."
+        )
+        return replace(record, caveats=(*record.caveats, caveat)), archive
+
+    def _analyze_location(
+        self,
+        location: Location,
+        others: tuple[Location, ...],
+        geo_cached: bool,
+        *,
+        today: date,
+        start_year: int,
+        end_year: int,
+        event_date: date | None,
+        metric: str,
+        event_year: int | None,
+        scale: str,
+        event_month: int | None,
+    ) -> tuple[RainfallRecord, Archive]:
+        """Fetch the archive for an already resolved ``location`` and compute the statistics."""
+        cfg = self._config
+        last_complete_year = today.year - 1
+        series_start = start_year if scale == "daily" else min(start_year, cfg.baseline_start_year)
         params = self._archive_params(location, series_start, end_year)
         archive, archive_cached = self._cached(cfg.archive_url, params, parse_archive)
         provenance = Provenance(
@@ -319,25 +408,10 @@ class RainfallClient:
             )
         return record, archive
 
-    def _validate(
-        self,
-        city: object,
-        country_code: object,
-        region: object,
-        start_year: object,
-        end_year: object,
-        event_date: object,
-        today: date,
-        metric: object,
-        event_year: object,
-        scale: object = "daily",
-        event_month: object = None,
-    ) -> tuple[str, str | None, str | None, int, int]:
-        cfg = self._config
-        if metric not in METRICS:
-            raise InvalidRainfallQueryError("metric must be 'wet' or 'dry'")
-        if scale not in SCALES:
-            raise InvalidRainfallQueryError("scale must be 'daily', 'monthly' or 'yearly'")
+    @staticmethod
+    def _validate_city(
+        city: object, country_code: object, region: object
+    ) -> tuple[str, str | None, str | None]:
         if not isinstance(city, str) or not city.strip():
             raise InvalidRainfallQueryError("city must be a non-empty string")
         city = city.strip()
@@ -349,6 +423,28 @@ class RainfallClient:
             raise InvalidRainfallQueryError("country_code must be a 2-letter ISO code, e.g. 'FR'")
         if region is not None and (not isinstance(region, str) or not region.strip()):
             raise InvalidRainfallQueryError("region must be a non-empty string")
+        return (
+            city,
+            country_code.strip().upper() if isinstance(country_code, str) else None,
+            region.strip() if isinstance(region, str) else None,
+        )
+
+    def _validate(
+        self,
+        start_year: object,
+        end_year: object,
+        event_date: object,
+        today: date,
+        metric: object,
+        event_year: object,
+        scale: object = "daily",
+        event_month: object = None,
+    ) -> tuple[int, int]:
+        cfg = self._config
+        if metric not in METRICS:
+            raise InvalidRainfallQueryError("metric must be 'wet' or 'dry'")
+        if scale not in SCALES:
+            raise InvalidRainfallQueryError("scale must be 'daily', 'monthly' or 'yearly'")
 
         first = cfg.default_start_year if start_year is None else start_year
         # Monthly questions may be about this year's finished months; the others need whole years.
@@ -396,13 +492,7 @@ class RainfallClient:
                     f"event_date must lie between {first}-01-01 and {latest.isoformat()} "
                     "(widen start_year/end_year to include it)"
                 )
-        return (
-            city,
-            country_code.strip().upper() if isinstance(country_code, str) else None,
-            region.strip() if isinstance(region, str) else None,
-            first,
-            last,
-        )
+        return first, last
 
     def _cached[T](
         self, url: str, params: dict[str, str], parse: Callable[[Any], T]

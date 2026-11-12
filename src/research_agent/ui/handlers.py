@@ -196,6 +196,20 @@ def replot(
     return _plot(cfg, record, None, year, window, archive, view)
 
 
+def point_from_click(data: object) -> tuple[float, float]:
+    """The point a map click sent (``{"lat": ..., "lon": ...}``), rounded to 4 decimals.
+
+    Raises ValueError for anything else; the range check is left to the rainfall client.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("map click carried no coordinates")
+    lat, lon = data.get("lat"), data.get("lon")
+    for value in (lat, lon):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("map click carried no coordinates")
+    return round(float(lat), 4), round(float(lon), 4)
+
+
 def rainfall(
     cfg: Config,
     city: str,
@@ -211,12 +225,27 @@ def rainfall(
     view: str = "daily",
     scale: str = "daily",
     event_month: float | None = None,
+    location_mode: str = "city",
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> tuple[str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None]:
     """ERA5 rainfall analysis at a daily, monthly or yearly ``scale``.
 
-    Returns ``(status, statistics, figure, plot note, series)``; ``series`` is the record and
-    daily data for ``replot`` (None when the analysis failed).
+    ``location_mode`` ``"city"`` geocodes ``city``; ``"point"`` uses ``latitude``/``longitude``
+    (for example from a map click) and ignores the city fields. Returns ``(status, statistics,
+    figure, plot note, series)``; ``series`` is the record and daily data for ``replot`` (None
+    when the analysis failed).
     """
+    if location_mode not in ("city", "point"):
+        return "**Error:** location must be 'city' or 'point'", "", None, "", None
+    if location_mode == "point" and (latitude is None or longitude is None):
+        return (
+            "**Error:** click the map or enter both latitude and longitude",
+            "",
+            None,
+            "",
+            None,
+        )
     try:
         day = date.fromisoformat(event_date.strip()) if event_date and event_date.strip() else None
     except ValueError:
@@ -234,19 +263,27 @@ def rainfall(
             observe("ui.rainfall", "span", tags=("ui",)) as span,
             RainfallClient(cfg.rainfall) as client,
         ):
-            set_content(span, input={"city": city, "metric": metric, "event_date": event_date})
-            record, archive = client.analyze(
-                city,
-                country_code=_text(country_code),
-                region=_text(region),
-                start_year=years[0],
-                end_year=years[1],
-                event_date=day,
-                metric=metric,
-                event_year=years[2],
-                scale=scale,
-                event_month=years[4],
+            where = (
+                {"latitude": latitude, "longitude": longitude}
+                if location_mode == "point"
+                else {"city": city}
             )
+            set_content(span, input={**where, "metric": metric, "event_date": event_date})
+            options = {
+                "start_year": years[0],
+                "end_year": years[1],
+                "event_date": day,
+                "metric": metric,
+                "event_year": years[2],
+                "scale": scale,
+                "event_month": years[4],
+            }
+            if location_mode == "point":
+                record, archive = client.analyze_point(latitude, longitude, **options)
+            else:
+                record, archive = client.analyze(
+                    city, country_code=_text(country_code), region=_text(region), **options
+                )
             span.set_attribute("research_agent.cached", record.provenance.from_cache)
             set_content(span, output=format_rainfall(replace(record, id="R1")))
             figure, note = _plot(cfg, record, client, years[3], window, archive, view)
