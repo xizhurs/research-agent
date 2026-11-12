@@ -22,6 +22,7 @@ from research_agent.agent.tools import (
     ENSO_TOOL_NAME,
     RAINFALL_TOOL_NAME,
     SEARCH_TOOL_NAME,
+    TEMPERATURE_TOOL_NAME,
 )
 from research_agent.config import ConversationConfig
 from research_agent.conversation.models import (
@@ -36,12 +37,15 @@ from research_agent.conversation.models import (
 from research_agent.enso import EnsoAnalysis
 from research_agent.rainfall import Location
 from research_agent.retrieval import Work
+from research_agent.temperature import TemperatureExtremes, TemperatureMonthly, TemperatureYearly
 
 SOURCES = {
     SEARCH_TOOL_NAME: "OpenAlex",
     RAINFALL_TOOL_NAME: "ERA5 (Open-Meteo)",
+    TEMPERATURE_TOOL_NAME: "ERA5 (Open-Meteo)",
     ENSO_TOOL_NAME: "NOAA CPC RONI",
 }
+PLACE_TOOLS = (RAINFALL_TOOL_NAME, TEMPERATURE_TOOL_NAME)
 QUESTION_CHARS = 100  # in a one-line summary
 
 
@@ -79,10 +83,14 @@ def turn_settings(events: Iterable[ToolEvent]) -> dict:
         sources.append(SOURCES.get(event.tool, event.tool))
         if event.tool == SEARCH_TOOL_NAME:
             queries.append(str(args.get("query", "")))
-        elif event.tool == RAINFALL_TOOL_NAME and event.location is not None:
+        elif event.tool in PLACE_TOOLS and event.location is not None:
             places.append(place_ref(event.location))
             scale = str(args.get("scale") or "daily")
-            metrics.append(str(args.get("metric") or "wet") if scale == "daily" else scale)
+            if event.tool == RAINFALL_TOOL_NAME:
+                metrics.append(str(args.get("metric") or "wet") if scale == "daily" else scale)
+            else:  # labelled, so "yearly" temperature is not mistaken for yearly rainfall
+                kind = str(args.get("metric") or "hot") if scale == "daily" else scale
+                metrics.append(f"temperature {kind}")
             if _period(args):
                 settings["period"] = _period(args)
             for key in ("event_date", "event_year", "event_month"):
@@ -100,13 +108,13 @@ def turn_settings(events: Iterable[ToolEvent]) -> dict:
 
 
 def _pending(events: Iterable[ToolEvent], previous: Clarification | None) -> Clarification | None:
-    """An ambiguous place stays pending until a rainfall call resolves a place."""
+    """An ambiguous place stays pending until a rainfall or temperature call resolves one."""
     pending = previous
     for event in events:
         if event.status == "ambiguous":
             city = str(event.arguments.get("city", ""))
             pending = Clarification(city, tuple(place_ref(c) for c in event.candidates))
-        elif event.tool == RAINFALL_TOOL_NAME and event.status == "ok" and event.location:
+        elif event.tool in PLACE_TOOLS and event.status == "ok" and event.location:
             pending = None
     return pending
 
@@ -143,7 +151,7 @@ def evidence_label(item: Work | object) -> str:
         return f"{title} ({item.year or 'n.d.'})"
     if isinstance(item, EnsoAnalysis):
         return f"ENSO events ({item.index_name}), starting {item.first_year}-{item.last_year}"
-    years = item.valid_years  # a RainfallRecord
+    years = item.valid_years  # a rainfall or temperature record
     span = f"{years[0]}-{years[-1]}" if years else "no valid years"
     return f"{item.location.label}, {item.summary} {span}"
 
@@ -151,6 +159,8 @@ def evidence_label(item: Work | object) -> str:
 def _kind(item) -> str:
     if isinstance(item, Work):
         return "work"
+    if isinstance(item, TemperatureYearly | TemperatureMonthly | TemperatureExtremes):
+        return "temperature"
     return "enso" if isinstance(item, EnsoAnalysis) else "rainfall"
 
 

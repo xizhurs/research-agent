@@ -24,6 +24,14 @@ from research_agent.rainfall import (
     YearlyAnalysis,
 )
 from research_agent.retrieval import SearchResult, Work
+from research_agent.temperature import (
+    MeanContext,
+    TempBaseline,
+    TemperatureExtremes,
+    TemperatureMonthly,
+    TemperatureRecord,
+    TemperatureYearly,
+)
 
 SEARCH_TOOL_NAME = "search_literature"
 
@@ -134,9 +142,12 @@ def rainfall_tool(map_point: bool) -> ToolSpec:
 
     Without a map point it is ``RAINFALL_TOOL`` itself, unchanged.
     """
-    if not map_point:
-        return RAINFALL_TOOL
-    params = RAINFALL_TOOL.parameters
+    return _with_map_point(RAINFALL_TOOL) if map_point else RAINFALL_TOOL
+
+
+def _with_map_point(spec: ToolSpec) -> ToolSpec:
+    """``spec`` with an extra ``use_map_point`` flag; ``city`` is then optional."""
+    params = spec.parameters
     properties = {
         **params["properties"],
         "use_map_point": {
@@ -147,9 +158,83 @@ def rainfall_tool(map_point: bool) -> ToolSpec:
             ),
         },
     }
-    return replace(
-        RAINFALL_TOOL, parameters={**params, "properties": properties, "required": ["scale"]}
-    )
+    return replace(spec, parameters={**params, "properties": properties, "required": ["scale"]})
+
+
+TEMPERATURE_TOOL_NAME = "analyze_temperature"
+
+TEMPERATURE_TOOL = ToolSpec(
+    name=TEMPERATURE_TOOL_NAME,
+    description=(
+        "Quantify past air temperature in one city from ERA5 reanalysis (daily maximum, minimum "
+        "and mean at 2 m), at one time scale. scale='yearly': annual mean temperature, the "
+        "warmest and coolest years, how a year (event_year) compares with the 1991-2020 "
+        "baseline; use it for general questions such as 'how warm were the last 10 years' or "
+        "'was 2024 the warmest year'. scale='monthly': monthly means, how a month (event_year + "
+        "event_month) or each month of a year (event_year) compares with the same calendar "
+        "month, and the months furthest above or below normal. scale='daily': single days; "
+        "metric='hot' gives TXx (hottest day of each year), the hottest days and how hot a day "
+        "(event_date) was; metric='cold' gives TNn (coldest night of each year), the coldest "
+        "nights and how cold a day was. A hot day is not a heatwave index. Returns a numeric "
+        "record with an ID such as R1. Use analyze_rainfall_extremes for rain and "
+        "search_literature for explanations. Put only the place name in 'city' and use "
+        "'country_code' and 'region' to disambiguate. Not for forecasts."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string", "description": "City name only, e.g. 'Madrid'."},
+            "scale": {
+                "type": "string",
+                "enum": ["yearly", "monthly", "daily"],
+                "description": (
+                    "'yearly' for annual means and general questions, 'monthly' for months or "
+                    "seasons, 'daily' for hot days (metric 'hot') or cold nights (metric "
+                    "'cold')."
+                ),
+            },
+            "country_code": {
+                "type": "string",
+                "description": "Optional. ISO 3166-1 alpha-2 country code, e.g. 'ES'.",
+            },
+            "region": {
+                "type": "string",
+                "description": "Optional. State or province name, e.g. 'Madrid'.",
+            },
+            "start_year": {"type": "integer", "description": "Optional. First year to analyse."},
+            "end_year": {
+                "type": "integer",
+                "description": "Optional. Last year to analyse (default: last complete year).",
+            },
+            "event_date": {
+                "type": "string",
+                "description": "Optional, scale 'daily' only. A day to assess, as YYYY-MM-DD.",
+            },
+            "metric": {
+                "type": "string",
+                "enum": ["hot", "cold"],
+                "description": (
+                    "Optional, scale 'daily' only. 'hot' (default) for the hottest days, 'cold' "
+                    "for the coldest nights."
+                ),
+            },
+            "event_year": {
+                "type": "integer",
+                "description": "Optional, scale 'yearly' or 'monthly'. A year to assess.",
+            },
+            "event_month": {
+                "type": "integer",
+                "description": "Optional, scale 'monthly' with event_year. A month, 1-12.",
+            },
+        },
+        "required": ["city", "scale"],
+    },
+)
+
+
+def temperature_tool(map_point: bool) -> ToolSpec:
+    """The temperature tool; with ``map_point`` it also takes ``use_map_point``."""
+    return _with_map_point(TEMPERATURE_TOOL) if map_point else TEMPERATURE_TOOL
 
 
 ENSO_TOOL_NAME = "analyze_enso_events"
@@ -235,12 +320,14 @@ def parse_recall_args(arguments: dict[str, Any], max_ids: int) -> tuple[str, ...
     return unique
 
 
-def format_recalled(item: Work | RainfallRecord | EnsoAnalysis) -> str:
+def format_recalled(item: Work | RainfallRecord | EnsoAnalysis | TemperatureRecord) -> str:
     """The full text the model saw when the item was first retrieved."""
     if isinstance(item, Work):
         return _format_work(item)
     if isinstance(item, EnsoAnalysis):
         return format_enso(item)
+    if isinstance(item, TemperatureYearly | TemperatureMonthly | TemperatureExtremes):
+        return format_temperature(item)
     return format_rainfall(item)
 
 
@@ -331,7 +418,9 @@ def format_results(
 
 
 @dataclass(frozen=True)
-class RainfallArgs:
+class PlaceArgs:
+    """Arguments of a rainfall or temperature call."""
+
     city: str | None  # None when use_map_point is set
     country_code: str | None
     region: str | None
@@ -345,6 +434,9 @@ class RainfallArgs:
     use_map_point: bool = False
 
 
+RainfallArgs = PlaceArgs
+
+
 def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
     value = arguments.get(key)
     if value is None:
@@ -354,9 +446,21 @@ def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
     return value
 
 
-def parse_rainfall_args(arguments: dict[str, Any], *, map_point: bool = False) -> RainfallArgs:
+def parse_rainfall_args(arguments: dict[str, Any], *, map_point: bool = False) -> PlaceArgs:
     """Validate a rainfall call. ``map_point``: a map point is selected, so ``use_map_point``
     may replace ``city``."""
+    return _parse_place_args(arguments, map_point, ("wet", "dry"))
+
+
+def parse_temperature_args(arguments: dict[str, Any], *, map_point: bool = False) -> PlaceArgs:
+    """Validate a temperature call (metric 'hot' or 'cold'); otherwise as for rainfall."""
+    return _parse_place_args(arguments, map_point, ("hot", "cold"))
+
+
+def _parse_place_args(
+    arguments: dict[str, Any], map_point: bool, metrics: tuple[str, str]
+) -> PlaceArgs:
+    """``metrics``: the two allowed metrics, the default first."""
     use_point = arguments.get("use_map_point", False)
     if not isinstance(use_point, bool):
         raise ToolArgumentError("'use_map_point' must be true or false")
@@ -375,14 +479,14 @@ def parse_rainfall_args(arguments: dict[str, Any], *, map_point: bool = False) -
         event_date = date.fromisoformat(raw_date) if raw_date else None
     except ValueError:
         raise ToolArgumentError("'event_date' must be a date formatted YYYY-MM-DD") from None
-    metric = _optional_str(arguments, "metric") or "wet"
-    if metric not in ("wet", "dry"):
-        raise ToolArgumentError("'metric' must be 'wet' or 'dry'")
+    metric = _optional_str(arguments, "metric") or metrics[0]
+    if metric not in metrics:
+        raise ToolArgumentError(f"'metric' must be '{metrics[0]}' or '{metrics[1]}'")
     # Required in the schema; a call without it keeps the original (daily) behaviour.
     scale = _optional_str(arguments, "scale") or "daily"
     if scale not in ("daily", "monthly", "yearly"):
         raise ToolArgumentError("'scale' must be 'yearly', 'monthly' or 'daily'")
-    return RainfallArgs(
+    return PlaceArgs(
         city=city,
         country_code=_optional_str(arguments, "country_code"),
         region=_optional_str(arguments, "region"),
@@ -461,7 +565,7 @@ def _total_context(c: TotalContext, what: str) -> str:
     return ", ".join(parts)
 
 
-def _header(record: RainfallRecord, title: str) -> list[str]:
+def _header(record: RainfallRecord | TemperatureRecord, title: str) -> list[str]:
     loc, prov = record.location, record.provenance
     return [
         f"[{record.id}] {title} for {loc.label} ({loc.latitude:.3f}, {loc.longitude:.3f}).",
@@ -641,6 +745,170 @@ def _format_dry(a: DryAnalysis) -> str:
             else:
                 parts.append("rank withheld: record too short")
             lines.append("; ".join(parts) + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
+
+
+def _c(value: float) -> str:
+    return f"{value:.1f} °C"
+
+
+def _signed(value: float) -> str:
+    return f"{value:+.1f} °C"
+
+
+def format_temperature(record: TemperatureRecord) -> str:
+    """Render one temperature analysis for the model: compact, numbers only from code."""
+    if isinstance(record, TemperatureYearly):
+        return _format_temp_yearly(record)
+    if isinstance(record, TemperatureMonthly):
+        return _format_temp_monthly(record)
+    return _format_temp_extremes(record)
+
+
+def _temp_band(b: TempBaseline) -> str:
+    return (
+        f"mean {_c(b.mean_c)}, median {_c(b.median_c)}, {b.low_percentile}th-"
+        f"{b.high_percentile}th percentile band {_c(b.low_c)} to {_c(b.high_c)}"
+    )
+
+
+def _mean_context(c: MeanContext, what: str) -> str:
+    if c.mean_c is None:
+        return f"{what}: not assessed (not ended or too little data)"
+    parts = [f"{what}: mean {_c(c.mean_c)}"]
+    if c.rank_warmest is not None and c.percent_cooler is not None:
+        parts.append(
+            f"rank {c.rank_warmest} of {c.compared} (1 = warmest; {c.percent_cooler:.0f}% were "
+            "cooler)"
+        )
+    else:
+        parts.append("rank withheld: too few comparable means")
+    if c.anomaly_c is not None:
+        parts.append(f"{_signed(c.anomaly_c)} against the baseline mean")
+    if c.band_position is not None:
+        parts.append(f"{c.band_position} the baseline band")
+    return ", ".join(parts)
+
+
+def _format_temp_yearly(a: TemperatureYearly) -> str:
+    lines = _header(a, "Annual mean temperature")
+    lines.append(
+        f"Valid years: {len(a.means)} ({a.valid_years[0]}-{a.valid_years[-1]}), "
+        f"{len(a.excluded_years)} excluded."
+    )
+    base = a.baseline
+    if base:
+        lines.append(
+            f"Baseline {base.start_year}-{base.end_year} annual mean ({base.years} years): "
+            f"{_temp_band(base)}."
+        )
+    if len(a.means) <= MAX_YEARS_LISTED:
+        listed = []
+        for m in a.means:
+            anomaly = f" ({_signed(m.mean_c - base.mean_c)})" if base else ""
+            listed.append(f"{m.year} {_c(m.mean_c)}{anomaly}")
+        suffix = " (in brackets: difference from the baseline mean)" if base else ""
+        lines.append(f"Every year{suffix}: " + "; ".join(listed) + ".")
+    lines.append(
+        "Warmest years: "
+        + "; ".join(f"{i}) {m.year} {_c(m.mean_c)}" for i, m in enumerate(a.warmest, 1))
+        + "."
+    )
+    lines.append(
+        "Coolest years: "
+        + "; ".join(f"{i}) {m.year} {_c(m.mean_c)}" for i, m in enumerate(a.coolest, 1))
+        + "."
+    )
+    if a.year_focus:
+        lines.append(_mean_context(a.year_focus, f"Year {a.year_focus.year}") + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
+
+
+def _format_temp_monthly(a: TemperatureMonthly) -> str:
+    lines = _header(a, "Monthly mean temperature")
+    lines.append(
+        f"Months with enough data: {a.months_used} ({a.years[0]}-{a.years[-1]}), "
+        f"{a.months_missing} left out."
+    )
+    climate = [f"{MONTHS[i]} {_temp_band(b)}" for i, b in enumerate(a.climate) if b is not None]
+    if climate:
+        first = next(b for b in a.climate if b is not None)
+        lines.append(
+            f"Baseline {first.start_year}-{first.end_year} per calendar month: "
+            + "; ".join(climate)
+            + "."
+        )
+    for title, months in (
+        ("Months furthest above their calendar month's baseline mean", a.warm_anomalies),
+        ("Months furthest below their calendar month's baseline mean", a.cool_anomalies),
+    ):
+        if months:
+            lines.append(
+                f"{title}: "
+                + "; ".join(
+                    f"{i}) {MONTHS[m.month - 1]} {m.year} {_c(m.mean_c)} ({_signed(m.anomaly_c)})"
+                    for i, m in enumerate(months, 1)
+                )
+                + "."
+            )
+    contexts = (a.month_focus,) if a.month_focus else a.year_months
+    for c in contexts:
+        lines.append(_mean_context(c, f"{MONTHS[(c.month or 1) - 1]} {c.year}") + ".")
+    lines.append("Caveats: " + " ".join(a.caveats))
+    return "\n".join(lines)
+
+
+def _format_temp_extremes(a: TemperatureExtremes) -> str:
+    hot = a.metric == "hot"
+    name, daily, superlative = (
+        ("TXx", "daily maximum", "hottest") if hot else ("TNn", "daily minimum", "coldest")
+    )
+    lines = _header(
+        a, f"Temperature extremes ({name} = {'highest' if hot else 'lowest'} {daily} of the year)"
+    )
+    lines.append(
+        f"Valid years: {len(a.annual)} ({a.valid_years[0]}-{a.valid_years[-1]}), "
+        f"{len(a.excluded_years)} excluded."
+    )
+    base = a.baseline
+    if base:
+        lines.append(
+            f"Baseline {base.start_year}-{base.end_year} {name} ({base.years} years): mean "
+            f"{_c(base.mean_c)}, median {_c(base.median_c)}."
+        )
+    lines.append(
+        f"Most extreme years ({superlative} first): "
+        + "; ".join(f"{i}) {e.date} {_c(e.value_c)}" for i, e in enumerate(a.top, 1))
+        + "."
+    )
+    ev = a.event
+    if ev:
+        parts = [f"Event {ev.date}: {daily} {_c(ev.value_c)}"]
+        if ev.rank_among_days is not None:
+            parts.append(
+                f"rank {ev.rank_among_days:,} of {ev.days:,} days in the record "
+                f"(1 = {superlative})"
+            )
+        if ev.rank_among_annual_extremes is not None and ev.annual_percentile is not None:
+            parts.append(
+                f"would rank {ev.rank_among_annual_extremes} of {len(a.annual)} annual {name} "
+                f"values ({ev.annual_percentile:.1f}% of them were less extreme)"
+            )
+        if ev.difference_from_baseline_extreme_c is not None:
+            parts.append(
+                f"{_signed(ev.difference_from_baseline_extreme_c)} against the baseline mean "
+                f"{name}"
+            )
+        if ev.day_of_year_mean_c is not None and ev.difference_from_day_of_year_c is not None:
+            parts.append(
+                f"{_signed(ev.difference_from_day_of_year_c)} against the baseline mean "
+                f"{daily} for that calendar day ({_c(ev.day_of_year_mean_c)})"
+            )
+        if ev.rank_among_days is None:
+            parts.append("ranks withheld: record too short")
+        lines.append("; ".join(parts) + ".")
     lines.append("Caveats: " + " ".join(a.caveats))
     return "\n".join(lines)
 

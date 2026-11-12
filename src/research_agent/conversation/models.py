@@ -15,7 +15,7 @@ from research_agent.agent.answer import DataRecord
 from research_agent.retrieval import Work
 
 RelationSource = Literal["model", "default"]
-EvidenceKind = Literal["work", "rainfall", "enso"]
+EvidenceKind = Literal["work", "rainfall", "temperature", "enso"]
 
 
 @dataclass(frozen=True)

@@ -16,9 +16,10 @@ from typing import Any, Literal
 from research_agent.enso import EnsoAnalysis
 from research_agent.rainfall import RainfallRecord
 from research_agent.retrieval import Work
+from research_agent.temperature import TemperatureRecord
 
-# A numerical result the model can cite as R1, R2...: a rainfall/dry analysis or an ENSO analysis.
-DataRecord = RainfallRecord | EnsoAnalysis
+# A numerical result the model can cite as R1, R2...: a rainfall/dry, temperature or ENSO analysis.
+DataRecord = RainfallRecord | EnsoAnalysis | TemperatureRecord
 
 ClaimKind = Literal["evidence", "interpretation"]
 _KINDS: tuple[ClaimKind, ...] = ("evidence", "interpretation")

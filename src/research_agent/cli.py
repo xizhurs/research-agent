@@ -16,7 +16,7 @@ import typer
 
 from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
 from research_agent.agent.events import TurnContext
-from research_agent.agent.tools import format_enso, format_rainfall
+from research_agent.agent.tools import format_enso, format_rainfall, format_temperature
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.conversation import ConversationService, InMemorySessionStore
 from research_agent.credentials import (
@@ -35,6 +35,7 @@ from research_agent.llm import LLMAuthError, LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
+from research_agent.temperature import TemperatureClient
 from research_agent.tracing import (
     TracingError,
     answer_json,
@@ -233,6 +234,63 @@ def rainfall(
     typer.echo(f"({origin}; data {prov.data_start} to {prov.data_end})")
 
 
+@app.command("temperature")
+def temperature(
+    city: str = typer.Argument(..., help="City name only, e.g. Madrid."),
+    country_code: str | None = typer.Option(None, "--country-code", help="ISO alpha-2, e.g. ES."),
+    region: str | None = typer.Option(None, "--region", help="State or province."),
+    start_year: int | None = typer.Option(None, "--start-year", help="First year to analyse."),
+    end_year: int | None = typer.Option(None, "--end-year", help="Last year to analyse."),
+    event_date: str | None = typer.Option(
+        None, "--event-date", help="A day to assess, as YYYY-MM-DD (--scale daily)."
+    ),
+    scale: str = typer.Option(
+        "daily", "--scale", help="'daily' (see --metric), 'monthly' or 'yearly' means."
+    ),
+    metric: str = typer.Option(
+        "hot", "--metric", help="Daily scale: 'hot' (TXx) or 'cold' (TNn)."
+    ),
+    event_year: int | None = typer.Option(
+        None, "--event-year", help="A year to assess (--scale yearly or monthly)."
+    ),
+    event_month: int | None = typer.Option(
+        None, "--event-month", help="With --scale monthly and --event-year: a month, 1-12."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Analyse air temperature (ERA5) for a city at a daily, monthly or yearly scale (no LLM)."""
+    cfg = _load_or_exit(config)
+    try:
+        day = date.fromisoformat(event_date) if event_date else None
+    except ValueError:
+        typer.echo("error: --event-date must be formatted YYYY-MM-DD", err=True)
+        raise typer.Exit(code=1) from None
+    try:
+        with TemperatureClient(cfg.rainfall) as client:
+            analysis, _daily = client.analyze(
+                city,
+                country_code=country_code,
+                region=region,
+                start_year=start_year,
+                end_year=end_year,
+                event_date=day,
+                metric=metric,
+                event_year=event_year,
+                scale=scale,
+                event_month=event_month,
+            )
+    except RainfallError as exc:  # the Open-Meteo error family, shared with rainfall
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    prov = analysis.provenance
+    typer.echo(format_temperature(replace(analysis, id="R1")))
+    typer.echo(f"\nSource: {prov.dataset}. {prov.license}.")
+    typer.echo(f"Request: {prov.request_url}")
+    origin = "cache" if prov.from_cache else "network"
+    typer.echo(f"({origin}; data {prov.data_start} to {prov.data_end})")
+
+
 @app.command("enso")
 def enso(
     phase: str = typer.Option("both", "--phase", help="'both', 'el_nino' or 'la_nina'."),
@@ -274,7 +332,7 @@ def ui(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Serve the web interface (Ask, Search, Rainfall). Needs the extra: uv sync --extra ui."""
+    """Serve the web interface (Ask, Search, Rainfall, Temperature). Needs: uv sync --extra ui."""
     cfg = _load_or_exit(config)
     creds = _credentials_or_exit(env_file)
     _tracing_or_exit(env_file)
@@ -345,10 +403,17 @@ def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
     with (
         OpenAlexClient(cfg.openalex, cfg.limits, api_key=key.reveal() if key else None) as search,
         RainfallClient(cfg.rainfall) as rain,
+        TemperatureClient(cfg.rainfall) as temp,
         EnsoClient(cfg.enso) as enso_client,
     ):
         yield ResearchAgent(
-            llm, search, cfg.limits, cfg.reporting, rainfall=rain, enso=enso_client
+            llm,
+            search,
+            cfg.limits,
+            cfg.reporting,
+            rainfall=rain,
+            enso=enso_client,
+            temperature=temp,
         )
 
 
@@ -431,7 +496,8 @@ def _print_result(result: AgentResult) -> None:
         typer.echo(f"- {limitation}")
     stats = result.stats
     rain = (
-        f"{stats.rainfall_calls} rainfall/ENSO analysis(es) ({stats.cached_rainfall} from cache), "
+        f"{stats.rainfall_calls} rainfall/temperature/ENSO analysis(es) "
+        f"({stats.cached_rainfall} from cache), "
         if stats.rainfall_calls
         else ""
     )
@@ -450,6 +516,7 @@ def format_trace(trace: tuple[tuple[str, ...], ...]) -> str:
     short = {
         "search_literature": "search",
         "analyze_rainfall_extremes": "rainfall",
+        "analyze_temperature": "temperature",
         "analyze_enso_events": "enso",
     }
 

@@ -59,8 +59,8 @@ def evidence_limitations(
         notes.extend(_literature_limitations(searches, evidence, limits, reporting, today))
     if rainfall_calls and not analyses:
         notes.append(
-            "A rainfall or ENSO analysis was requested but produced no usable result, so no "
-            "numerical evidence backs this answer."
+            "A rainfall, temperature or ENSO analysis was requested but produced no usable "
+            "result, so no numerical evidence backs this answer."
         )
     for analysis in analyses:
         notes.extend(analysis.caveats)  # identical sentences are removed when the answer is built

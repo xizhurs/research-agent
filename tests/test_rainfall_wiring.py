@@ -161,8 +161,8 @@ def test_rainfall_only_run_has_rainfall_caveats_and_no_openalex_text(limits, rep
 def test_failed_rainfall_run_reports_missing_numerical_evidence(limits, reporting):
     out = limits_for([], {}, limits, reporting, rainfall_calls=1)
     assert out == [
-        "A rainfall or ENSO analysis was requested but produced no usable result, so no numerical "
-        "evidence backs this answer."
+        "A rainfall, temperature or ENSO analysis was requested but produced no usable result, "
+        "so no numerical evidence backs this answer."
     ]
 
 
@@ -334,7 +334,7 @@ def test_ask_prints_a_data_section_and_the_rainfall_footer(monkeypatch, tmp_path
     assert "References" not in result.output  # no literature was cited
     assert "Data" in result.output
     assert "[R1] Zhengzhou, Henan, China: Rx1day 2000-2004. ERA5 test dataset" in result.output
-    assert "1 rainfall/ENSO analysis(es) (1 from cache), 500 tokens" in result.output
+    assert "1 rainfall/temperature/ENSO analysis(es) (1 from cache), 500 tokens" in result.output
 
 
 def test_format_trace_is_one_readable_line():

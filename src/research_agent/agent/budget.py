@@ -88,8 +88,8 @@ class Budget:
             return (
                 f"Search and rainfall-analysis limits reached ({self.search_calls} of "
                 f"{lim.max_search_calls} searches, {self.rainfall_calls} of "
-                f"{lim.max_rainfall_calls} rainfall or ENSO analyses used): the answer is based "
-                "only on the evidence retrieved so far."
+                f"{lim.max_rainfall_calls} rainfall, temperature or ENSO analyses used): the "
+                "answer is based only on the evidence retrieved so far."
             )
         next_call_cost = next_input_estimate + lim.max_output_tokens
         if self.tokens_used + 2 * next_call_cost > lim.max_total_tokens:
