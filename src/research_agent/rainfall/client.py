@@ -80,7 +80,7 @@ def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
-def _validate_point(latitude: object, longitude: object) -> tuple[float, float]:
+def validate_point(latitude: object, longitude: object) -> tuple[float, float]:
     """Check coordinates before any request: finite numbers within the valid ranges."""
     checked = []
     for name, value, limit in (("latitude", latitude, 90), ("longitude", longitude, 180)):
@@ -277,7 +277,7 @@ class RainfallClient:
         caveat naming the ERA5 grid cell actually used.
         """
         today = self._today()
-        latitude, longitude = _validate_point(latitude, longitude)
+        latitude, longitude = validate_point(latitude, longitude)
         start_year, end_year = self._validate(
             start_year, end_year, event_date, today, metric, event_year, scale, event_month
         )

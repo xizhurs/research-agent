@@ -440,6 +440,26 @@ def test_an_unknown_session_id_starts_a_new_session(conv):
     assert outcome.session_id != "not-a-real-id" and outcome.turn.number == 1
 
 
+def test_a_map_point_reaches_the_agent_and_is_named_in_the_recorded_question(conv):
+    seen = []
+
+    def run(question, context, **kwargs):
+        seen.append((question, kwargs))
+        return _fake_result(question)
+
+    service = ConversationService(run, InMemorySessionStore(10, 3600), conv)
+    first = service.ask(None, "Rain here?", (34.75778, 113.6486))
+    service.ask(first.session_id, "And without the point?")
+    assert seen == [
+        ("Rain here?", {"map_point": (34.75778, 113.6486)}),
+        ("And without the point?", {}),  # called exactly as before
+    ]
+    assert [t.question for t in service.turns(first.session_id)] == [
+        "Rain here? [map point: 34.7578, 113.6486]",
+        "And without the point?",
+    ]
+
+
 def test_store_drops_least_recently_used_and_expired_sessions():
     now = [0.0]
     store = InMemorySessionStore(2, ttl_seconds=100, clock=lambda: now[0])

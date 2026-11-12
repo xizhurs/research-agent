@@ -362,7 +362,9 @@ def _ask_status(cfg: Config, stats) -> str:
 def make_service(cfg: Config, creds: Credentials, store: SessionStore) -> ConversationService:
     """The conversation service the Ask tab uses; one store per app, one session per browser tab."""
     return ConversationService(
-        lambda question, context: _run_agent(cfg, creds, question, context),
+        lambda question, context, map_point=None: _run_agent(
+            cfg, creds, question, context, map_point
+        ),
         store,
         cfg.conversation,
         span_name="ui.ask",
@@ -393,6 +395,9 @@ def ask_turn(
     question: str,
     view: str | None = None,
     session_id: str | None = None,
+    use_point: bool = False,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> tuple[
     str, str, Figure | None, str, tuple[RainfallRecord, Archive] | None, str | None, str
 ]:
@@ -403,16 +408,23 @@ def ask_turn(
     or ``"yearly"``; None: the analysis's own scale), from the same cached daily series; the
     language model never sees or draws it.
     ``series`` is that analysis and its daily data, for ``replot`` (None if nothing was plotted).
-    On an error the session is unchanged.
+    On an error the session is unchanged. With ``use_point`` the map point (``latitude``,
+    ``longitude``) goes to the agent, which can analyse it without the model copying numbers.
     """
     transcript = _transcript(service, session_id)
     if not question.strip():
         return (
             "**Error:** the question must not be empty", "", None, "", None, session_id, transcript
         )
+    map_point = None
+    if use_point:
+        if latitude is None or longitude is None:
+            error = "**Error:** click the map or enter both coordinates, or untick the point"
+            return error, "", None, "", None, session_id, transcript
+        map_point = (latitude, longitude)
     try:
         creds.require_openai_key()
-        outcome = service.ask(session_id, question)
+        outcome = service.ask(session_id, question, map_point)
     except (CredentialError, LLMError, RetrievalError, InvalidQuestionError) as exc:
         status = f"**LLM used: no** (stopped before an answer) · {_error(exc)}"
         return status, "", None, "", None, session_id, transcript

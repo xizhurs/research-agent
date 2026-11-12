@@ -7,7 +7,7 @@ more than ``max_context_tokens`` of retrieved text across a whole question.
 from __future__ import annotations
 
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
 
@@ -127,6 +127,29 @@ RAINFALL_TOOL = ToolSpec(
         "required": ["city", "scale"],
     },
 )
+
+
+def rainfall_tool(map_point: bool) -> ToolSpec:
+    """The rainfall tool. With ``map_point`` it also takes ``use_map_point`` (``city`` optional).
+
+    Without a map point it is ``RAINFALL_TOOL`` itself, unchanged.
+    """
+    if not map_point:
+        return RAINFALL_TOOL
+    params = RAINFALL_TOOL.parameters
+    properties = {
+        **params["properties"],
+        "use_map_point": {
+            "type": "boolean",
+            "description": (
+                "Optional. true to analyse the point the user selected on the map (the code "
+                "supplies its coordinates); then leave city, country_code and region unset."
+            ),
+        },
+    }
+    return replace(
+        RAINFALL_TOOL, parameters={**params, "properties": properties, "required": ["scale"]}
+    )
 
 
 ENSO_TOOL_NAME = "analyze_enso_events"
@@ -309,7 +332,7 @@ def format_results(
 
 @dataclass(frozen=True)
 class RainfallArgs:
-    city: str
+    city: str | None  # None when use_map_point is set
     country_code: str | None
     region: str | None
     start_year: int | None
@@ -319,6 +342,7 @@ class RainfallArgs:
     event_year: int | None
     scale: str = "daily"
     event_month: int | None = None
+    use_map_point: bool = False
 
 
 def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
@@ -330,9 +354,21 @@ def _optional_str(arguments: dict[str, Any], key: str) -> str | None:
     return value
 
 
-def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
+def parse_rainfall_args(arguments: dict[str, Any], *, map_point: bool = False) -> RainfallArgs:
+    """Validate a rainfall call. ``map_point``: a map point is selected, so ``use_map_point``
+    may replace ``city``."""
+    use_point = arguments.get("use_map_point", False)
+    if not isinstance(use_point, bool):
+        raise ToolArgumentError("'use_map_point' must be true or false")
+    if use_point and not map_point:
+        raise ToolArgumentError("no map point is selected; give a 'city' instead")
     city = arguments.get("city")
-    if not isinstance(city, str) or not city.strip():
+    if use_point:
+        if any(arguments.get(k) is not None for k in ("city", "country_code", "region")):
+            raise ToolArgumentError(
+                "with 'use_map_point' leave 'city', 'country_code' and 'region' unset"
+            )
+    elif not isinstance(city, str) or not city.strip():
         raise ToolArgumentError("'city' is required and must be a non-empty string")
     raw_date = _optional_str(arguments, "event_date")
     try:
@@ -357,6 +393,7 @@ def parse_rainfall_args(arguments: dict[str, Any]) -> RainfallArgs:
         event_year=_optional_int(arguments, "event_year"),
         scale=scale,
         event_month=_optional_int(arguments, "event_month"),
+        use_map_point=use_point,
     )
 
 

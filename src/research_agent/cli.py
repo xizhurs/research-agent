@@ -353,10 +353,16 @@ def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
 
 
 def _run_agent(
-    cfg: Config, creds: Credentials, question: str, context: TurnContext | None = None
+    cfg: Config,
+    creds: Credentials,
+    question: str,
+    context: TurnContext | None = None,
+    map_point: tuple[float, float] | None = None,
 ) -> AgentResult:
     """Answer one question with the real clients. Patched out in CLI tests."""
     with _open_agent(cfg, creds) as agent:
+        if map_point is not None:
+            return agent.run(question, context, map_point=map_point)
         return agent.run(question, context) if context is not None else agent.run(question)
 
 

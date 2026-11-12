@@ -400,15 +400,16 @@ def agent_result(answer, **stats):
 def run_agent(monkeypatch):
     calls, outcome = [], {}
 
-    def fake(cfg, creds, question, context=None):
+    def fake(cfg, creds, question, context=None, map_point=None):
         calls.append(question)
         fake.contexts.append(context)
+        fake.points.append(map_point)
         if isinstance(outcome["value"], Exception):
             raise outcome["value"]
         return outcome["value"]
 
     monkeypatch.setattr(handlers, "_run_agent", fake)
-    fake.calls, fake.outcome, fake.contexts = calls, outcome, []
+    fake.calls, fake.outcome, fake.contexts, fake.points = calls, outcome, [], []
     return fake
 
 
@@ -574,6 +575,29 @@ def test_ask_turn_keeps_the_conversation_in_its_session(run_agent, base_config):
     assert r"1. Amsterdam \<rain\>?" in transcript  # escaped
     assert "2. What about Rotterdam?" in transcript2
     assert "turn 2 (update)" in status
+
+
+def test_ask_turn_sends_the_ticked_map_point_and_the_transcript_names_it(run_agent, base_config):
+    answer = Answer(claims=(Claim("Done.", "interpretation", ()),), references=(), limitations=())
+    run_agent.outcome["value"] = agent_result(answer)
+    service = _service(base_config)
+
+    *_, sid, transcript = handlers.ask_turn(
+        base_config, CREDS, service, "Rain here?", None, None, True, 34.7578, 113.6486
+    )
+    handlers.ask_turn(base_config, CREDS, service, "And dry spells?", None, sid, False, 1.0, 2.0)
+
+    assert run_agent.calls == ["Rain here?", "And dry spells?"]  # the question text is not changed
+    assert run_agent.points == [(34.7578, 113.6486), None]  # unticked: no point is sent
+    assert r"Rain here? \[map point: 34.7578, 113.6486\]" in transcript
+
+
+@pytest.mark.parametrize(("lat", "lon"), [(None, 113.6), (34.7, None)])
+def test_ask_turn_with_a_ticked_point_needs_both_coordinates(run_agent, base_config, lat, lon):
+    status, *_ = handlers.ask_turn(
+        base_config, CREDS, _service(base_config), "Rain here?", None, None, True, lat, lon
+    )
+    assert status.startswith("**Error:**") and run_agent.calls == []
 
 
 def test_ask_turn_errors_keep_the_session_unchanged(run_agent, base_config):

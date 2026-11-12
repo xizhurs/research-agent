@@ -26,7 +26,6 @@ from research_agent.agent.prompt import build_instructions
 from research_agent.agent.tools import (
     ENSO_TOOL,
     ENSO_TOOL_NAME,
-    RAINFALL_TOOL,
     RAINFALL_TOOL_NAME,
     RECALL_TOOL,
     RECALL_TOOL_NAME,
@@ -41,6 +40,7 @@ from research_agent.agent.tools import (
     parse_rainfall_args,
     parse_recall_args,
     parse_search_args,
+    rainfall_tool,
 )
 from research_agent.config import Limits, ReportingConfig
 from research_agent.enso import EnsoAnalysis, EnsoError, InvalidEnsoQueryError
@@ -61,6 +61,7 @@ from research_agent.rainfall import (
     LocationNotFoundError,
     RainfallError,
     RainfallRecord,
+    validate_point,
 )
 from research_agent.retrieval import (
     AuthError,
@@ -86,6 +87,20 @@ class RainfallAnalyzer(Protocol):
         *,
         country_code: str | None = None,
         region: str | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        event_date: date | None = None,
+        metric: str = "wet",
+        event_year: int | None = None,
+        scale: str = "daily",
+        event_month: int | None = None,
+    ) -> tuple[RainfallRecord, Archive]: ...
+
+    def analyze_point(
+        self,
+        latitude: float,
+        longitude: float,
+        *,
         start_year: int | None = None,
         end_year: int | None = None,
         event_date: date | None = None,
@@ -182,6 +197,7 @@ class _RunState:
     next_data_number: int = 1  # the number of the next R ID
     reused: set[str] = field(default_factory=set)  # stored items shown again this turn
     ambiguous: tuple[Location, ...] = ()  # set by a rainfall call whose place was ambiguous
+    map_point: tuple[float, float] | None = None  # the point the user selected, if any
 
 
 class ResearchAgent:
@@ -206,16 +222,24 @@ class ResearchAgent:
         self._reporting = reporting
         self._today = today
 
-    def run(self, question: str, context: TurnContext | None = None) -> AgentResult:
+    def run(
+        self,
+        question: str,
+        context: TurnContext | None = None,
+        *,
+        map_point: tuple[float, float] | None = None,
+    ) -> AgentResult:
         """Answer ``question``. Raises LLMError (or AuthError from search) on hard failures.
 
         ``context`` carries earlier turns of a conversation. Budgets, error handling and citation
         validation are the same for every turn; earlier items become citable only when shown
-        again in this turn.
+        again in this turn. ``map_point`` (latitude, longitude) is a point the user selected on a
+        map: the rainfall tool can then analyse it with ``use_map_point`` and the code supplies
+        the coordinates, so the model never copies them.
         """
         with tracing.observe("invoke_agent", "agent") as span:
             tracing.set_content(span, input=question)
-            result = self._run(question, context)
+            result = self._run(question, context, map_point)
             stats = result.stats
             span.set_attributes(
                 {
@@ -235,7 +259,14 @@ class ResearchAgent:
             tracing.set_content(span, output=tracing.answer_json(result.answer))
             return result
 
-    def _run(self, question: str, context: TurnContext | None) -> AgentResult:
+    def _run(
+        self,
+        question: str,
+        context: TurnContext | None,
+        map_point: tuple[float, float] | None = None,
+    ) -> AgentResult:
+        if map_point is not None and self._rainfall is None:
+            raise ValueError("a map point needs the rainfall tool")
         question = question.strip()
         if not question:
             raise InvalidQuestionError("question must be a non-empty string")
@@ -245,7 +276,19 @@ class ResearchAgent:
                 f"question is {len(question)} characters; the limit is {limits.max_question_chars}"
             )
 
+        if map_point is not None:
+            try:
+                map_point = validate_point(*map_point)
+            except InvalidRainfallQueryError as exc:
+                raise InvalidQuestionError(f"map point: {exc}") from exc
+            question += (
+                f"\n\nSelected map point: {map_point[0]:.4f}, {map_point[1]:.4f} (latitude, "
+                f"longitude). To analyse rainfall there, call {RAINFALL_TOOL_NAME} with "
+                "use_map_point=true and no city."
+            )
+
         state = _RunState(Budget(limits, rainfall_enabled=self._rainfall is not None))
+        state.map_point = map_point
         budget = state.budget
         instructions = build_instructions(
             limits,
@@ -255,7 +298,7 @@ class ResearchAgent:
         )
         tools = [SEARCH_TOOL]
         if self._rainfall is not None:
-            tools.append(RAINFALL_TOOL)
+            tools.append(rainfall_tool(map_point is not None))
         if self._enso is not None:
             tools.append(ENSO_TOOL)
         messages: list[Message] = [UserMessage(question)]
@@ -510,7 +553,7 @@ class ResearchAgent:
     def _do_rainfall(self, call: ToolCall, analyzer: RainfallAnalyzer, state: _RunState) -> str:
         budget, notes = state.budget, state.notes
         try:
-            args = parse_rainfall_args(call.arguments)
+            args = parse_rainfall_args(call.arguments, map_point=state.map_point is not None)
         except ToolArgumentError as exc:
             return f"Error: {exc}."
         if budget.rainfall_left == 0:
@@ -522,19 +565,22 @@ class ResearchAgent:
                 "Error: rainfall-analysis limit reached; no more analyses are allowed. Answer now."
             )
 
-        try:
-            analysis, _daily = analyzer.analyze(  # the model sees statistics, not daily values
-                args.city,
-                country_code=args.country_code,
-                region=args.region,
-                start_year=args.start_year,
-                end_year=args.end_year,
-                event_date=args.event_date,
-                metric=args.metric,
-                event_year=args.event_year,
-                scale=args.scale,
-                event_month=args.event_month,
-            )
+        options: dict[str, Any] = {
+            "start_year": args.start_year,
+            "end_year": args.end_year,
+            "event_date": args.event_date,
+            "metric": args.metric,
+            "event_year": args.event_year,
+            "scale": args.scale,
+            "event_month": args.event_month,
+        }
+        try:  # the model sees statistics, not daily values
+            if args.use_map_point and state.map_point is not None:
+                analysis, _daily = analyzer.analyze_point(*state.map_point, **options)
+            else:
+                analysis, _daily = analyzer.analyze(
+                    args.city or "", country_code=args.country_code, region=args.region, **options
+                )
         except InvalidRainfallQueryError as exc:
             return f"Error: {exc}."  # rejected before any request, so it costs no analysis
         except (AmbiguousLocationError, LocationNotFoundError) as exc:

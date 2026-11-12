@@ -1,6 +1,6 @@
 """Deterministic extreme-rainfall analysis (no LLM)."""
 
-from research_agent.rainfall.client import Archive, RainfallClient
+from research_agent.rainfall.client import Archive, RainfallClient, validate_point
 from research_agent.rainfall.errors import (
     AmbiguousLocationError,
     InsufficientDataError,
@@ -61,4 +61,5 @@ __all__ = [
     "TotalContext",
     "TotalsBaseline",
     "YearlyAnalysis",
+    "validate_point",
 ]

@@ -59,6 +59,15 @@ new ResizeObserver(() => map.invalidateSize()).observe(box);
 """
 
 
+def _point_map() -> gr.HTML:
+    return gr.HTML(
+        html_template='<div class="ra-map" style="height:360px"></div>',
+        head=_LEAFLET_HEAD,
+        js_on_load=_MAP_JS,
+        apply_default_css=False,
+    )
+
+
 def _map_click(evt: gr.EventData):
     """Fill the latitude and longitude boxes from a map click and switch to point mode."""
     try:
@@ -66,6 +75,12 @@ def _map_click(evt: gr.EventData):
     except ValueError:
         return gr.skip(), gr.skip(), gr.skip()
     return lat, lon, "point"
+
+
+def _ask_map_click(evt: gr.EventData):
+    """Same for the Ask tab, where the third output is the "use this point" checkbox."""
+    lat, lon, mode = _map_click(evt)
+    return lat, lon, gr.skip() if mode != "point" else True
 
 
 def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
@@ -96,6 +111,16 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     lines=3,
                     max_length=cfg.limits.max_question_chars,
                 )
+                with gr.Accordion("Map point (optional)", open=False):
+                    ask_use_point = gr.Checkbox(
+                        label="Use this point in the question (the code passes the exact "
+                        "coordinates to the rainfall tool; the model does not type them)"
+                    )
+                    with gr.Row():
+                        ask_lat = gr.Number(label="Latitude (-90 to 90)")
+                        ask_lon = gr.Number(label="Longitude (-180 to 180)")
+                    ask_map = _point_map()
+                ask_map.click(_ask_map_click, None, [ask_lat, ask_lon, ask_use_point])
                 with gr.Row():
                     ask_button = gr.Button("Ask", variant="primary")
                     new_button = gr.Button("New conversation")
@@ -113,8 +138,10 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
                 ask_session = gr.State()  # this browser tab's conversation ID
                 ask_outputs = [ask_status, ask_answer, ask_plot, ask_note, ask_series]
-                def ask_turn(text, session_id):  # the plot view follows the analysis's scale
-                    return handlers.ask_turn(cfg, creds, service, text, None, session_id)
+                def ask_turn(text, session_id, use_point, lat, lon):  # view follows the scale
+                    return handlers.ask_turn(
+                        cfg, creds, service, text, None, session_id, use_point, lat, lon
+                    )
 
                 def shown(series, current_view):  # the year and view that were plotted
                     view = handlers.view_for(series[0]) if series else current_view
@@ -122,7 +149,7 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
 
                 ask_button.click(
                     ask_turn,
-                    [question, ask_session],
+                    [question, ask_session, ask_use_point, ask_lat, ask_lon],
                     [*ask_outputs, ask_session, ask_transcript],
                     api_name="ask",
                 ).then(shown, [ask_series, ask_view], [ask_year, ask_view])
@@ -181,12 +208,7 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     with gr.Row():
                         latitude = gr.Number(label="Latitude (-90 to 90)")
                         longitude = gr.Number(label="Longitude (-180 to 180)")
-                    point_map = gr.HTML(
-                        html_template='<div class="ra-map" style="height:360px"></div>',
-                        head=_LEAFLET_HEAD,
-                        js_on_load=_MAP_JS,
-                        apply_default_css=False,
-                    )
+                    point_map = _point_map()
                 point_map.click(_map_click, None, [latitude, longitude, location_mode])
                 scale = gr.Radio(
                     [

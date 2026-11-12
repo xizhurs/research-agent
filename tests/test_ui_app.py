@@ -129,8 +129,12 @@ def test_app_builds_with_the_three_tabs_and_no_analytics(base_config):
     html = [b for b in demo.blocks.values() if isinstance(b, gr.HTML)]
     badges = [b.value for b in html if not b.head]
     assert [("Uses the LLM" in b) for b in badges] == [True, False, False]
-    (point_map,) = [b for b in html if b.head]  # the Rainfall tab's map
-    assert "trigger('click'" in point_map.js_on_load and 'integrity="sha256-' in point_map.head
+    maps = [b for b in html if b.head]  # one on the Ask tab, one on the Rainfall tab
+    assert len(maps) == 2
+    for point_map in maps:
+        assert "trigger('click'" in point_map.js_on_load and 'integrity="sha256-' in point_map.head
+    checks = [b.label for b in demo.blocks.values() if isinstance(b, gr.Checkbox)]
+    assert any(label.startswith("Use this point in the question") for label in checks)
     modes = [r for r in demo.blocks.values() if isinstance(r, gr.Radio) and r.label == "Location"]
     assert [[v for _, v in r.choices] for r in modes] == [["city", "point"]]
     radios = [b for b in demo.blocks.values() if isinstance(b, gr.Radio)]
@@ -152,3 +156,12 @@ def test_map_click_fills_the_coordinates_and_switches_to_point_mode():
     )
     skipped = _map_click(gr.EventData(None, {"lat": "x"}))
     assert all(isinstance(s, type(gr.skip())) for s in skipped)  # bad payload changes nothing
+
+
+def test_ask_map_click_fills_the_coordinates_and_ticks_the_point():
+    gr = pytest.importorskip("gradio")
+    from research_agent.ui.app import _ask_map_click
+
+    assert _ask_map_click(gr.EventData(None, {"lat": 1.23456, "lon": -2.5})) == (1.2346, -2.5, True)
+    skipped = _ask_map_click(gr.EventData(None, None))
+    assert all(isinstance(s, type(gr.skip())) for s in skipped)

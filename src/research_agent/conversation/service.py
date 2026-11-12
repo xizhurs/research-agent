@@ -20,7 +20,8 @@ from research_agent.conversation.models import Session, TurnRecord
 from research_agent.conversation.state import apply_turn
 from research_agent.conversation.store import SessionStore
 
-RunAgent = Callable[[str, TurnContext | None], AgentResult]
+# Called as run_agent(question, context), plus map_point=(lat, lon) when a map point is selected.
+RunAgent = Callable[..., AgentResult]
 
 
 @dataclass(frozen=True)
@@ -56,11 +57,18 @@ class ConversationService:
         session = self._store.get(session_id) if session_id else None
         return tuple(session.turns) if session else ()
 
-    def ask(self, session_id: str | None, question: str) -> TurnOutcome:
+    def ask(
+        self,
+        session_id: str | None,
+        question: str,
+        map_point: tuple[float, float] | None = None,
+    ) -> TurnOutcome:
         """Answer ``question`` in ``session_id``'s conversation.
 
         An unknown, expired or missing ID starts a new session with a new ID (it never reads
         another session). Errors from the agent are re-raised and the session is not changed.
+        ``map_point`` (latitude, longitude) goes to the agent, and the recorded question names it
+        so later turns and the transcript show which point was meant.
         """
         session = self._store.get(session_id) if session_id else None
         if session is None:
@@ -77,8 +85,13 @@ class ConversationService:
         }
         with tracing.observe(self._span_name, "span", attributes, tags=self._tags) as span:
             tracing.set_content(span, input=question)
-            result = self._run_agent(question, context)
-            updated = apply_turn(session, question, result, self._cfg, self._clock())
+            if map_point is None:
+                result = self._run_agent(question, context)
+                recorded = question
+            else:
+                result = self._run_agent(question, context, map_point=map_point)
+                recorded = f"{question} [map point: {map_point[0]:.4f}, {map_point[1]:.4f}]"
+            updated = apply_turn(session, recorded, result, self._cfg, self._clock())
             turn = updated.turns[-1]
             recalled = [i for e in result.events for i in e.recalled_ids]
             span.set_attributes(
