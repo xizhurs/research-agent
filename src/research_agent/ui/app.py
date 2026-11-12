@@ -34,6 +34,55 @@ def _view_radio() -> gr.Radio:
     )
 
 
+# Leaflet, pinned with subresource integrity, loaded by the viewer's browser (as are the OSM tiles).
+_LEAFLET_HEAD = (
+    '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" '
+    'integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">'
+    '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" '
+    'integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>'
+)
+# A click puts one marker on the map and sends the point to Python as a "click" event.
+_MAP_JS = """
+const box = element.querySelector('.ra-map');
+const map = L.map(box, {worldCopyJump: true}).setView([20, 0], 2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+let marker = null;
+map.on('click', (e) => {
+  const p = e.latlng.wrap();
+  if (marker) { marker.setLatLng(p); } else { marker = L.circleMarker(p, {radius: 7}).addTo(map); }
+  trigger('click', {lat: p.lat, lon: p.lng});
+});
+new ResizeObserver(() => map.invalidateSize()).observe(box);
+"""
+
+
+def _point_map() -> gr.HTML:
+    return gr.HTML(
+        html_template='<div class="ra-map" style="height:360px"></div>',
+        head=_LEAFLET_HEAD,
+        js_on_load=_MAP_JS,
+        apply_default_css=False,
+    )
+
+
+def _map_click(evt: gr.EventData):
+    """Fill the latitude and longitude boxes from a map click and switch to point mode."""
+    try:
+        lat, lon = handlers.point_from_click(evt._data)
+    except ValueError:
+        return gr.skip(), gr.skip(), gr.skip()
+    return lat, lon, "point"
+
+
+def _ask_map_click(evt: gr.EventData):
+    """Same for the Ask tab, where the third output is the "use this point" checkbox."""
+    lat, lon, mode = _map_click(evt)
+    return lat, lon, gr.skip() if mode != "point" else True
+
+
 def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
     """Build the interface. Handlers get the config and credentials; nothing is global.
 
@@ -62,6 +111,16 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                     lines=3,
                     max_length=cfg.limits.max_question_chars,
                 )
+                with gr.Accordion("Map point (optional)", open=False):
+                    ask_use_point = gr.Checkbox(
+                        label="Use this point in the question (the code passes the exact "
+                        "coordinates to the rainfall tool; the model does not type them)"
+                    )
+                    with gr.Row():
+                        ask_lat = gr.Number(label="Latitude (-90 to 90)")
+                        ask_lon = gr.Number(label="Longitude (-180 to 180)")
+                    ask_map = _point_map()
+                ask_map.click(_ask_map_click, None, [ask_lat, ask_lon, ask_use_point])
                 with gr.Row():
                     ask_button = gr.Button("Ask", variant="primary")
                     new_button = gr.Button("New conversation")
@@ -79,8 +138,10 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                 ask_series = gr.State()  # (record, daily series) of the plotted analysis
                 ask_session = gr.State()  # this browser tab's conversation ID
                 ask_outputs = [ask_status, ask_answer, ask_plot, ask_note, ask_series]
-                def ask_turn(text, session_id):  # the plot view follows the analysis's scale
-                    return handlers.ask_turn(cfg, creds, service, text, None, session_id)
+                def ask_turn(text, session_id, use_point, lat, lon):  # view follows the scale
+                    return handlers.ask_turn(
+                        cfg, creds, service, text, None, session_id, use_point, lat, lon
+                    )
 
                 def shown(series, current_view):  # the year and view that were plotted
                     view = handlers.view_for(series[0]) if series else current_view
@@ -88,7 +149,7 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
 
                 ask_button.click(
                     ask_turn,
-                    [question, ask_session],
+                    [question, ask_session, ask_use_point, ask_lat, ask_lon],
                     [*ask_outputs, ask_session, ask_transcript],
                     api_name="ask",
                 ).then(shown, [ask_series, ask_view], [ask_year, ask_view])
@@ -134,12 +195,21 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
 
             with gr.Tab("Rainfall"):
                 gr.HTML(_badge(False, "No LLM: deterministic ERA5 analysis (Open-Meteo)"))
+                location_mode = gr.Radio(
+                    [("City", "city"), ("Point on map", "point")], value="city", label="Location"
+                )
                 with gr.Row():
                     city = gr.Textbox(label="City (name only)", placeholder="Zhengzhou")
                     country_code = gr.Textbox(
                         label="Country code (optional)", placeholder="CN", max_length=2
                     )
                     region = gr.Textbox(label="Region (optional)", placeholder="Henan")
+                with gr.Accordion("Point on map (click to choose, or type the coordinates)"):
+                    with gr.Row():
+                        latitude = gr.Number(label="Latitude (-90 to 90)")
+                        longitude = gr.Number(label="Longitude (-180 to 180)")
+                    point_map = _point_map()
+                point_map.click(_map_click, None, [latitude, longitude, location_mode])
                 scale = gr.Radio(
                     [
                         ("Daily (heavy-rain days or dry spells)", "daily"),
@@ -207,6 +277,9 @@ def build_app(cfg: Config, creds: Credentials) -> gr.Blocks:
                         view,
                         scale,
                         event_month,
+                        location_mode,
+                        latitude,
+                        longitude,
                     ],
                     [rain_status, rain_text, rain_plot, rain_note, rain_series],
                     api_name="rainfall",

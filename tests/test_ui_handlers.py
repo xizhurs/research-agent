@@ -140,6 +140,12 @@ class FakeRainfall:
             raise FakeRainfall.outcome
         return FakeRainfall.outcome, "ARCHIVE"
 
+    def analyze_point(self, latitude, longitude, **kwargs):
+        FakeRainfall.calls.append({"point": (latitude, longitude), **kwargs})
+        if isinstance(FakeRainfall.outcome, Exception):
+            raise FakeRainfall.outcome
+        return FakeRainfall.outcome, "ARCHIVE"
+
     def fetch_archive(self, location, start_year, end_year):
         FakeRainfall.archive_calls.append((location.name, start_year, end_year))
         if FakeRainfall.archive_error:
@@ -262,6 +268,71 @@ def test_rainfall_ambiguous_city_is_an_error_with_no_plot(rain, base_config):
     assert FakeFigure.calls == []
 
 
+def test_rainfall_point_mode_analyses_the_coordinates_and_ignores_the_city(
+    rain, base_config, make_analysis
+):
+    rain.outcome = make_analysis()
+    status, _, figure, _, series = analyse(
+        base_config,
+        city="Zhengzhou",
+        country_code="CN",
+        location_mode="point",
+        latitude=34.75,
+        longitude=113.5,
+        start_year=2000.0,
+    )
+    assert rain.calls == [
+        {
+            "point": (34.75, 113.5),
+            "start_year": 2000,
+            "end_year": None,
+            "event_date": None,
+            "metric": "wet",
+            "event_year": None,
+            "scale": "daily",
+            "event_month": None,
+        }
+    ]
+    assert status.startswith(handlers.NO_LLM) and figure == "DAILY FIGURE"
+    assert series == (rain.outcome, "ARCHIVE")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"location_mode": "point", "latitude": None, "longitude": 113.5},
+        {"location_mode": "point", "latitude": 34.75, "longitude": None},
+        {"location_mode": "somewhere"},
+    ],
+)
+def test_rainfall_point_mode_without_both_coordinates_is_an_error_before_any_request(
+    rain, base_config, overrides
+):
+    status, text, figure, _, series = analyse(base_config, **overrides)
+    assert status.startswith("**Error:**") and (text, figure, series) == ("", None, None)
+    assert rain.calls == []
+
+
+def test_rainfall_city_mode_is_the_default(rain, base_config, make_analysis):
+    rain.outcome = make_analysis()
+    analyse(base_config, latitude=1.0, longitude=2.0)  # coordinates are ignored in city mode
+    assert rain.calls[0]["city"] == "Zhengzhou" and "point" not in rain.calls[0]
+
+
+def test_point_from_click_rounds_the_coordinates():
+    assert handlers.point_from_click({"lat": 34.757781234, "lon": -0.000049}) == (34.7578, -0.0)
+    assert handlers.point_from_click({"lat": 10, "lon": 20}) == (10.0, 20.0)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [None, "34.7,113.6", {}, {"lat": 1.0}, {"lat": "1", "lon": 2.0}, {"lat": True, "lon": 2.0}],
+)
+def test_point_from_click_rejects_anything_but_two_numbers(data):
+    with pytest.raises(ValueError):
+        handlers.point_from_click(data)
+
+
 def test_rainfall_plot_failure_keeps_the_statistics(rain, base_config, make_analysis):
     rain.outcome = make_analysis()
     FakeFigure.error = PlotError("the daily series has no data for 2030")
@@ -329,15 +400,16 @@ def agent_result(answer, **stats):
 def run_agent(monkeypatch):
     calls, outcome = [], {}
 
-    def fake(cfg, creds, question, context=None):
+    def fake(cfg, creds, question, context=None, map_point=None):
         calls.append(question)
         fake.contexts.append(context)
+        fake.points.append(map_point)
         if isinstance(outcome["value"], Exception):
             raise outcome["value"]
         return outcome["value"]
 
     monkeypatch.setattr(handlers, "_run_agent", fake)
-    fake.calls, fake.outcome, fake.contexts = calls, outcome, []
+    fake.calls, fake.outcome, fake.contexts, fake.points = calls, outcome, [], []
     return fake
 
 
@@ -503,6 +575,29 @@ def test_ask_turn_keeps_the_conversation_in_its_session(run_agent, base_config):
     assert r"1. Amsterdam \<rain\>?" in transcript  # escaped
     assert "2. What about Rotterdam?" in transcript2
     assert "turn 2 (update)" in status
+
+
+def test_ask_turn_sends_the_ticked_map_point_and_the_transcript_names_it(run_agent, base_config):
+    answer = Answer(claims=(Claim("Done.", "interpretation", ()),), references=(), limitations=())
+    run_agent.outcome["value"] = agent_result(answer)
+    service = _service(base_config)
+
+    *_, sid, transcript = handlers.ask_turn(
+        base_config, CREDS, service, "Rain here?", None, None, True, 34.7578, 113.6486
+    )
+    handlers.ask_turn(base_config, CREDS, service, "And dry spells?", None, sid, False, 1.0, 2.0)
+
+    assert run_agent.calls == ["Rain here?", "And dry spells?"]  # the question text is not changed
+    assert run_agent.points == [(34.7578, 113.6486), None]  # unticked: no point is sent
+    assert r"Rain here? \[map point: 34.7578, 113.6486\]" in transcript
+
+
+@pytest.mark.parametrize(("lat", "lon"), [(None, 113.6), (34.7, None)])
+def test_ask_turn_with_a_ticked_point_needs_both_coordinates(run_agent, base_config, lat, lon):
+    status, *_ = handlers.ask_turn(
+        base_config, CREDS, _service(base_config), "Rain here?", None, None, True, lat, lon
+    )
+    assert status.startswith("**Error:**") and run_agent.calls == []
 
 
 def test_ask_turn_errors_keep_the_session_unchanged(run_agent, base_config):

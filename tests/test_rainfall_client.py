@@ -398,3 +398,70 @@ def test_event_year_in_the_current_year_is_reported_not_ranked(cfg):
     )
     assert result.year_focus is None
     assert any("2026 was excluded (year not complete)" in c for c in result.caveats)
+
+
+# --- analyze_point: coordinates instead of a city (map click) ------------------------------------
+
+
+def test_point_skips_geocoding_and_requests_the_same_archive_as_the_city(cfg):
+    server = FakeServer()
+    record, archive = make_client(cfg, server).analyze_point(
+        34.75778, 113.64861, start_year=2019, end_year=2021, event_date=date(2021, 7, 20)
+    )
+    assert server.hosts() == ["archive-api"]
+    q = server.requests[0].url.params
+    assert q["latitude"] == "34.7578" and q["longitude"] == "113.6486"
+    assert (q["models"], q["timezone"]) == ("era5", "auto")
+    assert record.location.label == "34.7578, 113.6486"
+    assert record.event.date == "2021-07-20"
+    assert record.provenance.from_cache is False
+    assert any("34.7578, 113.6486" in c and "34.7500, 113.5000" in c for c in record.caveats)
+    assert (archive.latitude, archive.longitude) == (34.75, 113.5)
+
+
+def test_point_after_city_at_the_same_coordinates_is_a_cache_hit(cfg):
+    server = FakeServer()
+    client = make_client(cfg, server)
+    city, _ = client.analyze("Zhengzhou", start_year=2019, end_year=2021)
+    point, _ = client.analyze_point(34.75778, 113.64861, start_year=2019, end_year=2021)
+    assert server.hosts() == ["geocoding-api", "archive-api"]
+    assert point.provenance.from_cache is True
+    assert point.annual_maxima == city.annual_maxima
+
+
+@pytest.mark.parametrize("scale", ["daily", "monthly", "yearly"])
+def test_point_works_at_every_scale(cfg, scale):
+    record, _ = make_client(cfg, FakeServer()).analyze_point(
+        34.75, 113.5, start_year=2019, end_year=2021, scale=scale
+    )
+    assert record.scale == scale
+
+
+@pytest.mark.parametrize(
+    ("lat", "lon"),
+    [
+        (90.1, 0.0),
+        (-90.1, 0.0),
+        (0.0, 180.1),
+        (0.0, -180.1),
+        (float("nan"), 0.0),
+        (0.0, float("inf")),
+        (True, 0.0),
+        ("34.7", 113.6),
+        (None, 113.6),
+    ],
+)
+def test_invalid_point_is_rejected_before_any_request(cfg, lat, lon):
+    server = FakeServer()
+    with pytest.raises(InvalidRainfallQueryError):
+        make_client(cfg, server).analyze_point(lat, lon, start_year=2019, end_year=2021)
+    assert server.requests == []
+
+
+def test_point_period_and_metric_are_validated_like_a_city(cfg):
+    server = FakeServer()
+    with pytest.raises(InvalidRainfallQueryError):
+        make_client(cfg, server).analyze_point(0.0, 0.0, start_year=2021, end_year=2019)
+    with pytest.raises(InvalidRainfallQueryError):
+        make_client(cfg, server).analyze_point(0.0, 0.0, metric="drought")
+    assert server.requests == []

@@ -553,3 +553,115 @@ def test_fabricated_id_is_still_rejected_next_to_a_dry_analysis(limits, make_dry
     result = run(llm, limits, rainfall=FakeRainfall(make_dry_analysis()))
     assert result.answer.rejected_citations == ("R7",)
     assert [a.id for a in result.answer.data_references] == ["R1"]
+
+
+# --- a point selected on a map: the code supplies the coordinates -------------------------------
+
+
+class FakePointRainfall(FakeRainfall):
+    def analyze_point(self, latitude, longitude, **kwargs):
+        self.calls.append({"point": (latitude, longitude), **kwargs})
+        return self.outcomes[0], None
+
+
+POINT = (34.7578, 113.6486)
+
+
+def run_point(llm, limits, analyzer, map_point=POINT, question="How was the rainfall here?"):
+    agent = ResearchAgent(
+        llm, FakeSearch(), limits, REPORTING, rainfall=analyzer, today=lambda: TODAY
+    )
+    return agent.run(question, map_point=map_point)
+
+
+def test_without_a_map_point_tools_and_question_are_unchanged(limits, make_analysis):
+    llm = StubLLMClient([text_response(final())])
+    run(llm, limits, rainfall=FakeRainfall(make_analysis()), question="Rain?")
+    assert llm.calls[0].tools == (SEARCH_TOOL, RAINFALL_TOOL)
+    assert llm.calls[0].messages[-1].text == "Rain?"
+
+
+def test_a_map_point_offers_use_map_point_and_names_the_point_in_the_question(
+    limits, make_analysis
+):
+    llm = StubLLMClient([text_response(final())])
+    run_point(llm, limits, FakePointRainfall(make_analysis()))
+    rec = llm.calls[0]
+    search_tool, rain_tool = rec.tools
+    assert search_tool == SEARCH_TOOL and rain_tool.name == RAIN and rain_tool != RAINFALL_TOOL
+    assert rain_tool.parameters["properties"]["use_map_point"]["type"] == "boolean"
+    assert rain_tool.parameters["required"] == ["scale"]
+    text = rec.messages[-1].text
+    assert text.startswith("How was the rainfall here?\n\nSelected map point: ")
+    assert "34.7578, 113.6486" in text and "use_map_point=true" in text
+    # The instructions are the same with or without a point.
+    other = StubLLMClient([text_response(final())])
+    run(other, limits, rainfall=FakeRainfall(make_analysis()))
+    assert rec.instructions == other.calls[0].instructions
+
+
+def test_use_map_point_analyses_the_exact_selected_point_and_is_citable(limits, make_analysis):
+    analyzer = FakePointRainfall(make_analysis())
+    call = ("r1", RAIN, {"use_map_point": True, "scale": "yearly", "start_year": 2016})
+    reply = final([evidence("The wettest year was 2004.", "R1")])
+    llm = StubLLMClient([tool_call_response(call), text_response(reply)])
+
+    result = run_point(llm, limits, analyzer)
+
+    assert analyzer.calls == [
+        {
+            "point": POINT,
+            "start_year": 2016,
+            "end_year": None,
+            "event_date": None,
+            "metric": "wet",
+            "event_year": None,
+            "scale": "yearly",
+            "event_month": None,
+        }
+    ]
+    assert result.answer.claims[0].sources == ("R1",) and result.stats.rainfall_calls == 1
+    (event,) = result.events
+    assert event.status == "ok" and event.location == make_analysis().location
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"use_map_point": True, "city": "Zhengzhou", "scale": "daily"},
+        {"use_map_point": True, "region": "Henan", "scale": "daily"},
+        {"use_map_point": "yes", "scale": "daily"},
+        {"scale": "daily"},  # neither a city nor the point
+    ],
+)
+def test_bad_map_point_calls_cost_nothing(limits, make_analysis, args):
+    analyzer = FakePointRainfall(make_analysis())
+    llm = StubLLMClient([tool_call_response(("r1", RAIN, args)), text_response(final())])
+    result = run_point(llm, limits, analyzer)
+    assert tool_results(llm, 1)[0].content.startswith("Error:")
+    assert analyzer.calls == [] and result.stats.rainfall_calls == 0
+
+
+def test_use_map_point_without_a_selected_point_is_refused(limits, make_analysis):
+    analyzer = FakePointRainfall(make_analysis())
+    call = ("r1", RAIN, {"use_map_point": True, "scale": "daily"})
+    llm = StubLLMClient([tool_call_response(call), text_response(final())])
+    run(llm, limits, rainfall=analyzer)
+    assert "no map point is selected" in tool_results(llm, 1)[0].content
+    assert analyzer.calls == []
+
+
+@pytest.mark.parametrize("point", [(91.0, 0.0), (0.0, 181.0), (float("nan"), 0.0)])
+def test_an_invalid_map_point_stops_before_any_model_call(limits, make_analysis, point):
+    from research_agent.agent import InvalidQuestionError
+
+    llm = StubLLMClient([])
+    with pytest.raises(InvalidQuestionError, match="map point"):
+        run_point(llm, limits, FakePointRainfall(make_analysis()), map_point=point)
+    assert llm.calls == []
+
+
+def test_a_map_point_needs_the_rainfall_tool(limits):
+    agent = ResearchAgent(StubLLMClient([]), FakeSearch(), limits, REPORTING)
+    with pytest.raises(ValueError, match="rainfall tool"):
+        agent.run("Rain?", map_point=POINT)
