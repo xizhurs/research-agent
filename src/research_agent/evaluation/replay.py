@@ -127,8 +127,10 @@ class ReplayLLMClient:
                     f"tool result changed for {old['name']} {m.call_id}",
                     first_difference(old["result"], m.content),
                 )
-        first = messages[0] if messages else None
-        if isinstance(first, UserMessage) and first.text != self._record["question"]:
+        # The question is the last user message; in a conversation turn the context block and
+        # earlier turns come before it ("...Current question: <question>").
+        asked = [m.text for m in messages if isinstance(m, UserMessage)]
+        if asked and not asked[-1].endswith(self._record["question"]):
             return "the question message changed", ""
         prompt = self._record.get("prompt_hash")
         if prompt and fingerprint(instructions) != prompt:
@@ -143,6 +145,8 @@ class ReplayLLMClient:
             return "max_output_tokens changed", f"{before} -> {max_output_tokens}"
         if "tools_hash" not in recorded:
             return "the request changed (tool definitions were not recorded)", ""
+        if (self._record.get("conversation") or {}).get("turn", 1) > 1:
+            return "the conversation context (earlier turns) or the request structure changed", ""
         return "the request structure changed", ""
 
 

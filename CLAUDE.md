@@ -20,7 +20,7 @@ Layout:
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `temperature_plots.py` (temperature figures: lines and markers, not bars), `app.py` (layout only, the only module that imports Gradio).
 - `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/conversation/`: follow-up questions (see Conversation facts). `models.py` (`Session`, `TurnRecord`, `TaskState`, `EvidenceItem`), `state.py` (pure `apply_turn`), `context.py` (pure `build_context`), `store.py` (`SessionStore` protocol, `InMemorySessionStore`), `service.py` (`ConversationService`). The agent side is `agent/events.py` (`ToolEvent`, `TurnContext`).
-- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
+- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`). `evals/conversations.toml`: multi-turn conversations (draft). `evals/qrels.toml`: relevance labels (owner's, empty so far).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -139,6 +139,47 @@ Fixed vs agentic search (Phase 4a, added 2026-11-13; the owner chose to split Ph
   It also gives a per-case table and lists cases only in A, only in B, or not completed in both. It exits 1 if nothing is paired.
 - Estimated paid use for a comparison on the 7 dev literature cases: fixed about 7 x 4k = ~28k tokens, plus an agentic run of the same cases at about 7 x 7k = ~50k tokens (or reuse an agentic baseline). Not run yet: it needs the owner's OK.
 
+Multi-turn conversations (Phase 4b, added 2026-11-13; the conversations are drafts by the assistant for the owner to review):
+- `evals/conversations.toml` holds `[[conversation]]` tables (`id` without '#', `split`, `note`) with `[[conversation.turn]]` lists. Each turn becomes an `EvalCase` with ID `<conversation>#<n>`, category `conversation` (added to `CATEGORIES`) and the conversation's split.
+- Every key of `cases.toml` works per turn. Conversation keys (`TurnExpect`, judged by `checks.check_turn`) are:
+  - `expect_relation`: accepted labels;
+  - `expect_recall`: whether `recall_evidence` was used;
+  - `max_new_analyses`: the turn's `rainfall_calls`;
+  - `expect_places`: substrings of the task-state place labels;
+  - `expect_state_metrics`: entries of the task state's metrics;
+  - `expect_pending`: whether a clarification is pending.
+
+  The task state is built by code from tool events, so these checks judge the conversation code and the model's tool use, not model wording. A missing file means no conversations.
+- The draft has 4 conversations and 9 turns:
+  1. Amsterdam, then Rotterdam, then "compare the two" (recall expected, no new analysis);
+  2. an ambiguous Springfield (pending clarification), then Illinois;
+  3. Madrid rain in 2023, then temperature in 2023 (`temperature yearly` in the state);
+  4. Paris heat, then a crop-mapping literature question (`new_topic`). This one is held out (`split = "test"`).
+
+  Estimated live cost: about 9 turns x 7k, roughly 65k tokens (worst case 180k).
+- Commands:
+  - `eval list --suite conversations`;
+  - `eval run --suite conversations [--live] [--only CONV] [--split]`; `--mode fixed` and `--category` are refused;
+  - `eval score`, `replay` and `compare` take `--conversations` (default `evals/conversations.toml`) and handle both suites. Turn records are scored with the turn definitions.
+- Run: `run_conversations` gives each conversation a new session in `ConversationDriver` (the real `ConversationService` and `InMemorySessionStore`, span `eval.turn`) and asks the turns in order. Each turn is one ordinary record (`<id>#<n>.json`) with only that turn's model calls, plus a `conversation` section:
+  - id, turn, relation and its source;
+  - context tokens, earlier turns sent and parts left out;
+  - recalled IDs;
+  - the task state after the turn: places (labels), period, event date, year and month, metrics, sources, queries, pending city.
+
+  So all Phase 2 metrics, `report.md` (which adds a relation/context/state line per turn), compare and summaries work per turn. The totals add `conversations` (every turn passed, and which did not). Once a turn does not complete, the conversation's later turns are recorded as skipped.
+- `run_cases` and `run_conversations` share `_run_one` (budget skip, abort, divergence, failure handling).
+- Replay of a conversation run groups the turn records by conversation and replays each in a new session, turn by turn in order. It stops at the first turn that did not end ok, a missing turn, or a turn no longer in the file.
+- `ReplayLLMClient` now finds the question in the last user message (in a follow-up the context and earlier turns come first). A divergence it cannot otherwise explain in a follow-up turn is reported as "the conversation context (earlier turns) or the request structure changed".
+- Verified offline with a scripted model and a fake rainfall analyser:
+  - two turns in one session, with relation, recall, context and places recorded;
+  - a failed turn skips the rest;
+  - rescoring with changed expectations;
+  - replay gives same, same; with a smaller conversation context budget, turn 2 diverges on the context;
+  - the CLI run, score and replay.
+
+  Not run live yet (paid, needs the owner's OK).
+
 Evaluation phases (the approved plan; token figures use the measured ~6.5k tokens per single-turn case and the 20k worst case per case under the current limits; dollar amounts need prices in `[eval]`):
 
 | Phase | Status | Builds | Paid use |
@@ -146,7 +187,7 @@ Evaluation phases (the approved plan; token figures use the measured ~6.5k token
 | 1 Foundations | built 2026-11-12; first live run 2026-11-13 (2 cases) | `evaluation/` package; run records; `RecordingLLMClient` with the run budget (calls, tokens, cost) and timing; `[eval]` config; `eval list` / `run` (plan only unless `--live`) / `score`; `split` and `category` on every case; evaluation tool cache and `--frozen-tools` | Baselines, only with the owner's OK: dev split about 26 cases x 6.5k = ~170k tokens; test split 8 cases = ~50k |
 | 2 Deterministic metrics | built 2026-11-13 (`expect_numbers` on 5 cases; key points and qrels still empty, for the owner) | Scorers on stored records: tool use (argument validity, error mix, redundant calls, uncited tool results, `max_tool_calls`); trajectory (turns, voluntary vs forced stop, new works per follow-up search); number faithfulness (every number in an evidence claim citing an R ID must appear in that record's text, within its rounding; `expect_numbers` verified values); retrieval (`evals/qrels.toml`: relevant / not-relevant W IDs labelled by the owner, precision, recall, unjudged count); `key_points` coverage (verified facts with `any_terms`, curated once, never generated per run); lexical citation-support proxy; efficiency (latency, tokens, cost, tokens per cited item); `report.md`. Owner time: about 1-2 h of labelling and approving key points | none |
 | 3 Replay | built 2026-11-13; the 2-case live run replayed as same | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
-| 4 Multi-turn and fixed vs agentic | 4a (fixed vs agentic, `eval compare`) built 2026-11-13, not run live; 4b (conversations) planned | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
+| 4 Multi-turn and fixed vs agentic | 4a (fixed vs agentic, `eval compare`) built 2026-11-13, not run live; 4b (conversations) built 2026-11-13, not run live | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
 | 5 LLM judge (optional) | planned | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
 | 6 Langfuse import | planned | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
 
@@ -298,7 +339,7 @@ Ask the user before the milestone that needs each one. Do not assume.
   - "What about Rotterdam?": Rotterdam was analysed with the same period and metric, and Amsterdam was recalled. The model labelled it compare, not update.
   - "Compare the two": recalls only, no new analysis.
   - Context sent: about 270 and 470 tokens.
-- Known gaps: the relation label is the model's call and is not evaluated by eval cases (no multi-turn eval yet); there is no per-session token cap; the UI conversation has not been tried live in a browser.
+- Known gaps: the relation label is the model's call; since 2026-11-13 it is checked by the conversation evals (`evals/conversations.toml`, not yet run live); there is no per-session token cap; the UI conversation has not been tried live in a browser.
 
 ## Tracing (added 2026-11-11)
 
@@ -411,6 +452,7 @@ uv run research-agent eval score evals/runs/<run-id>    # free: rescore stored r
 uv run research-agent eval replay evals/runs/<run-id>   # free: recorded replies through the current code
 uv run research-agent eval run --mode fixed            # plan for the fixed-search baseline (literature)
 uv run research-agent eval compare <run-a> <run-b>     # free: paired per-case differences
+uv run research-agent eval run --suite conversations   # plan for the multi-turn conversations
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 

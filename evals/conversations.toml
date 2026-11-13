@@ -1,0 +1,105 @@
+# Evaluation conversations (multi-turn). Run with:
+#   uv run research-agent eval run --suite conversations          # plan only (free)
+#   uv run research-agent eval run --suite conversations --live   # real model (~9 turns)
+#
+# DRAFT conversations written by the assistant on 2026-11-13; please review and edit them.
+# Each conversation is asked in order in one session through the same ConversationService the
+# `chat` command and the UI use. Each turn is a case with ID "<conversation>#<n>" and category
+# "conversation": every key of evals/cases.toml works per turn (expect_tool, expect_metric,
+# min_data_references, expect_numbers, ...), plus these conversation keys:
+#   expect_relation       the model's relation label must be one of these
+#                         (continue, update, compare, new_topic)
+#   expect_recall         true: stored evidence was re-shown with recall_evidence; false: not
+#   max_new_analyses      at most this many rainfall/temperature/ENSO analyses in this turn
+#   expect_places         each must match (case-insensitive substring) a place in the task
+#                         state after the turn (the state is built by code from tool events)
+#   expect_state_metrics  each must be in the task state's metrics after the turn
+#                         (rainfall: wet, dry, yearly, monthly; "temperature yearly", ...; enso)
+#   expect_pending        true: a clarification (ambiguous place) is pending after the turn
+# Conversation keys: id, split ("dev" or "test"), note, and the [[conversation.turn]] list.
+# Once a turn does not complete, the conversation's later turns are skipped.
+
+[[conversation]]
+id = "conv-amsterdam-rotterdam"
+note = "Follow-up on another city keeps the period and metric; the comparison reuses both analyses."
+
+[[conversation.turn]]
+question = "How was the rainfall in the last 10 years in Amsterdam?"
+expect_tool = "analyze_rainfall_extremes"
+expect_metric = "yearly"
+min_data_references = 1
+expect_places = ["amsterdam"]
+expect_state_metrics = ["yearly"]
+
+[[conversation.turn]]
+question = "What about Rotterdam?"
+expect_metric = "yearly"
+min_data_references = 1
+expect_relation = ["compare", "update"]
+expect_places = ["rotterdam"]
+expect_state_metrics = ["yearly"]
+
+[[conversation.turn]]
+question = "Compare the two."
+expect_relation = ["compare", "continue"]
+expect_recall = true
+max_new_analyses = 0
+min_data_references = 2
+expect_places = ["amsterdam", "rotterdam"]
+
+[[conversation]]
+id = "conv-springfield-clarify"
+note = "An ambiguous city sets a pending clarification; the user's answer resolves it."
+
+[[conversation.turn]]
+question = "How extreme was the heaviest daily rainfall ever recorded in Springfield?"
+expect_tool = "analyze_rainfall_extremes"
+expect_pending = true
+
+[[conversation.turn]]
+question = "I mean Springfield, Illinois."
+expect_relation = ["continue", "update"]
+expect_metric = "wet"
+min_data_references = 1
+expect_pending = false
+expect_places = ["springfield"]
+
+[[conversation]]
+id = "conv-rain-then-temperature"
+note = "A temperature follow-up at the same place and year uses the temperature tool."
+
+[[conversation.turn]]
+question = "Was 2023 a wet or a dry year in Madrid, Spain, compared with normal?"
+expect_tool = "analyze_rainfall_extremes"
+expect_metric = "yearly"
+min_data_references = 1
+expect_places = ["madrid"]
+
+[[conversation.turn]]
+question = "And was 2023 also unusually warm there?"
+expect_tool = "analyze_temperature"
+expect_metric = "yearly"
+forbid_tool = "search_literature"
+min_data_references = 1
+expect_relation = ["continue", "update", "compare"]
+expect_places = ["madrid"]
+expect_state_metrics = ["temperature yearly"]
+
+[[conversation]]
+id = "conv-new-topic"
+split = "test"
+note = "Held out. A switch to an unrelated literature question is labelled new_topic."
+
+[[conversation.turn]]
+question = "How extreme was the heat in Paris, France on 25 July 2019 compared with the record?"
+expect_tool = "analyze_temperature"
+expect_metric = "hot"
+min_data_references = 1
+expect_numbers = [{ value = 41.4 }]  # °C TXx on 2019-07-25 (live 2026-11-12)
+
+[[conversation.turn]]
+question = "Separately: which deep learning methods are used for crop type mapping from Sentinel-2 time series?"
+expect_relation = ["new_topic"]
+forbid_tool = "analyze_temperature"
+min_searches = 1
+min_references = 1

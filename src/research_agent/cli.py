@@ -32,6 +32,8 @@ from research_agent.credentials import (
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
+    Conversation,
+    ConversationDriver,
     EvalCase,
     EvalError,
     FixedSearchLLMClient,
@@ -45,6 +47,7 @@ from research_agent.evaluation import (
     fixed_query,
     flags,
     load_cases,
+    load_conversations,
     load_qrels,
     metrics_line,
     read_records,
@@ -53,8 +56,10 @@ from research_agent.evaluation import (
     replay_section,
     rescore,
     run_cases,
+    run_conversations,
     score_records,
     select_cases,
+    select_conversations,
     summarize_records,
     write_scores,
     write_summary,
@@ -634,6 +639,7 @@ def chat(
 
 DEFAULT_CASES = Path("evals/cases.toml")
 DEFAULT_QRELS = Path("evals/qrels.toml")
+DEFAULT_CONVERSATIONS = Path("evals/conversations.toml")
 FROZEN_TTL_DAYS = 36500.0  # the evaluation tool cache never expires; delete it to refresh
 
 eval_app = typer.Typer(
@@ -651,6 +657,51 @@ CATEGORY_OPTION = typer.Option(None, "--category", help="e.g. literature, rainfa
 QRELS_OPTION = typer.Option(
     DEFAULT_QRELS, "--qrels", help="Relevance labels per case (a missing file means none)."
 )
+CONVERSATIONS_OPTION = typer.Option(
+    DEFAULT_CONVERSATIONS, "--conversations", help="TOML file with evaluation conversations."
+)
+SUITE_OPTION = typer.Option(
+    "cases", "--suite", help="'cases' (single questions) or 'conversations' (multi-turn)."
+)
+
+
+def _suite_or_exit(suite: str) -> str:
+    if suite not in ("cases", "conversations"):
+        typer.echo("error: --suite must be 'cases' or 'conversations'", err=True)
+        raise typer.Exit(code=1)
+    return suite
+
+
+def _conversations_or_exit(path: Path, only: list[str], split: str) -> list[Conversation]:
+    if split not in ("dev", "test", "all"):
+        typer.echo("error: --split must be 'dev', 'test' or 'all'", err=True)
+        raise typer.Exit(code=1)
+    try:
+        return select_conversations(
+            load_conversations(path), only=only, split=None if split == "all" else split
+        )
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _all_cases_or_exit(cases: Path, conversations: Path) -> list[EvalCase]:
+    """Every case and every conversation turn (for scoring records of either suite)."""
+    try:
+        turns = [t for c in load_conversations(conversations) for t in c.turns]
+        return load_cases(cases) + turns
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _echo_conversations(agg: dict) -> None:
+    conv = agg["conversations"]
+    if conv["total"]:
+        failed = f" (not: {', '.join(conv['failed'])})" if conv["failed"] else ""
+        typer.echo(
+            f"Conversations: {conv['passed']}/{conv['total']} with every turn passed{failed}"
+        )
 
 
 def _qrels_or_exit(path: Path, cases: list[EvalCase]) -> dict[str, Qrels]:
@@ -777,8 +828,18 @@ def eval_list(
     only: list[str] = ONLY_OPTION,
     split: str = typer.Option("all", "--split", help="'dev', 'test' (held out) or 'all'."),
     category: str | None = CATEGORY_OPTION,
+    suite: str = SUITE_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
 ) -> None:
-    """List evaluation cases (free: nothing is run)."""
+    """List evaluation cases or conversations (free: nothing is run)."""
+    if _suite_or_exit(suite) == "conversations":
+        selected_conversations = _conversations_or_exit(conversations, only, split)
+        for conv in selected_conversations:
+            typer.echo(f"{conv.id:40} {conv.split:4} {len(conv.turns)} turn(s)")
+            for turn in conv.turns:
+                typer.echo(f"    {turn.id:36} {turn.question[:70]}")
+        typer.echo(f"{len(selected_conversations)} conversation(s)")
+        return
     selected = _cases_or_exit(cases, only, split, category)
     for c in selected:
         typer.echo(f"{c.id:40} {c.split:4} {c.category or '-':11} {c.question[:70]}")
@@ -809,22 +870,33 @@ def eval_run(
         help="'agentic' (the model chooses its searches) or 'fixed' (literature cases: one "
         "search with the case's fixed_query or the question, then one model call, tools off).",
     ),
+    suite: str = SUITE_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Run cases with the real model within a run budget; one record per case is written,
-    then score.json and report.md (metrics, reported only).
+    """Run cases (or, with --suite conversations, multi-turn conversations) with the real model
+    within a run budget; one record per case or turn is written, then score.json and report.md
+    (metrics, reported only).
 
     Without --live only the plan is printed (cases, worst-case tokens, budget): nothing is
-    called. Exits non-zero if any case fails, is aborted or is skipped.
+    called. Exits non-zero if any case or turn fails, is aborted or is skipped.
     """
     cfg = _load_or_exit(config)
     if mode not in ("agentic", "fixed"):
         typer.echo("error: --mode must be 'agentic' or 'fixed'", err=True)
         raise typer.Exit(code=1)
-    selected = _cases_or_exit(cases, only, split, category)
+    talks: list[Conversation] = []
+    if _suite_or_exit(suite) == "conversations":
+        if mode == "fixed" or category:
+            typer.echo("error: conversations take neither --mode fixed nor --category", err=True)
+            raise typer.Exit(code=1)
+        talks = _conversations_or_exit(conversations, only, split)
+        selected = [turn for conv in talks for turn in conv.turns]
+    else:
+        selected = _cases_or_exit(cases, only, split, category)
     if mode == "fixed":
         dropped = [c.id for c in selected if c.category != "literature"]
         if dropped:
@@ -833,14 +905,22 @@ def eval_run(
     if not selected:
         typer.echo("error: no case matches the selection", err=True)
         raise typer.Exit(code=1)
-    qrels = _qrels_or_exit(qrels_file, _cases_or_exit(cases, [], "all", None))
+    qrels = _qrels_or_exit(qrels_file, _all_cases_or_exit(cases, conversations))
     budget = _budget(cfg, max_calls, max_tokens, max_cost)
     if budget.max_cost_usd > 0 and not budget.priced:
         typer.echo("error: a cost cap needs prices in [eval] (price_*_per_mtok)", err=True)
         raise typer.Exit(code=1)
 
     worst = len(selected) * cfg.limits.max_total_tokens
-    typer.echo(f"Plan ({mode}): {len(selected)} case(s): {', '.join(c.id for c in selected)}")
+    if talks:
+        typer.echo(
+            f"Plan (conversations): {len(talks)} conversation(s), {len(selected)} turn(s): "
+            f"{', '.join(c.id for c in talks)}"
+        )
+    else:
+        typer.echo(
+            f"Plan ({mode}): {len(selected)} case(s): {', '.join(c.id for c in selected)}"
+        )
     typer.echo(
         f"Worst case {worst:,} tokens ({len(selected)} x limits.max_total_tokens "
         f"{cfg.limits.max_total_tokens:,}); run budget {budget.max_calls} model calls, "
@@ -895,27 +975,42 @@ def eval_run(
             http_client=http,
             today=lambda: run_date,
         ) as agent:
+            if talks:
+                driver = ConversationDriver(
+                    lambda q, ctx, **kw: agent.run(q, ctx, **kw), cfg.conversation
+                )
+                records = run_conversations(
+                    talks,
+                    driver.ask,
+                    recorder,
+                    cfg.limits,
+                    out_dir=out_dir,
+                    run_id=run_id,
+                    meta=meta,
+                    on_record=lambda record: typer.echo(_record_line(record)),
+                )
+            else:
 
-            def run_one(case: EvalCase) -> AgentResult:
-                if fixed is not None:
-                    fixed.start(fixed_query(case))
-                with observe("eval.case", "span", tags=("eval", case.id)) as span:
-                    set_content(span, input=case.question)
-                    result = agent.run(case.question)
-                    set_content(span, output=answer_json(result.answer))
-                    return result
+                def run_one(case: EvalCase) -> AgentResult:
+                    if fixed is not None:
+                        fixed.start(fixed_query(case))
+                    with observe("eval.case", "span", tags=("eval", case.id)) as span:
+                        set_content(span, input=case.question)
+                        result = agent.run(case.question)
+                        set_content(span, output=answer_json(result.answer))
+                        return result
 
-            records = run_cases(
-                selected,
-                run_one,
-                recorder,
-                cfg.limits,
-                out_dir=out_dir,
-                run_id=run_id,
-                meta=meta,
-                on_record=lambda record: typer.echo(_record_line(record)),
-                annotate=annotate,
-            )
+                records = run_cases(
+                    selected,
+                    run_one,
+                    recorder,
+                    cfg.limits,
+                    out_dir=out_dir,
+                    run_id=run_id,
+                    meta=meta,
+                    on_record=lambda record: typer.echo(_record_line(record)),
+                    annotate=annotate,
+                )
     except (CredentialError, LLMError, RetrievalError) as exc:
         typer.echo(f"error: {exc} (records so far are in {out_dir})", err=True)
         raise typer.Exit(code=1) from exc
@@ -927,6 +1022,7 @@ def eval_run(
     write_summary(out_dir, {"run_id": run_id, **meta, **summary})
     typer.echo(_summary_line(summary))
     _, agg = _score_and_report(cfg, out_dir, records, selected, qrels, budget)
+    _echo_conversations(agg)
     typer.echo(metrics_line(agg))
     typer.echo(f"Records and report.md: {out_dir}")
     if summary["passed"] != summary["cases"]:
@@ -937,22 +1033,24 @@ def eval_run(
 def eval_score(
     run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
     cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
     qrels_file: Path = QRELS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
 ) -> None:
     """Score stored run records again with the current cases and checks (free, offline).
 
     Also writes score.json and report.md into RUN_DIR (metrics: tools, trajectory, numbers,
-    citation support, key points, retrieval against --qrels, efficiency). Metrics are reported
-    only; the exit code depends on the case checks.
+    citation support, key points, retrieval against --qrels, efficiency; conversation turns
+    also show their relation, recall, context and task state). Metrics are reported only; the
+    exit code depends on the case checks.
     """
     cfg = _load_or_exit(config)
     try:
         records = read_records(run_dir)
-        case_list = load_cases(cases)
-    except (FileNotFoundError, EvalError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
     if not records:
         typer.echo(f"error: no run records in {run_dir}", err=True)
         raise typer.Exit(code=1)
@@ -967,6 +1065,7 @@ def eval_score(
             typer.echo(f"    ~ {flagged}")
     summary = summarize_records(rescored, budget)
     typer.echo(_summary_line(summary))
+    _echo_conversations(agg)
     typer.echo(metrics_line(agg))
     typer.echo(f"Report: {run_dir / 'report.md'}")
     if summary["passed"] != summary["cases"]:
@@ -982,11 +1081,52 @@ def _replay_line(record: dict) -> str:
     return "\n".join(lines)
 
 
+def _replayable_conversations(
+    records: list[dict], path: Path, only: list[str]
+) -> tuple[list[Conversation], dict[str, dict]]:
+    """Conversations to replay, each cut at its first turn that did not end ok (later turns
+    depend on it), with the recorded questions; and the original turn records by case ID."""
+    try:
+        specs = {c.id: c for c in load_conversations(path)}
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    grouped: dict[str, dict[int, dict]] = {}
+    for record in records:
+        conv = record["conversation"]
+        if not only or conv["id"] in only:
+            grouped.setdefault(conv["id"], {})[conv["turn"]] = record
+    talks, originals = [], {}
+    for conv_id, turns in grouped.items():
+        spec = specs.get(conv_id)
+        if spec is None:
+            typer.echo(f"[NOT REPLAYED] {conv_id}: no longer in the conversation file")
+            continue
+        kept = []
+        for number in sorted(turns):
+            record = turns[number]
+            if number != len(kept) + 1 or record["status"] != "ok":
+                typer.echo(
+                    f"[NOT REPLAYED] {conv_id} from turn {number}: the original turn ended "
+                    f"'{record['status']}' or an earlier turn is missing"
+                )
+                break
+            if number > len(spec.turns):
+                typer.echo(f"[NOT REPLAYED] {conv_id} from turn {number}: no longer in the file")
+                break
+            kept.append(replace(spec.turns[number - 1], question=record["question"]))
+            originals[record["case_id"]] = record
+        if kept:
+            talks.append(Conversation(conv_id, spec.split, tuple(kept)))
+    return talks, originals
+
+
 @eval_app.command("replay")
 def eval_replay(
     run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
     only: list[str] = ONLY_OPTION,
     cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
     qrels_file: Path = QRELS_OPTION,
     out: Path | None = typer.Option(
         None, "--out", help="Folder for the replayed records (default: <run>-replay-<time>)."
@@ -997,30 +1137,40 @@ def eval_replay(
 
     No model is called and no key is needed: each request must equal the recorded one, and the
     tools answer from the evaluation tool cache with the network off. A case whose request
-    differs (prompt, tool definitions or output, forcing) stops as DIVERGED; otherwise the new
-    answer is compared with the recorded one (SAME or CHANGED, reported only). Exits non-zero
+    differs (prompt, tool definitions or output, forcing, conversation context) stops as
+    DIVERGED; otherwise the new answer is compared with the recorded one (SAME or CHANGED,
+    reported only). Conversations are replayed turn by turn in a new session. Exits non-zero
     if any case diverges or fails its checks.
     """
     cfg = _load_or_exit(config)
     try:
         records = read_records(run_dir)
-        case_list = load_cases(cases)
-    except (FileNotFoundError, EvalError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
     qrels = _qrels_or_exit(qrels_file, case_list)
-    by_id = {c.id: c for c in case_list}
-    originals: dict[str, dict] = {}
-    for record in records:
-        case_id = record["case_id"]
-        if only and case_id not in only:
-            continue
-        if record["status"] != "ok":
-            typer.echo(f"[NOT REPLAYED] {case_id}: the original run ended '{record['status']}'")
-        elif case_id not in by_id:
-            typer.echo(f"[NOT REPLAYED] {case_id}: no longer in the case file")
-        else:
-            originals[case_id] = record
+    talks: list[Conversation] = []
+    turn_records = [r for r in records if r.get("conversation")]
+    if turn_records:
+        talks, originals = _replayable_conversations(turn_records, conversations, only)
+        selected = [turn for conv in talks for turn in conv.turns]
+    else:
+        by_id = {c.id: c for c in case_list}
+        originals = {}
+        for record in records:
+            case_id = record["case_id"]
+            if only and case_id not in only:
+                continue
+            if record["status"] != "ok":
+                typer.echo(
+                    f"[NOT REPLAYED] {case_id}: the original run ended '{record['status']}'"
+                )
+            elif case_id not in by_id:
+                typer.echo(f"[NOT REPLAYED] {case_id}: no longer in the case file")
+            else:
+                originals[case_id] = record
+        selected = [replace(by_id[i], question=r["question"]) for i, r in originals.items()]
     if not originals:
         typer.echo(f"error: nothing to replay in {run_dir}", err=True)
         raise typer.Exit(code=1)
@@ -1034,7 +1184,6 @@ def eval_replay(
         "model": first["model"],
         "config_hash": fingerprint(asdict(cfg)),
     }
-    selected = [replace(by_id[i], question=r["question"]) for i, r in originals.items()]
     replayer = ReplayLLMClient()
     budget = RunBudget(max_calls=10**9, max_tokens=10**15)  # nothing is paid: no real cap
     recorder = RecordingLLMClient(replayer, budget)
@@ -1042,12 +1191,26 @@ def eval_replay(
     fixed = FixedSearchLLMClient(recorder) if first.get("mode") == "fixed" else None
     pinned: list[date] = [replay_date(first)]
 
+    def start(case: EvalCase) -> None:
+        original = originals[case.id]
+        pinned[0] = replay_date(original)
+        replayer.load(original)
+        if fixed is not None:
+            fixed.start(original["fixed_query"])
+
     def annotate(case: EvalCase, record: dict) -> dict:
         record["today"] = pinned[0].isoformat()
         if fixed is not None:
             record["fixed_query"] = originals[case.id]["fixed_query"]
         return {**record, "replay": replay_section(originals[case.id], record)}
 
+    common = {
+        "out_dir": out_dir,
+        "run_id": run_id,
+        "meta": meta,
+        "on_record": lambda record: typer.echo(_replay_line(record)),
+        "annotate": annotate,
+    }
     http = httpx.Client(transport=httpx.MockTransport(_refuse_network))
     try:
         with _open_agent(
@@ -1057,28 +1220,27 @@ def eval_replay(
             http_client=http,
             today=lambda: pinned[0],
         ) as agent:
+            if talks:
+                driver = ConversationDriver(
+                    lambda q, ctx, **kw: agent.run(q, ctx, **kw), cfg.conversation
+                )
 
-            def run_one(case: EvalCase) -> AgentResult:
-                original = originals[case.id]
-                pinned[0] = replay_date(original)
-                replayer.load(original)
-                if fixed is not None:
-                    fixed.start(original["fixed_query"])
-                result = agent.run(case.question)
-                replayer.finish()
-                return result
+                def run_turn(conv: Conversation, case: EvalCase) -> tuple[AgentResult, dict]:
+                    start(case)
+                    outcome = driver.ask(conv, case)
+                    replayer.finish()
+                    return outcome
 
-            replayed = run_cases(
-                selected,
-                run_one,
-                recorder,
-                cfg.limits,
-                out_dir=out_dir,
-                run_id=run_id,
-                meta=meta,
-                on_record=lambda record: typer.echo(_replay_line(record)),
-                annotate=annotate,
-            )
+                replayed = run_conversations(talks, run_turn, recorder, cfg.limits, **common)
+            else:
+
+                def run_one(case: EvalCase) -> AgentResult:
+                    start(case)
+                    result = agent.run(case.question)
+                    replayer.finish()
+                    return result
+
+                replayed = run_cases(selected, run_one, recorder, cfg.limits, **common)
     finally:
         http.close()
 
@@ -1088,6 +1250,7 @@ def eval_replay(
     _, agg = _score_and_report(
         cfg, out_dir, replayed, case_list, qrels, _budget(cfg, None, None, None)
     )
+    _echo_conversations(agg)
     typer.echo(metrics_line(agg))
     outcomes = agg["all"]["replay"]
     typer.echo("Replay: " + ", ".join(f"{v} {k}" for k, v in outcomes.items()))
@@ -1101,6 +1264,7 @@ def eval_compare(
     run_a: Path = typer.Argument(..., help="Run A (e.g. the fixed-search run)."),
     run_b: Path = typer.Argument(..., help="Run B, compared against A (e.g. the agentic run)."),
     cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
     qrels_file: Path = QRELS_OPTION,
     out: Path | None = typer.Option(None, "--out", help="Also write the comparison here (.md)."),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
@@ -1113,10 +1277,10 @@ def eval_compare(
     cfg = _load_or_exit(config)
     try:
         records = {run: read_records(run) for run in (run_a, run_b)}
-        case_list = load_cases(cases)
-    except (FileNotFoundError, EvalError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
     qrels = _qrels_or_exit(qrels_file, case_list)
     settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
     budget = _budget(cfg, None, None, None)

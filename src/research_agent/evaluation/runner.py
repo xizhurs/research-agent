@@ -19,8 +19,14 @@ from typing import Any, Protocol
 
 from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.config import Limits
-from research_agent.evaluation.cases import EvalCase
-from research_agent.evaluation.checks import answer_dict, check_record, check_result, stats_dict
+from research_agent.evaluation.cases import Conversation, EvalCase
+from research_agent.evaluation.checks import (
+    answer_dict,
+    check_record,
+    check_result,
+    check_turn,
+    stats_dict,
+)
 from research_agent.evaluation.recording import (
     EvalBudgetExceeded,
     RecordingLLMClient,
@@ -223,45 +229,113 @@ def run_cases(
     """
     records = []
     for case in cases:
-        reason = recorder.budget.case_refusal(limits.max_total_tokens)
-        recorder.start_case()
-        if reason:
-            record = build_record(case, run_id=run_id, meta=meta, status="skipped",
-                                  failures=[f"skipped: {reason}"], error=reason)
-        else:
-            started = clock()
-            try:
-                result = run(case)
-            except (LLMAuthError, AuthError):
-                raise
-            except EvalBudgetExceeded as exc:
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="aborted", log=recorder.log,
-                    failures=[f"aborted: {exc}"], wall_seconds=clock() - started, error=str(exc),
-                )
-            except ReplayDiverged as exc:
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="diverged", log=recorder.log,
-                    failures=[f"diverged at {exc}"], wall_seconds=clock() - started,
-                    error=str(exc),
-                )
-            except (LLMError, RetrievalError, InvalidQuestionError) as exc:
-                message = f"{type(exc).__name__}: {exc}"
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="failed", log=recorder.log,
-                    failures=[f"run failed: {message}"], wall_seconds=clock() - started,
-                    error=message,
-                )
-            else:
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="ok", log=recorder.log,
-                    result=result, wall_seconds=clock() - started,
-                )
-                record["failures"] = record_failures(case, record, limits)
-        record = annotate(case, record)
+        record = annotate(case, _run_one(case, run, recorder, limits, run_id, meta, clock))
         write_record(out_dir, record)
         records.append(record)
         on_record(record)
+    return records
+
+
+def _run_one(
+    case: EvalCase,
+    run: Callable[[EvalCase], AgentResult],
+    recorder: RecordingLLMClient,
+    limits: Limits,
+    run_id: str,
+    meta: dict[str, Any],
+    clock: Callable[[], float],
+    extra: Callable[[], dict[str, Any]] = dict,
+) -> dict[str, Any]:
+    """One case (or conversation turn) within the run budget, as a record. ``extra()`` is
+    merged into the record before the checks (a conversation turn's details)."""
+    reason = recorder.budget.case_refusal(limits.max_total_tokens)
+    recorder.start_case()
+    if reason:
+        record = build_record(case, run_id=run_id, meta=meta, status="skipped",
+                              failures=[f"skipped: {reason}"], error=reason)
+        return {**record, **extra()}
+    started = clock()
+    try:
+        result = run(case)
+    except (LLMAuthError, AuthError):
+        raise
+    except EvalBudgetExceeded as exc:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="aborted", log=recorder.log,
+            failures=[f"aborted: {exc}"], wall_seconds=clock() - started, error=str(exc),
+        )
+    except ReplayDiverged as exc:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="diverged", log=recorder.log,
+            failures=[f"diverged at {exc}"], wall_seconds=clock() - started, error=str(exc),
+        )
+    except (LLMError, RetrievalError, InvalidQuestionError) as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="failed", log=recorder.log,
+            failures=[f"run failed: {message}"], wall_seconds=clock() - started, error=message,
+        )
+    else:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="ok", log=recorder.log, result=result,
+            wall_seconds=clock() - started,
+        )
+        record.update(extra())
+        record["failures"] = record_failures(case, record, limits)
+        return record
+    return {**record, **extra()}
+
+
+def run_conversations(
+    conversations: list[Conversation],
+    run_turn: Callable[[Conversation, EvalCase], tuple[AgentResult, dict[str, Any]]],
+    recorder: RecordingLLMClient,
+    limits: Limits,
+    *,
+    out_dir: Path,
+    run_id: str,
+    meta: dict[str, Any],
+    on_record: Callable[[dict[str, Any]], None] = lambda record: None,
+    clock: Callable[[], float] = time.perf_counter,
+    annotate: Callable[[EvalCase, dict[str, Any]], dict[str, Any]] = lambda case, record: record,
+) -> list[dict[str, Any]]:
+    """Run each conversation's turns in order, one record per turn (``<id>#<n>``).
+
+    ``run_turn(conversation, turn)`` asks one turn in the conversation's session and returns the
+    result and the turn's details (relation, recalled IDs, context, task state), stored as the
+    record's ``conversation`` section. Once a turn does not complete (failed, aborted, skipped,
+    diverged) the conversation's later turns are skipped: they would not follow the same thread.
+    """
+    records = []
+    for conversation in conversations:
+        stopped: str | None = None
+        for case in conversation.turns:
+            number = case.turn.turn if case.turn else 0
+            section = {"id": conversation.id, "turn": number}
+            if stopped:
+                record = build_record(case, run_id=run_id, meta=meta, status="skipped",
+                                      failures=[f"skipped: {stopped}"], error=stopped)
+                record["conversation"] = section
+            else:
+                details: dict[str, Any] = {}
+
+                def run(turn: EvalCase, conv=conversation, details=details) -> AgentResult:
+                    result, info = run_turn(conv, turn)
+                    details.update(info)
+                    return result
+
+                record = _run_one(
+                    case, run, recorder, limits, run_id, meta, clock,
+                    extra=lambda section=section, details=details: {
+                        "conversation": {**section, **details}
+                    },
+                )  # fmt: skip
+                if record["status"] != "ok":
+                    stopped = f"turn {number} of {conversation.id} ended '{record['status']}'"
+            record = annotate(case, record)
+            write_record(out_dir, record)
+            records.append(record)
+            on_record(record)
     return records
 
 
@@ -288,7 +362,8 @@ def rescore(
 def record_failures(case: EvalCase, record: dict[str, Any], limits: Limits) -> list[str]:
     """The checks of a completed record, including the tool side of ``expect_numbers``."""
     tool_results = [call["result"] for call in record["tool_calls"]]
-    return check_record(case, record["answer"], record["stats"], limits, tool_results)
+    failures = check_record(case, record["answer"], record["stats"], limits, tool_results)
+    return failures + (check_turn(case.turn, record) if case.turn else [])
 
 
 # --- summary -----------------------------------------------------------------------------------

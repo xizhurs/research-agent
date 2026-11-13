@@ -328,8 +328,9 @@ def score_record(
         "failures": record["failures"],
         "efficiency": _efficiency(record, budget),
     }
-    if "replay" in record:
-        out["replay"] = record["replay"]
+    for section in ("replay", "conversation"):
+        if section in record:
+            out[section] = record[section]
     answer = record["answer"]
     if record["status"] != "ok" or answer is None:
         return out

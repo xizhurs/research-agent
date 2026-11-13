@@ -89,12 +89,31 @@ def _group(scores: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def conversations(scores: list[dict[str, Any]]) -> dict[str, Any]:
+    """Conversations whose every recorded turn passed (turns of a conversation are records
+    with a ``conversation`` section)."""
+    turns: dict[str, list[bool]] = {}
+    for s in scores:
+        if "conversation" in s:
+            turns.setdefault(s["conversation"]["id"], []).append(bool(s["passed"]))
+    return {
+        "total": len(turns),
+        "passed": sum(1 for passed in turns.values() if all(passed)),
+        "failed": sorted(c for c, passed in turns.items() if not all(passed)),
+    }
+
+
 def aggregate(scores: list[dict[str, Any]]) -> dict[str, Any]:
     def by(key: str) -> dict[str, Any]:
         names = sorted({s[key] or "none" for s in scores})
         return {n: _group([s for s in scores if (s[key] or "none") == n]) for n in names}
 
-    return {"all": _group(scores), "by_category": by("category"), "by_split": by("split")}
+    return {
+        "all": _group(scores),
+        "by_category": by("category"),
+        "by_split": by("split"),
+        "conversations": conversations(scores),
+    }
 
 
 def flags(score: dict[str, Any]) -> str | None:
@@ -162,6 +181,19 @@ def _case_section(s: dict[str, Any]) -> list[str]:
         f"{e['tool_calls']} tool call(s), {_fmt(e['wall_seconds'])} s",
     ]
     items = [f"- failure: {f}" for f in s["failures"]]
+    conv = s.get("conversation")
+    if conv and "relation" in conv:
+        state = conv.get("state") or {}
+        items.append(
+            f"- turn {conv['turn']} of {conv['id']}: relation {conv['relation']} "
+            f"({conv['relation_source']}), context {conv['context_tokens']} tokens from "
+            f"{conv['context_turns']} turn(s) ({conv['context_omitted']} part(s) left out), "
+            f"recalled {conv['recalled'] or 'nothing'}"
+        )
+        items.append(
+            f"- task state: places {state.get('places')}, metrics {state.get('metrics')}, "
+            f"period {state.get('period')}, pending {state.get('pending')}"
+        )
     replay = s.get("replay")
     if replay:
         items.append(f"- replay of run {replay['of']}: {replay['outcome']}")
@@ -199,6 +231,9 @@ def render_report(scores: list[dict[str, Any]], agg: dict[str, Any]) -> str:
     rows += [(f"category {k}", v) for k, v in agg["by_category"].items()]
     rows += [(f"split {k}", v) for k, v in agg["by_split"].items()]
     lines += _table(rows)
+    conv = agg.get("conversations") or {}
+    if conv.get("total"):
+        lines += ["", f"Conversations: {conv['passed']}/{conv['total']} with every turn passed"]
     replay = agg["all"]["replay"]
     if any(replay.values()):
         lines += ["", "Replay: " + ", ".join(f"{v} {k}" for k, v in replay.items())]

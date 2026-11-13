@@ -11,7 +11,7 @@ from research_agent.agent import AgentResult
 from research_agent.agent.budget import OVERSHOOT_PREFIX
 from research_agent.agent.tools import RAINFALL_TOOL_NAME, TEMPERATURE_TOOL_NAME, format_recalled
 from research_agent.config import Limits
-from research_agent.evaluation.cases import EvalCase, KeyPoint
+from research_agent.evaluation.cases import EvalCase, KeyPoint, TurnExpect
 from research_agent.evaluation.numbers import value_found
 from research_agent.tracing import answer_json
 
@@ -164,4 +164,42 @@ def check_record(
                 f"covered {covered} of {len(case.key_points)} key point(s) "
                 f"(case minimum {case.min_key_points})"
             )
+    return failures
+
+
+def check_turn(expect: TurnExpect, record: dict[str, Any]) -> list[str]:
+    """The conversation checks of one completed turn record: the model's relation label and
+    recalled IDs, the analyses it ran, and the task state the code built after the turn."""
+    info = record.get("conversation") or {}
+    failures = []
+    relation = info.get("relation")
+    if expect.expect_relation and relation not in expect.expect_relation:
+        failures.append(
+            f"relation {relation!r} ({info.get('relation_source')}) is not one of "
+            f"{list(expect.expect_relation)}"
+        )
+    recalled = info.get("recalled", [])
+    if expect.expect_recall is True and not recalled:
+        failures.append("expected stored evidence to be recalled; nothing was")
+    if expect.expect_recall is False and recalled:
+        failures.append(f"expected no recall; recalled {recalled}")
+    analyses = record["stats"]["rainfall_calls"]
+    if expect.max_new_analyses is not None and analyses > expect.max_new_analyses:
+        failures.append(
+            f"ran {analyses} new analysis(es) (turn limit {expect.max_new_analyses})"
+        )
+    state = info.get("state") or {}
+    places = state.get("places", [])
+    for want in expect.expect_places:
+        if not any(want in place.lower() for place in places):
+            failures.append(f"task state has no place matching {want!r}; places: {places}")
+    metrics = state.get("metrics", [])
+    for metric in expect.expect_state_metrics:
+        if metric not in metrics:
+            failures.append(f"task state lacks metric {metric!r}; metrics: {metrics}")
+    pending = state.get("pending")
+    if expect.expect_pending is True and pending is None:
+        failures.append("expected a pending clarification (ambiguous place); there is none")
+    if expect.expect_pending is False and pending is not None:
+        failures.append(f"expected no pending clarification; still pending for {pending!r}")
     return failures

@@ -167,6 +167,7 @@ uv run research-agent eval score evals/runs/<run-id>     # free: score stored re
 uv run research-agent eval replay evals/runs/<run-id>    # free: the recorded model replies through the current code
 uv run research-agent eval run --live --mode fixed       # baseline: one search with the question, then one answer
 uv run research-agent eval compare <run-a> <run-b>       # free: case-by-case differences between two runs
+uv run research-agent eval run --live --suite conversations  # multi-turn conversations
 ```
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
@@ -191,6 +192,8 @@ Cases can also state `expect_numbers` (verified values that must appear in a too
 `eval run --mode fixed` is a baseline for the literature cases:
 - one search with the question as asked (or a case's `fixed_query`), then one model call with tools off;
 - the same prompt and the same answer checks as the agent, so only the choice of searches differs.
+
+`eval run --suite conversations` asks the conversations in `evals/conversations.toml` turn by turn in one session each, as `chat` does. Each turn is checked like a case and also on the model's relation label (continue, update, compare, new_topic), whether it recalled earlier evidence instead of repeating an analysis, and the places, metrics and pending clarification in the task state the code kept. Score, replay and compare work on these runs too.
 
 `eval compare A B` pairs the cases of two runs and counts, for each measure, how often B did better, the same or worse than A. Measures: pass rate, unsupported numbers, low-support claims, key points, precision and recall, tokens, model calls, time and cost.
 
