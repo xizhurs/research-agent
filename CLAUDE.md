@@ -246,6 +246,11 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
 - Replies:
   - `output_config.format` asks for a JSON schema; `_parse` checks again that each number appears exactly once, with valid choices and a reason, cut to 300 characters.
   - An invalid, refused (`stop_reason` "refusal"; Haiku has no server-side fallback) or truncated (`max_tokens`) reply is counted and not cached, so it is retried next time.
+- Private records (added 2026-11-13, owner's request): a Langfuse import whose trace is not tagged `eval` (real `ask`, UI or chat use via `--all`, or another `--tag`; `is_private_record`) holds users' questions and answers.
+  - Its verdicts go to `[eval.judge] private_cache_dir` (`evals/judgements_private`, git-ignored, must differ from `cache_dir`), never the committed cache.
+  - `JudgeCaches.for_record` routes per record in judging (one `Judge` per cache, one shared budget, `merge_stats`), in the plan (`judge_plan_routed`) and in the offline lookup, so reports still show them.
+  - The calibration sheet uses eval records only.
+  - Tested end to end: a real-use claim never appears in the committed folder.
 - Cache: `evals/judgements/<key[:2]>/<key>.json`, committed. The key is a sha256 of rubric version, model, claim text and the sha256s of the cited texts. It uses texts, not IDs, because the same analysis can be R1 in one run and R7 in another, and a replay of a run hits the same entries. An entry holds the verdict, reason, claim, source IDs and text hashes (not the abstracts), the call's tokens and the date. One judge sample per claim: the verdict stays fixed until the text changes.
 - Adapter: `llm/anthropic_client.py` (`AnthropicJsonClient`), separate from the agent's `LLMClient`.
   - It uses the official `anthropic` SDK, 2.8.0 at the time of writing, in the optional extra `uv sync --extra judge` (CI does not install it, and the SDK is imported only when a client is built from credentials).
@@ -272,6 +277,7 @@ Langfuse import (Phase 6, added 2026-11-13; read-only, no model call):
   - `--all` also imports real `ask`, `ui.ask` and `chat.turn` traces.
   - Output: records, `summary.json`, `score.json` and `report.md` in `evals/runs/langfuse-<time>/`.
   - Only the newest trace per case is kept; older duplicates are listed as skipped.
+  - Judging an `--all` import keeps the real-use verdicts out of git: they go to the private judge cache (see LLM judge).
   - Exits 0 when the import worked; check results are reported, not the exit code.
 - API facts, checked against the owner's Langfuse Cloud project (EU host) on 2026-11-13, not only the docs:
   - Only `GET /api/public/v2/observations`, with Basic auth. The docs say the v1 trace and observation reads are served on Cloud only until **2026-11-16**, so nothing here uses them.

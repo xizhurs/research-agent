@@ -105,6 +105,7 @@ max_cost_usd = 5
 price_input_per_mtok = 1.5
 price_output_per_mtok = 2.5
 cache_dir = "evals/judgements"
+private_cache_dir = "evals/judgements_private"
 """
 
 
@@ -373,6 +374,8 @@ def test_base_config_eval_section():
         ('effort = "low"', 'effort = "extreme"', "judge.effort"),
         ("max_calls = 100", "max_calls = 0", "judge.max_calls"),
         ('cache_dir = "evals/judgements"', 'cache_dir = "evals/judgements"\nbogus = 1', "judge"),
+        ('private_cache_dir = "evals/judgements_private"', 'private_cache_dir = "evals/judgements"',
+         "judge.private_cache_dir"),
     ],
 )
 def test_invalid_eval_values_rejected(tmp_path, old, new, name):

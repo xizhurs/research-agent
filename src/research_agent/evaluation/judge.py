@@ -433,6 +433,26 @@ class JudgeCache:
         path.write_text(text + "\n", encoding="utf-8")
 
 
+def is_private_record(record: dict[str, Any]) -> bool:
+    """A Langfuse import of a trace not tagged ``eval`` (real ``ask``, UI or chat use, or an
+    import with another ``--tag``): its texts are users' questions and answers, so its
+    verdicts go to the git-ignored private cache, never the committed one."""
+    if record.get("mode") != "imported":
+        return False
+    return "eval" not in ((record.get("source") or {}).get("tags") or [])
+
+
+class JudgeCaches:
+    """The committed cache (eval records) and the git-ignored one (private records)."""
+
+    def __init__(self, public: JudgeCache, private: JudgeCache) -> None:
+        self.public = public
+        self.private = private
+
+    def for_record(self, record: dict[str, Any]) -> JudgeCache:
+        return self.private if is_private_record(record) else self.public
+
+
 @dataclass
 class JudgeStats:
     calls: int = 0
@@ -771,3 +791,31 @@ def agreement(checks: dict[str, str], cache: JudgeCache) -> dict[str, Any]:
             disagreements.append({"key": key, "owner": owner, "judge": entry["verdict"]})
     return {"compared": compared, "exact": exact, "binary": binary,
             "disagreements": disagreements}  # fmt: skip
+
+
+def judge_plan_routed(
+    records: list[dict[str, Any]],
+    cases: dict[str, EvalCase],
+    model: str,
+    caches: JudgeCaches,
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    """``judge_plan`` with each record checked against its own cache (public or private)."""
+    public = [r for r in records if not is_private_record(r)]
+    private = [r for r in records if is_private_record(r)]
+    plans = [judge_plan(public, cases, model, caches.public, max_output_tokens),
+             judge_plan(private, cases, model, caches.private, max_output_tokens)]  # fmt: skip
+    merged = {key: plans[0][key] + plans[1][key] for key in plans[0]}
+    merged["private_records"] = len(private)
+    return merged
+
+
+def merge_stats(*parts: JudgeStats) -> JudgeStats:
+    """One ``JudgeStats`` for several judges (public and private records)."""
+    out = JudgeStats()
+    for part in parts:
+        for name in ("calls", "judged", "interpretations", "cached", "key_point_sets",
+                     "answers", "unparsed", "refused", "truncated"):  # fmt: skip
+            setattr(out, name, getattr(out, name) + getattr(part, name))
+        out.errors += part.errors
+    return out

@@ -276,14 +276,19 @@ class JudgeConfig:
     price_input_per_mtok: float
     price_output_per_mtok: float
     cache_dir: Path  # judgements, one JSON file per judged claim (committed)
+    # Judgements of Langfuse imports not tagged "eval" (real users' questions): git-ignored.
+    private_cache_dir: Path
 
     def __post_init__(self) -> None:
         if not isinstance(self.model, str):
             raise ConfigError(f"eval.judge.model must be a string, got {self.model!r}")
         if self.effort not in JUDGE_EFFORTS:
             raise ConfigError(f"eval.judge.effort must be one of {list(JUDGE_EFFORTS)}")
-        if not isinstance(self.cache_dir, Path):
-            object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        for name in ("cache_dir", "private_cache_dir"):
+            if not isinstance(getattr(self, name), Path):
+                object.__setattr__(self, name, Path(getattr(self, name)))
+        if self.private_cache_dir == self.cache_dir:
+            raise ConfigError("eval.judge.private_cache_dir must differ from cache_dir")
         for name in ("max_retries",):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

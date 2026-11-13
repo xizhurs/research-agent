@@ -24,6 +24,7 @@ from research_agent.evaluation import (
     claim_items,
     compare_scores,
     flags,
+    is_private_record,
     judge_plan,
     judge_section,
     load_calibration,
@@ -643,3 +644,67 @@ def test_follow_up_turns_are_rated_with_their_earlier_questions(tmp_path):
 def test_answer_rubric_accepts_a_needed_clarification():
     assert "asks the user to clarify a genuinely ambiguous question" in ANSWER_SYSTEM
     assert "is direct and complete" in ANSWER_SYSTEM
+
+
+# --- private records (Langfuse imports of real use) ----------------------------------------------
+
+
+def imported(case_id, tags, claim_text):
+    record = make_record(case_id, claims=[
+        {"text": claim_text, "kind": "evidence", "sources": ["R1"]}])  # fmt: skip
+    return {**record, "mode": "imported", "source": {"tags": tags}}
+
+
+def test_which_records_are_private():
+    assert not is_private_record(make_record())  # an eval run
+    assert not is_private_record(imported("x", ["eval", "crop"], "c"))  # an imported eval trace
+    assert is_private_record(imported("lf-1", [], "c"))  # a real ask / UI / chat trace
+    assert is_private_record(imported("lf-2", ["prod"], "c"))  # imported with another --tag
+
+
+def test_private_verdicts_never_reach_the_committed_cache(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    public, private = tmp_path / "judgements", tmp_path / "judgements_private"
+    config = tmp_path / "base.toml"
+    config.write_text(BASE.read_text(encoding="utf-8").replace(
+        'private_cache_dir = "evals/judgements_private"',
+        f'private_cache_dir = "{private.as_posix()}"').replace(
+        'cache_dir = "evals/judgements"', f'cache_dir = "{public.as_posix()}"'), encoding="utf-8")
+    stats = {"iterations": 1, "search_calls": 0, "rainfall_calls": 0, "total_tokens": 0,
+             "tool_trace": [[]]}  # fmt: skip
+    run = tmp_path / "run"
+    run.mkdir()
+    for record in (imported("crop", ["eval", "crop"], "An eval claim."),
+                   imported("lf-user", [], "A real user's claim.")):  # fmt: skip
+        (run / f"{record['case_id']}.json").write_text(json.dumps({**record, "stats": stats}),
+                                                     encoding="utf-8")  # fmt: skip
+    env = tmp_path / ".env"
+    env.write_text("CLAUDE_API_KEY=sk-ant-test-0123456789\n", encoding="utf-8")
+    cases = tmp_path / "cases.toml"
+    cases.write_text('[[case]]\nid = "crop"\nquestion = "Q?"\n', encoding="utf-8")
+    stub = StubJson(reply("supported"), reply("unsupported"))
+    monkeypatch.setattr("research_agent.cli._judge_client", lambda cfg, model, creds: stub)
+    args = ["eval", "judge", str(run), "--live", "--yes", "--sample", "5", "--env-file", str(env),
+            "--cases", str(cases), "--conversations", str(tmp_path / "none.toml"),
+            "--config", str(config)]  # fmt: skip
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "1 record(s) are not eval traces" in result.output
+
+    def texts(folder):
+        return " ".join(f.read_text(encoding="utf-8") for f in folder.rglob("*.json"))
+
+    assert "An eval claim." in texts(public) and "real user" not in texts(public)
+    assert "A real user's claim." in texts(private) and "An eval claim." not in texts(private)
+    report = (run / "report.md").read_text(encoding="utf-8")
+    assert "| crop | 1 | 1 | 1 | 0 | 0 |" in report and "| lf-user | 1 | 1 | 0 | 0 | 1 |" in report
+    assert "real user" not in (run / "calibration.md").read_text(encoding="utf-8")
+
+
+def test_private_cache_is_git_ignored_and_separate():
+    root = BASE.parents[1]
+    assert "evals/judgements_private/" in (root / ".gitignore").read_text(encoding="utf-8")
+    from research_agent.config import load_config
+
+    judge = load_config(BASE).eval.judge
+    assert judge.private_cache_dir == Path("evals/judgements_private") != judge.cache_dir

@@ -16,3 +16,5 @@ secrets/
 # Evaluation run records and the tool cache (local; promote a run to keep it)
 evals/runs/
 evals/tool_cache/
+# Judge verdicts on real users' questions (Langfuse imports not tagged eval): never committed.
+evals/judgements_private/

@@ -43,6 +43,7 @@ from research_agent.evaluation import (
     FixedSearchLLMClient,
     Judge,
     JudgeCache,
+    JudgeCaches,
     LangfuseImportError,
     LangfuseReader,
     Qrels,
@@ -58,12 +59,14 @@ from research_agent.evaluation import (
     fetch_traces,
     fixed_query,
     flags,
-    judge_plan,
+    is_private_record,
+    judge_plan_routed,
     judge_section,
     load_calibration,
     load_cases,
     load_conversations,
     load_qrels,
+    merge_stats,
     metrics_line,
     read_records,
     record_failures,
@@ -754,8 +757,9 @@ def _judge_lookup(cfg: Config, env_file: Path = DEFAULT_ENV_FILE):
     model = _judge_model(cfg, env_file)
     if not model:
         return None
-    cache = JudgeCache(cfg.eval.judge.cache_dir)
-    return lambda record, case: judge_section(record, case, model, cache)
+    caches = JudgeCaches(JudgeCache(cfg.eval.judge.cache_dir),
+                         JudgeCache(cfg.eval.judge.private_cache_dir))  # fmt: skip
+    return lambda record, case: judge_section(record, case, model, caches.for_record(record))
 
 
 def _score_and_report(
@@ -1427,7 +1431,9 @@ def eval_judge(
     if not model:
         typer.echo("error: no judge model: set [eval.judge] model or CLAUDE_MODEL", err=True)
         raise typer.Exit(code=1)
-    cache = JudgeCache(jc.cache_dir)
+    # Eval records' verdicts go to the committed cache, private records' (Langfuse imports of
+    # real use) to the git-ignored one.
+    caches = JudgeCaches(JudgeCache(jc.cache_dir), JudgeCache(jc.private_cache_dir))
 
     def refresh_report() -> None:
         """report.md and score.json of every record in RUN_DIR, with the cached verdicts."""
@@ -1436,7 +1442,7 @@ def eval_judge(
         _score_and_report(cfg, run_dir, rescored, case_list, qrels, budget, env_file)
         typer.echo(f"Report and score.json updated: {run_dir / 'report.md'}")
 
-    plan = judge_plan(records, cases_by_id, model, cache, jc.max_output_tokens)
+    plan = judge_plan_routed(records, cases_by_id, model, caches, jc.max_output_tokens)
     typer.echo(
         f"Judge {model}: {plan['claims']} evidence claim(s) in {len(records)} record(s); "
         f"{plan['cached']} cached, {plan['pending']} to judge"
@@ -1459,14 +1465,15 @@ def eval_judge(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     if checks:
-        agree = agreement(checks, cache)
+        agree = agreement(checks, caches.public)
         if agree["compared"]:
             typer.echo(
                 f"Calibration: you and the judge agree on {agree['exact']}/{agree['compared']} "
                 f"verdicts exactly, {agree['binary']}/{agree['compared']} on supported vs not."
             )
     if sample:
-        picked = calibration_sample(records, model, cache, sample)
+        public = [r for r in records if not is_private_record(r)]  # never users' answers
+        picked = calibration_sample(public, model, caches.public, sample)
         path = run_dir / "calibration.md"
         path.write_text(render_calibration(picked, model), encoding="utf-8")
         typer.echo(f"Calibration sample of {len(picked)} judged claim(s): {path}")
@@ -1507,9 +1514,12 @@ def eval_judge(
     except LLMError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    judge = Judge(client, model, cache, budget, jc.max_output_tokens)
+    judges = {private: Judge(client, model, caches.private if private else caches.public,
+                             budget, jc.max_output_tokens)
+              for private in (False, True)}  # one budget for both  # fmt: skip
     stopped = None
     for record in records:
+        judge = judges[is_private_record(record)]
         try:
             judge.judge_record(record, cases_by_id.get(record["case_id"]))
         except EvalBudgetExceeded as exc:
@@ -1520,7 +1530,7 @@ def eval_judge(
             raise typer.Exit(code=1) from exc
         except LLMError as exc:  # one record's call failed; the rest can still be judged
             judge.stats.errors.append(f"{record['case_id']}: {exc}")
-    st = judge.stats
+    st = merge_stats(judges[False].stats, judges[True].stats)
     cost = f", ~${budget.cost():.4f}" if budget.priced else ""
     typer.echo(
         f"Judged {st.judged} claim(s) ({st.cached} were cached) in {st.calls} call(s): "
@@ -1536,7 +1546,11 @@ def eval_judge(
         typer.echo(f"warning: {error}")
     if stopped:
         typer.echo(f"Stopped by the judge budget: {stopped}")
-    sections = [judge_section(r, cases_by_id.get(r["case_id"]), model, cache) for r in records]
+    sections = [judge_section(r, cases_by_id.get(r["case_id"]), model, caches.for_record(r))
+                for r in records]  # fmt: skip
+    if plan["private_records"]:
+        typer.echo(f"{plan['private_records']} record(s) are not eval traces: their verdicts are "
+                   f"in {jc.private_cache_dir} (git-ignored), not {jc.cache_dir}.")  # fmt: skip
     sections = [x for x in sections if x]
     counts = {v: sum(x[v] for x in sections) for v in ("supported", "partial", "unsupported")}
     interp = {v: sum(x["interpretation"][v] for x in sections)

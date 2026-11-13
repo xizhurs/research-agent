@@ -130,3 +130,6 @@ max_cost_usd = 0
 price_input_per_mtok = 0.10
 price_output_per_mtok = 0.50
 cache_dir = "evals/judgements"
+# Verdicts on Langfuse imports not tagged "eval" (real users' questions and answers) go
+# here instead; the folder is git-ignored so they are never committed.
+private_cache_dir = "evals/judgements_private"
