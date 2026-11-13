@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1803,
+  "items": 2,
+  "output_tokens": 168
+ },
+ "claim": "For Rotterdam, ERA5 annual precipitation ranged from 626.9 mm in 2025 to 1078.3 mm in 2023 over 2016–2025. Its 1991–2020 baseline mean was 772.3 mm per year.",
+ "judged_on": "2026-11-13",
+ "key": "769ee8e56e20f51468d1d0ea9caeaef9206761318bd5df081fc1f80c1708b618",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists 2025 at 626.9 mm as driest, 2023 at 1078.3 mm as wettest over 2016-2025, and baseline mean 772.3 mm.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R3",
+   "sha256": "6cb75a6a1d3e9707dfaed60caee00b097ac5f52b2abb656a19a5f84c7c310aca"
+  }
+ ],
+ "verdict": "supported"
+}

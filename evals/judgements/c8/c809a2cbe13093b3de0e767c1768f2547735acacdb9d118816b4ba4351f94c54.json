@@ -1,0 +1,25 @@
+{
+ "call": {
+  "input_tokens": 2970,
+  "items": 3,
+  "output_tokens": 897
+ },
+ "claim": "The largest difference between the cities’ annual totals in the period was in 2021: Rotterdam had 908.7 mm and Amsterdam 882.2 mm. In 2024, Amsterdam had 1042.6 mm and Rotterdam 1059.3 mm.",
+ "judged_on": "2026-11-13",
+ "key": "c809a2cbe13093b3de0e767c1768f2547735acacdb9d118816b4ba4351f94c54",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Largest annual difference is 2017 (819.2 vs 777.5, 41.7 mm), not 2021 (26.5 mm). The 2021 and 2024 figures are correct but the claim is contradicted.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "189470b2a653787530f68ddfc2a1c6d77b3b9da4397c282a621749b956f9ec09"
+  },
+  {
+   "id": "R3",
+   "sha256": "6cb75a6a1d3e9707dfaed60caee00b097ac5f52b2abb656a19a5f84c7c310aca"
+  }
+ ],
+ "verdict": "unsupported"
+}

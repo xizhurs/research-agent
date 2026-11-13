@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1693,
+  "items": 1,
+  "output_tokens": 113
+ },
+ "claim": "On 25 July 2019, the ERA5 grid-cell estimate for Paris, France, reached a daily maximum of 41.4 °C—the hottest day in the 1950–2025 record (rank 1 of 27,759 days) and the highest annual maximum among the 76 years assessed. It was 6.6 °C above the 1991–2020 mean annual maximum (TXx).",
+ "judged_on": "2026-11-13",
+ "key": "d3513f66eb73b183f249d703cde65d7c520315500836f207412c0eb222b3a34f",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source confirms 41.4 °C on 2019-07-25, rank 1 of 27,759 days, would rank 1 of 76 annual TXx values, and +6.6 °C against baseline mean TXx. Claim is consistent with all these figures.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "f442d5d0777a82ce7c8e38d43f5b56e065dceecf9891f7021955dd7bd8dec8ee"
+  }
+ ],
+ "verdict": "supported"
+}

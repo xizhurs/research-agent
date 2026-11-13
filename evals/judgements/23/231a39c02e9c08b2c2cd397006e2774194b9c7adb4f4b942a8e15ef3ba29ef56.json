@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2647,
+  "items": 3,
+  "output_tokens": 304
+ },
+ "claim": "Transformer-based approaches are also used: a Spectral Temporal Network (STNet) with self-attention was proposed alongside self-supervised pretraining for crop mapping from Sentinel-2 time series.",
+ "judged_on": "2026-11-13",
+ "key": "231a39c02e9c08b2c2cd397006e2774194b9c7adb4f4b942a8e15ef3ba29ef56",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S4 proposes a Transformer-based STNet using self-attention and self-supervised pretraining (SITS-MoCo) for Sentinel-2 crop mapping; matches claim.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W4390607664",
+   "sha256": "595ec08363a739b9b870a6b972ff8dceac3ff082a9c4bddc572f03f2a0b7f495"
+  }
+ ],
+ "verdict": "supported"
+}

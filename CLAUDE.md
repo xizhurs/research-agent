@@ -196,7 +196,7 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
   - `--calibration evals/judge_calibration.toml` reports agreement.
   - It exits 1 if the budget stopped it or a call failed.
 - Verdicts are reported only, never a case failure. `eval score`, `run`, `replay` and `compare` read the cache offline (`_judge_lookup`) and never call the model. `report.md` has a "Judge" section (added 2026-11-13, owner's request) before the cases. It shows a totals table by run, category and split, and a per-case table: claims, judged, supported, partial, unsupported, not judged, supported share and score; then interpretation judged, within, stretch, overreach, not judged and interp. score; and key points (covered, partial, contradicted). Each case's section also lists its partial and unsupported claims with reasons. **Score** = the mean over judged claims of supported 1, partial 0.5, unsupported 0 (`judge.VERDICT_SCORES`), the owner's convention, not the judge's output; it is "-" when nothing is judged. Compare gains `judge_unsupported` and `judge_overreach` (lower is better), and `judge_supported_share`, `judge_score` and `judge_interpretation_score` (higher is better), counted only for records whose claims (or interpretations) are all judged. Flags add overreaching or stretching interpretations. On the live conversation run the score was 0.912 over 17 claims, lowest for `conv-amsterdam-rotterdam#3` (0.667, the wrong "largest difference").
-- Rubric (`judge.py`, `RUBRIC_VERSION` 1):
+- Rubric (`judge.py`, `RUBRIC_VERSION` 2 since 2026-11-13: both rubrics ask for the reason before the verdict; version 1 asked claim support verdict-first):
   - Each evidence claim is rated supported, partial or unsupported, only against the texts it cites (R analysis text, or W title and abstract), with a short reason.
   - Up to 10 claims per call (`MAX_CLAIMS_PER_CALL`), with each cited text sent once (S1, S2...).
   - Claims and sources are HTML-escaped inside `<source>`/`<claim>` elements, and the instructions say they are data.
@@ -211,7 +211,11 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
       - Reason-first gave "within" 3 times out of 3, with matching reasons; one reason still had a small factual slip.
       - That is a small sample. It shows verdict variance across tries, not settled judge accuracy.
       - A first attempt at this change did not apply: an inline shell edit failed silently. The test pinning the field order caught it.
-    - The claim-support schema is still verdict-first. Switching it would need a rubric version bump and re-judging the cached claims (about $0.003 for the current 22); not done, the owner's call.
+    - Claim support was switched to reason-first too (owner's decision, 2026-11-13), with `RUBRIC_VERSION` bumped to 2 (it is in every cache key). The 24 version-1 entries were removed (git history keeps them), and both live runs were re-judged: 24 claims, 12 calls, about $0.004, no invalid reply.
+      - 21 of 24 verdicts were unchanged, including the wrong "largest difference was 2021" claim (still unsupported, with the correct 2017 / 41.7 mm).
+      - 3 changed, each now with a reason that matches its verdict: Amsterdam "notably wet" partial → supported (the v1 reason had itself concluded "accurate"); "other reported approaches" partial → supported; crop-type "methods used include 1D CNNs, LSTM…" supported → partial ("'methods used' is broader than this single study", the rubric's "broader than its sources").
+      - One judgement per claim per version, so the effect of the ordering cannot be separated from run-to-run variance.
+      - Totals on the two live runs: 20 supported, 1 partial, 1 unsupported; 2 interpretations, both within.
     - Live 2026-11-13: the two live runs hold only 2 interpretation claims, both within. The agent labels few claims as interpretation.
 - Replies:
   - `output_config.format` asks for a JSON schema; `_parse` checks again that each number appears exactly once, with valid choices and a reason, cut to 300 characters.

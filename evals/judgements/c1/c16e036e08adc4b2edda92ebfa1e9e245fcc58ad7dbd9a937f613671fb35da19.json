@@ -1,0 +1,25 @@
+{
+ "call": {
+  "input_tokens": 2783,
+  "items": 1,
+  "output_tokens": 140
+ },
+ "claim": "These Rotterdam totals broadly mirror the earlier Amsterdam pattern: both had their highest totals in 2023 and 2024 and lowest in 2025, though the exact amounts differ.",
+ "judged_on": "2026-11-13",
+ "key": "c16e036e08adc4b2edda92ebfa1e9e245fcc58ad7dbd9a937f613671fb35da19",
+ "kind": "interpretation",
+ "model": "claude-haiku-5-5",
+ "reason": "Both sources show 2023 and 2024 as wettest and 2025 as driest-or-near-driest for Amsterdam and Rotterdam; but for Amsterdam 2018 (650.7) is slightly above 2025 (649.7)? Actually 2025 is driest in both. Claim matches the data with amounts differing as stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "189470b2a653787530f68ddfc2a1c6d77b3b9da4397c282a621749b956f9ec09"
+  },
+  {
+   "id": "R3",
+   "sha256": "6cb75a6a1d3e9707dfaed60caee00b097ac5f52b2abb656a19a5f84c7c310aca"
+  }
+ ],
+ "verdict": "within"
+}

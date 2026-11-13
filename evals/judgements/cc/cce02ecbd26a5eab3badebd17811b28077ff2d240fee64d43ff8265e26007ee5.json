@@ -1,0 +1,25 @@
+{
+ "call": {
+  "input_tokens": 2970,
+  "items": 3,
+  "output_tokens": 897
+ },
+ "claim": "Amsterdam’s 1991–2020 baseline mean was 777.4 mm per year, compared with Rotterdam’s 772.3 mm. The 2016–2025 totals ranged from 649.7 mm (2025) to 1100.7 mm (2023) in Amsterdam, and from 626.9 mm (2025) to 1078.3 mm (2023) in Rotterdam.",
+ "judged_on": "2026-11-13",
+ "key": "cce02ecbd26a5eab3badebd17811b28077ff2d240fee64d43ff8265e26007ee5",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Baseline means 777.4 and 772.3 match, and the min/max totals for both cities match the listed values.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "189470b2a653787530f68ddfc2a1c6d77b3b9da4397c282a621749b956f9ec09"
+  },
+  {
+   "id": "R3",
+   "sha256": "6cb75a6a1d3e9707dfaed60caee00b097ac5f52b2abb656a19a5f84c7c310aca"
+  }
+ ],
+ "verdict": "supported"
+}

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1762,
+  "items": 2,
+  "output_tokens": 206
+ },
+ "claim": "Yes. Madrid’s ERA5 annual mean temperature in 2023 was 15.7 °C, 0.7 °C above the 1991–2020 mean of 15.0 °C and above the baseline 10th–90th percentile band (14.1–15.7 °C).",
+ "judged_on": "2026-11-13",
+ "key": "598b5e9f7aeb149d56642bd0e0bbde001593f3eb2437bef6793c8f150ae76b9e",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source gives 2023 mean 15.7 °C, +0.7 vs baseline mean 15.0 °C, baseline band 14.1–15.7 °C, and above band. The claim matches all figures; the band edge 15.7 equals 2023 but 'above' the band is stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "5fc22b7bc464921b94f11dc8fae2e70d2d1307ff88e849119a243604effa721f"
+  }
+ ],
+ "verdict": "supported"
+}

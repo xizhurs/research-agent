@@ -199,6 +199,8 @@ def test_claims_are_judged_once_then_served_from_the_cache(tmp_path):
     judge.judge_record(make_record(), None)
     assert (judge.stats.calls, judge.stats.judged, len(stub.calls)) == (1, 2, 1)
     assert stub.calls[0]["schema"] == SUPPORT_SCHEMA
+    item = SUPPORT_SCHEMA["properties"]["claims"]["items"]
+    assert list(item["properties"]) == ["n", "reason", "verdict"]  # rubric 2: reason first
     again, stub2 = judge_with(tmp_path)  # no reply scripted: a call would fail the test
     again.judge_record(make_record(), None)
     assert (again.stats.calls, again.stats.cached, stub2.calls) == (0, 2, [])

@@ -1,0 +1,25 @@
+{
+ "call": {
+  "input_tokens": 2647,
+  "items": 3,
+  "output_tokens": 304
+ },
+ "claim": "Other reported approaches include multilayer perceptrons (MLPs), CNN variants, and attention-based deep learning; one attention-based study compares input-, layer-, and decision-level fusion of optical and radar time series.",
+ "judged_on": "2026-11-13",
+ "key": "f26dfb493e0a6a05fc0b41d7381a208927a0e3479919f457731dc5f32752871a",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S2 covers MLP and CNN variants on Sentinel-2 time series; S3 covers attention-based fusion of Sentinel-1 and Sentinel-2 at input, layer, and decision levels. But 'attention-based deep learning' is attributed to a study comparing fusion levels; S3 states that, so it is supported.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W3122949800",
+   "sha256": "0aac4312bd5a566cc6a3e55d8930c3a94a68720e881e24cf3b216a6fec7465af"
+  },
+  {
+   "id": "W3217764757",
+   "sha256": "64b25a8b952bbcbcdbaf18e1f01d64ea21766b995fec5c77061b08eb76b475b6"
+  }
+ ],
+ "verdict": "supported"
+}
