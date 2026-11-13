@@ -195,6 +195,41 @@ def test_compare_recalls_r1_without_spending_analysis_budget(limits, conv, make_
     assert recall_event.tool == RECALL and recall_event.recalled_ids == ("R1",)
 
 
+@pytest.mark.parametrize("third_relation, places_after", [
+    ("compare", ["Amsterdam", "Rotterdam"]),  # recalled analyses count for a comparison
+    ("update", ["Rotterdam"]),  # an update that only recalls changes nothing
+])  # fmt: skip
+def test_a_compare_turn_that_only_recalls_restores_the_recalled_places(
+    limits, conv, make_analysis, places, third_relation, places_after
+):
+    """Seen live on 2026-11-13: "What about Rotterdam?" labelled update replaced Amsterdam, then
+    "Compare the two" recalled R1 and R2 but the state kept only Rotterdam."""
+    rainfall = FakeRainfall(
+        make_analysis(location=places["amsterdam"]), make_analysis(location=places["rotterdam"])
+    )
+    llm = StubLLMClient(
+        [
+            tool_call_response(("a", RAIN, {"city": "Amsterdam", "scale": "yearly"})),
+            reply([evidence("Amsterdam.", "R1")]),
+            tool_call_response(("b", RAIN, {"city": "Rotterdam", "scale": "yearly"})),
+            reply([evidence("Rotterdam.", "R2")], relation="update"),
+            tool_call_response(("r", RECALL, {"ids": ["R1", "R2"]})),
+            reply([evidence("Both.", "R1", "R2")], relation=third_relation),
+        ]
+    )
+    service, store = make_service(llm, limits, conv, rainfall=rainfall)
+    first = service.ask(None, "How was the rainfall in the last 10 years in Amsterdam?")
+    second = service.ask(first.session_id, "What about Rotterdam?")
+    assert [p.label.split(",")[0] for p in store.get(first.session_id).state.places] == [
+        "Rotterdam"
+    ]
+    third = service.ask(second.session_id, "Compare the two.")
+    state = store.get(third.session_id).state
+    assert sorted(p.label.split(",")[0] for p in state.places) == places_after
+    assert state.metrics == ("yearly",)
+    assert third.result.stats.rainfall_calls == 0
+
+
 def test_citing_an_earlier_id_without_recall_is_rejected(limits, conv, make_analysis, places):
     rainfall = FakeRainfall(make_analysis(location=places["amsterdam"]))
     llm = StubLLMClient(

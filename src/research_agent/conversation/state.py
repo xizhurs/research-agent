@@ -4,7 +4,9 @@ The task state is built from the turn's tool events (code), and the model's ``re
 only decides how it is merged with the earlier state:
 
 - ``new_topic``: the old topic is archived as one line and a new state starts from this turn.
-- ``compare``: places, metrics, sources and searches are added to the earlier ones.
+- ``compare``: places, metrics, sources and searches are added to the earlier ones, including
+  those of stored analyses the turn re-showed with ``recall_evidence`` (comparing two recalled
+  places keeps both in the state even if an earlier ``update`` had replaced one).
 - ``update`` / ``continue``: each setting this turn used replaces the earlier one; the rest stay.
 
 A missing or invalid label counts as ``update`` (it only changes what the turn touched).
@@ -69,6 +71,15 @@ def _period(arguments) -> tuple[int | None, int | None] | None:
     return (start, end) if start is not None or end is not None else None
 
 
+def _metric(tool: str, args) -> str:
+    """The task-state metric of a rainfall or temperature call."""
+    scale = str(args.get("scale") or "daily")
+    if tool == RAINFALL_TOOL_NAME:
+        return str(args.get("metric") or "wet") if scale == "daily" else scale
+    kind = str(args.get("metric") or "hot") if scale == "daily" else scale
+    return f"temperature {kind}"  # labelled, so it is not mistaken for yearly rainfall
+
+
 def turn_settings(events: Iterable[ToolEvent]) -> dict:
     """The settings a turn's successful tool calls used, as ``TaskState`` field values."""
     places: list[PlaceRef] = []
@@ -85,12 +96,7 @@ def turn_settings(events: Iterable[ToolEvent]) -> dict:
             queries.append(str(args.get("query", "")))
         elif event.tool in PLACE_TOOLS and event.location is not None:
             places.append(place_ref(event.location))
-            scale = str(args.get("scale") or "daily")
-            if event.tool == RAINFALL_TOOL_NAME:
-                metrics.append(str(args.get("metric") or "wet") if scale == "daily" else scale)
-            else:  # labelled, so "yearly" temperature is not mistaken for yearly rainfall
-                kind = str(args.get("metric") or "hot") if scale == "daily" else scale
-                metrics.append(f"temperature {kind}")
+            metrics.append(_metric(event.tool, args))
             if _period(args):
                 settings["period"] = _period(args)
             for key in ("event_date", "event_year", "event_month"):
@@ -105,6 +111,32 @@ def turn_settings(events: Iterable[ToolEvent]) -> dict:
         if values:
             settings[name] = tuple(dict.fromkeys(values))
     return settings
+
+
+def recalled_settings(events: Iterable[ToolEvent], evidence: dict[str, EvidenceItem]) -> dict:
+    """Places, metrics and sources of stored analyses a turn re-showed with ``recall_evidence``,
+    from the stored item and the arguments of the call that produced it (code, not model text).
+    Works add nothing: their searches are already in the state."""
+    places: list[PlaceRef] = []
+    metrics: list[str] = []
+    sources: list[str] = []
+    for event in events:
+        if event.status != "ok":
+            continue
+        for item_id in event.recalled_ids:
+            item = evidence.get(item_id)
+            if item is None or item.ref.tool not in (*PLACE_TOOLS, ENSO_TOOL_NAME):
+                continue
+            sources.append(SOURCES[item.ref.tool])
+            if item.ref.tool == ENSO_TOOL_NAME:
+                metrics.append("enso")
+                continue
+            location = getattr(item.record, "location", None)
+            if location is not None:
+                places.append(place_ref(location))
+            metrics.append(_metric(item.ref.tool, item.ref.arguments))
+    named = (("places", places), ("metrics", metrics), ("sources", sources))
+    return {name: tuple(dict.fromkeys(values)) for name, values in named if values}
 
 
 def _pending(events: Iterable[ToolEvent], previous: Clarification | None) -> Clarification | None:
@@ -196,6 +228,10 @@ def apply_turn(
     relation = label or ("new_topic" if first else "update")
 
     settings = turn_settings(result.events)
+    if relation == "compare" and not first:  # what is compared includes the recalled analyses
+        recalled = recalled_settings(result.events, session.evidence)
+        for name, values in recalled.items():
+            settings[name] = _union(values, settings.get(name, ()))
     if first:  # the first turn fills topic 1; it does not open topic 2
         state, pending = merge_state(session.state, settings, "update"), None
     elif relation == "new_topic":
