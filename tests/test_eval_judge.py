@@ -34,6 +34,7 @@ from research_agent.evaluation.judge import (
     MAX_CLAIMS_PER_CALL,
     SUPPORT_SCHEMA,
     claim_key,
+    interpretation_items,
     parse_support,
     support_prompt,
 )
@@ -51,7 +52,6 @@ def make_record(case_id="c", claims=None, status="ok"):
     claims = claims if claims is not None else [
         {"text": "It rained 79.0 mm on 20 July 2021.", "kind": "evidence", "sources": ["R1"]},
         {"text": "CNNs map crops.", "kind": "evidence", "sources": ["W1"]},
-        {"text": "My view.", "kind": "interpretation", "sources": []},
     ]  # fmt: skip
     answer = {
         "structured": True, "claims": claims, "limitations": ["x"], "references": ["W1"],
@@ -313,11 +313,12 @@ def test_report_has_judge_tables_with_the_score(tmp_path, limits):
     assert "score = mean over judged claims of supported 1, partial 0.5, unsupported 0" in text
     assert ("| group | claims | judged | supported | partial | unsupported | not judged | "
             "supported share | score |") in text
-    assert "| all | 3 | 2 | 1 | 1 | 0 | 1 | 0.5 | 0.75 |" in text
-    assert "| category literature | 1 | 0 | 0 | 0 | 0 | 1 | - | - |" in text
-    assert "| split dev | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 |" in text
-    assert "| a | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 | - |" in text
-    assert "| b | 1 | 0 | 0 | 0 | 0 | 1 | - | - | 1/2 covered, 1 partial, 1 contradicted |" in text
+    assert "| all | 3 | 2 | 1 | 1 | 0 | 1 | 0.5 | 0.75 | 0 | 0 | 0 | 0 | 0 | - |" in text
+    assert "| category literature | 1 | 0 | 0 | 0 | 0 | 1 | - | - | 0 | 0 | 0 | 0 | 0 | - |" in text
+    assert "| split dev | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 | 0 | 0 | 0 | 0 | 0 | - |" in text
+    assert "| a | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 | 0 | 0 | 0 | 0 | 0 | - | - |" in text
+    assert ("| b | 1 | 0 | 0 | 0 | 0 | 1 | - | - | 0 | 0 | 0 | 0 | 0 | - | "
+            "1/2 covered, 1 partial, 1 contradicted |") in text
     better = {**scores[0], "judge": {**scores[0]["judge"], "score": 1.0}}
     assert compare_scores([scores[0]], [better])["measures"]["judge_score"]["improved"] == 1
 
@@ -328,6 +329,73 @@ def test_no_judge_section_without_verdicts(limits):
                                          "tool_trace": [[]]}}  # fmt: skip
     scores = score_records([record], [], {}, limits, ScoreSettings(0.8, 0.3))
     assert "## Judge" not in render_report(scores, aggregate(scores))
+
+
+INTERPRETATIONS = [
+    {"text": "It rained 79.0 mm on 20 July 2021.", "kind": "evidence", "sources": ["R1"]},
+    {"text": "The storm was probably record-breaking.", "kind": "interpretation",
+     "sources": ["R1"]},
+    {"text": "Deep learning will replace all field surveys.", "kind": "interpretation",
+     "sources": []},
+]  # fmt: skip
+
+
+def test_interpretations_rest_on_their_cites_or_all_the_evidence():
+    first, second = interpretation_items(make_record(claims=INTERPRETATIONS), MODEL)
+    assert [r for r, _ in first.sources] == ["R1"]  # its own cite
+    assert sorted(r for r, _ in second.sources) == ["R1", "W1"]  # cites nothing: all evidence
+    nothing = make_record(claims=[{"text": "No sources.", "kind": "interpretation",
+                                   "sources": []}])  # fmt: skip
+    nothing["answer"] = {**nothing["answer"], "works": [], "data": []}
+    assert interpretation_items(nothing, MODEL) == []  # nothing to stay within
+    support_key = claim_items(make_record(claims=INTERPRETATIONS), MODEL)[0].key
+    same_text = interpretation_items(make_record(claims=[
+        {"text": "It rained 79.0 mm on 20 July 2021.", "kind": "interpretation",
+         "sources": ["R1"]}]), MODEL)[0].key  # fmt: skip
+    assert support_key != same_text  # each rubric has its own cache entries
+
+
+def test_interpretations_are_judged_cached_and_tabled(tmp_path, limits):
+    record = make_record(claims=INTERPRETATIONS)
+    judge, stub = judge_with(tmp_path, reply("supported"),
+                             reply("stretch", "overreach"))  # fmt: skip
+    judge.judge_record(record, None)
+    assert len(stub.calls) == 2 and "interpretation" in stub.calls[1]["system"]
+    item = stub.calls[1]["schema"]["properties"]["claims"]["items"]
+    assert item["properties"]["verdict"]["enum"] == ["within", "stretch", "overreach"]
+    # The reason comes before the verdict, so the judge reasons before it decides (live, the
+    # verdict-first order gave "overreach" with a reason ending "so within").
+    assert list(item["properties"]) == ["n", "reason", "verdict"]
+    assert (judge.stats.judged, judge.stats.interpretations) == (3, 2)
+    again, stub2 = judge_with(tmp_path)
+    again.judge_record(record, None)
+    assert stub2.calls == [] and again.stats.cached == 3
+
+    section = judge_section(record, None, MODEL, judge.cache)
+    interp = section["interpretation"]
+    assert (interp["claims"], interp["within"], interp["stretch"], interp["overreach"],
+            interp["score"]) == (2, 0, 1, 1, 0.25)  # fmt: skip
+    assert [f["verdict"] for f in interp["flagged"]] == ["stretch", "overreach"]
+    stats = {"iterations": 1, "search_calls": 0, "rainfall_calls": 0, "total_tokens": 0,
+             "tool_trace": [[]]}  # fmt: skip
+    lookup = lambda r, c: judge_section(r, c, MODEL, judge.cache)  # noqa: E731
+    (score,) = score_records([{**record, "stats": stats}], [], {}, limits,
+                             ScoreSettings(0.8, 0.3), None, lookup)  # fmt: skip
+    assert "1 overreaching, 1 stretching interpretation(s)" in flags(score)
+    agg = aggregate([score])
+    assert agg["all"]["judge"]["interpretation"]["score"] == 0.25
+    text = render_report([score], agg)
+    assert "interp. score = mean of within 1, stretch 0.5, overreach 0" in text
+    assert "| all | 1 | 1 | 1 | 0 | 0 | 0 | 1.0 | 1.0 | 2 | 0 | 1 | 1 | 0 | 0.25 |" in text
+    assert "| c | 1 | 1 | 1 | 0 | 0 | 0 | 1.0 | 1.0 | 2 | 0 | 1 | 1 | 0 | 0.25 | - |" in text
+    assert "- interpretations: 0 within, 1 stretch, 1 overreach" in text
+    better = {**score, "judge": {**score["judge"], "interpretation": {
+        **score["judge"]["interpretation"], "score": 1.0, "overreach": 0}}}  # fmt: skip
+    measures = compare_scores([score], [better])["measures"]
+    assert measures["judge_interpretation_score"]["improved"] == 1
+    assert measures["judge_overreach"]["improved"] == 1
+    plan = judge_plan([record], {}, MODEL, judge.cache, 4000)
+    assert (plan["interpretations"], plan["interpretations_pending"], plan["calls"]) == (2, 0, 0)
 
 
 def test_plan_counts_cached_and_pending(tmp_path):

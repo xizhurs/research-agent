@@ -11,7 +11,7 @@ from typing import Any
 
 from research_agent.config import Limits
 from research_agent.evaluation.cases import EvalCase, Qrels
-from research_agent.evaluation.judge import verdict_score
+from research_agent.evaluation.judge import INTERPRETATION_SCORES, verdict_score
 from research_agent.evaluation.metrics import ERROR_KINDS, ScoreSettings, score_record
 from research_agent.evaluation.recording import RunBudget
 
@@ -50,6 +50,11 @@ def _judge_totals(scores: list[dict[str, Any]]) -> dict[str, Any] | None:
     )
     totals["score"] = verdict_score(totals)
     totals["model"] = sections[0]["model"]
+    interp = [j["interpretation"] for j in sections if j.get("interpretation")]
+    i_totals = {k: sum(i[k] for i in interp)
+                for k in ("claims", "judged", "unjudged", "within", "stretch", "overreach")}
+    i_totals["score"] = verdict_score(i_totals, INTERPRETATION_SCORES)
+    totals["interpretation"] = i_totals
     return totals  # fmt: skip
 
 
@@ -157,6 +162,10 @@ def flags(score: dict[str, Any]) -> str | None:
     judge = score.get("judge")
     if judge and (judge["unsupported"] or judge["partial"]):
         parts.append(f"judge: {judge['unsupported']} unsupported, {judge['partial']} partial")
+    interp = (judge or {}).get("interpretation") or {}
+    if interp.get("overreach") or interp.get("stretch"):
+        parts.append(f"judge: {interp['overreach']} overreaching, {interp['stretch']} "
+                     "stretching interpretation(s)")  # fmt: skip
     return ", ".join(parts) or None
 
 
@@ -184,6 +193,18 @@ def judge_line(totals: dict[str, Any]) -> str:
         f"partial, {totals['unsupported']} unsupported of {totals['judged']} judged claim(s)"
         + (f", score {_fmt(totals['score'])}" if totals.get("score") is not None else "")
         + (f", {totals['unjudged']} not judged yet" if totals["unjudged"] else "")
+        + _interpretation_line(totals.get("interpretation"))
+    )
+
+
+def _interpretation_line(i: dict[str, Any] | None) -> str:
+    if not i or not i["claims"]:
+        return ""
+    return (
+        f"; interpretations: {i['within']} within, {i['stretch']} stretch, {i['overreach']} "
+        f"overreach of {i['judged']} judged"
+        + (f", score {_fmt(i['score'])}" if i["score"] is not None else "")
+        + (f", {i['unjudged']} not judged yet" if i["unjudged"] else "")
     )
 
 
@@ -192,6 +213,17 @@ _JUDGE_COLUMNS = (
     ("unsupported", "unsupported"), ("unjudged", "not judged"),
     ("supported_share", "supported share"), ("score", "score"),
 )  # fmt: skip
+_INTERP_COLUMNS = (
+    ("judged", "interp. judged"), ("within", "within"), ("stretch", "stretch"),
+    ("overreach", "overreach"), ("unjudged", "interp. not judged"), ("score", "interp. score"),
+)  # fmt: skip
+
+
+def _judge_cells(j: dict[str, Any]) -> str:
+    cells = [_fmt(j.get(k)) for k, _ in _JUDGE_COLUMNS]
+    i = j.get("interpretation") or {}
+    cells += [_fmt(i.get(k)) for k, _ in _INTERP_COLUMNS]
+    return " | ".join(cells)
 
 
 def _key_point_cell(points: list[dict[str, Any]] | None) -> str:
@@ -210,13 +242,16 @@ def judge_tables(scores: list[dict[str, Any]], agg: dict[str, Any]) -> list[str]
     totals = agg["all"]["judge"]
     if not totals:
         return []
-    head = " | ".join(label for _, label in _JUDGE_COLUMNS)
+    columns = (*_JUDGE_COLUMNS, *_INTERP_COLUMNS)
+    head = " | ".join(label for _, label in columns)
     lines = [
         "## Judge", "",
         f"Model {totals['model']}. Each evidence claim is rated against the text it cites; "
-        "score = mean over judged claims of supported 1, partial 0.5, unsupported 0. "
-        "Reported only, never a case failure.", "",
-        f"| group | claims | {head} |", "|---|---|" + "---|" * len(_JUDGE_COLUMNS),
+        "score = mean over judged claims of supported 1, partial 0.5, unsupported 0. Each "
+        "interpretation claim is rated against the evidence it rests on (its cited sources, or "
+        "all the answer's evidence when it cites none); interp. score = mean of within 1, "
+        "stretch 0.5, overreach 0. Reported only, never a case failure.", "",
+        f"| group | claims | {head} |", "|---|---|" + "---|" * len(columns),
     ]  # fmt: skip
     groups = [("all", agg["all"])]
     groups += [(f"category {k}", v) for k, v in agg["by_category"].items()]
@@ -224,14 +259,13 @@ def judge_tables(scores: list[dict[str, Any]], agg: dict[str, Any]) -> list[str]
     for name, group in groups:
         j = group.get("judge")
         if j:
-            cells = " | ".join(_fmt(j[k]) for k, _ in _JUDGE_COLUMNS)
-            lines.append(f"| {name} | {j['claims']} | {cells} |")
+            lines.append(f"| {name} | {j['claims']} | {_judge_cells(j)} |")
     lines += ["", f"| case | claims | {head} | key points |",
-              "|---|---|" + "---|" * (len(_JUDGE_COLUMNS) + 1)]  # fmt: skip
+              "|---|---|" + "---|" * (len(columns) + 1)]  # fmt: skip
     for s in scores:
         j = s.get("judge")
         if j:
-            cells = " | ".join(_fmt(j.get(k)) for k, _ in _JUDGE_COLUMNS)
+            cells = _judge_cells(j)
             lines.append(f"| {s['case_id']} | {j['claims']} | {cells} | "
                          f"{_key_point_cell(j.get('key_points'))} |")  # fmt: skip
     return [*lines, ""]
@@ -308,6 +342,15 @@ def _case_section(s: dict[str, Any]) -> list[str]:
         )
         items += [f"  - {f['verdict']} {f['sources']}: {f['text']} -- {f['reason']}"
                   for f in judge["flagged"]]  # fmt: skip
+        interp = judge.get("interpretation") or {}
+        if interp.get("claims"):
+            items.append(
+                f"- interpretations: {interp['within']} within, {interp['stretch']} stretch, "
+                f"{interp['overreach']} overreach, {interp['unjudged']} not judged, "
+                f"score {_fmt(interp['score'])}"
+            )
+            items += [f"  - {f['verdict']}: {f['text']} -- {f['reason']}"
+                      for f in interp["flagged"]]  # fmt: skip
         for point in judge.get("key_points") or []:
             items.append(f"  - key point ({point['coverage']}, {point['consistency']}): "
                          f"{point['text']} -- {point['reason']}")  # fmt: skip

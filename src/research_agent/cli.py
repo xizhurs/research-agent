@@ -1417,6 +1417,8 @@ def eval_judge(
     typer.echo(
         f"Judge {model}: {plan['claims']} evidence claim(s) in {len(records)} record(s); "
         f"{plan['cached']} cached, {plan['pending']} to judge"
+        + (f"; {plan['interpretations']} interpretation(s), "
+           f"{plan['interpretations_pending']} to judge" if plan["interpretations"] else "")
         + (f"; key-point sets {plan['key_point_sets_pending']}/{plan['key_point_sets']} to judge"
            if plan["key_point_sets"] else "")
         + f". {plan['calls']} call(s), about {plan['estimated_tokens']:,} tokens at most."
@@ -1467,7 +1469,8 @@ def eval_judge(
     if budget.max_cost_usd > 0 and not budget.priced:
         typer.echo("error: a cost cap needs prices in [eval.judge]", err=True)
         raise typer.Exit(code=1)
-    if not yes and not typer.confirm(f"Judge {plan['pending']} claim(s) with {model}?"):
+    todo = plan["pending"] + plan["interpretations_pending"]
+    if not yes and not typer.confirm(f"Judge {todo} claim(s) with {model}?"):
         typer.echo("cancelled: nothing was judged", err=True)
         raise typer.Exit(code=1)
     try:
@@ -1506,9 +1509,13 @@ def eval_judge(
     sections = [judge_section(r, cases_by_id.get(r["case_id"]), model, cache) for r in records]
     sections = [x for x in sections if x]
     counts = {v: sum(x[v] for x in sections) for v in ("supported", "partial", "unsupported")}
+    interp = {v: sum(x["interpretation"][v] for x in sections)
+              for v in ("within", "stretch", "overreach")}  # fmt: skip
     typer.echo(
         f"Verdicts: {counts['supported']} supported, {counts['partial']} partial, "
-        f"{counts['unsupported']} unsupported. Run eval score {run_dir} for the report."
+        f"{counts['unsupported']} unsupported; interpretations {interp['within']} within, "
+        f"{interp['stretch']} stretch, {interp['overreach']} overreach. "
+        f"Run eval score {run_dir} for the report."
     )
     if stopped or st.errors:
         raise typer.Exit(code=1)

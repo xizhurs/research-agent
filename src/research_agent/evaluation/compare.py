@@ -23,6 +23,14 @@ def _judged(s: dict[str, Any], key: str) -> float | None:
     return float(judge[key])
 
 
+def _interpreted(s: dict[str, Any], key: str) -> float | None:
+    """An interpretation figure, only when every interpretation of the record is judged."""
+    interp = (s.get("judge") or {}).get("interpretation")
+    if not interp or not interp["judged"] or interp["unjudged"]:
+        return None
+    return float(interp[key])
+
+
 def _tokens(s: dict[str, Any]) -> float:
     return s["efficiency"]["input_tokens"] + s["efficiency"]["output_tokens"]
 
@@ -44,6 +52,8 @@ MEASURES: tuple[Measure, ...] = (
     ("judge_unsupported", lambda s: _judged(s, "unsupported"), -1),
     ("judge_supported_share", lambda s: _judged(s, "supported_share"), 1),
     ("judge_score", lambda s: _judged(s, "score"), 1),
+    ("judge_interpretation_score", lambda s: _interpreted(s, "score"), 1),
+    ("judge_overreach", lambda s: _interpreted(s, "overreach"), -1),
 )  # fmt: skip
 
 
