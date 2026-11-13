@@ -106,3 +106,8 @@ max_total_tokens = 300000
 max_cost_usd = 0
 price_input_per_mtok = 0
 price_output_per_mtok = 0
+# Scoring (eval score; reported, never a failure): two searches whose query word sets overlap at
+# least this much (Jaccard) count as redundant; an evidence claim sharing a smaller share of its
+# content words with the text it cites is flagged as weakly supported (a crude lexical proxy).
+redundant_query_jaccard = 0.8
+low_support_overlap = 0.3

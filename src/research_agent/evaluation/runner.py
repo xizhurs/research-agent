@@ -238,9 +238,9 @@ def run_cases(
             else:
                 record = build_record(
                     case, run_id=run_id, meta=meta, status="ok", log=recorder.log,
-                    result=result, failures=check_result(case, result, limits),
-                    wall_seconds=clock() - started,
+                    result=result, wall_seconds=clock() - started,
                 )
+                record["failures"] = record_failures(case, record, limits)
         write_record(out_dir, record)
         records.append(record)
         on_record(record)
@@ -263,9 +263,14 @@ def rescore(
         elif case is None:
             out.append({**record, "failures": ["case no longer in the case file"]})
         else:
-            failures = check_record(case, record["answer"], record["stats"], limits)
-            out.append({**record, "failures": failures})
+            out.append({**record, "failures": record_failures(case, record, limits)})
     return out
+
+
+def record_failures(case: EvalCase, record: dict[str, Any], limits: Limits) -> list[str]:
+    """The checks of a completed record, including the tool side of ``expect_numbers``."""
+    tool_results = [call["result"] for call in record["tool_calls"]]
+    return check_record(case, record["answer"], record["stats"], limits, tool_results)
 
 
 # --- summary -----------------------------------------------------------------------------------

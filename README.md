@@ -168,6 +168,17 @@ uv run research-agent eval score evals/runs/<run-id>     # free: score stored re
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
 
+`eval score` (and `eval run --live` when it finishes) also writes `score.json` and `report.md` into the run folder. They hold metrics that are reported but never fail a case:
+- tool errors by kind, and redundant or uncited tool calls;
+- whether the model stopped by itself or a budget forced the answer;
+- numbers in evidence claims that the cited text does not contain;
+- claims whose words barely appear in the cited text;
+- key-point coverage;
+- retrieval precision and recall against `evals/qrels.toml`, with the works not yet labelled listed so you can label them;
+- tokens, time and cost.
+
+Cases can also state `expect_numbers` (verified values that must appear in a tool result and in a claim), `max_tool_calls`, and `key_points` with `min_key_points`; these do fail a case.
+
 The cases are a draft; edit them to match the questions you care about.
 
 ## Development

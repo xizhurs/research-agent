@@ -7,6 +7,8 @@ development cases from the held-out test cases; ``category`` groups them in repo
 
 from __future__ import annotations
 
+import math
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,11 +44,42 @@ _ALLOWED_KEYS = {
     "max_evidence_claims",
     "keywords_any",
     "forbidden_phrases",
+    "expect_numbers",
+    "max_tool_calls",
+    "key_points",
+    "min_key_points",
 }
+DEFAULT_NUMBER_TOLERANCE = 0.05
+_WORK_ID = re.compile(r"^W\d+$")
 
 
 class EvalError(ValueError):
     """The case file is missing, malformed or inconsistent."""
+
+
+@dataclass(frozen=True)
+class ExpectedNumber:
+    """A verified value that must appear in a tool result and in a claim (``checks``)."""
+
+    value: float
+    tolerance: float = DEFAULT_NUMBER_TOLERANCE
+
+
+@dataclass(frozen=True)
+class KeyPoint:
+    """A verified fact an answer should cover: covered when any term appears (lower-case) in a
+    claim that cites something. Curated once, never generated per run."""
+
+    text: str
+    any_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Qrels:
+    """Relevance labels for the works a case's searches may show (``evals/qrels.toml``)."""
+
+    relevant: frozenset[str] = frozenset()
+    not_relevant: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -69,6 +102,10 @@ class EvalCase:
     forbid_tool: str | None = None
     split: str = "dev"  # "test" cases are held out: run them only to measure, never to tune
     category: str | None = None
+    expect_numbers: tuple[ExpectedNumber, ...] = ()
+    max_tool_calls: int | None = None  # tool calls requested (all turns of the trace)
+    key_points: tuple[KeyPoint, ...] = ()
+    min_key_points: int = 0  # key points that must be covered (0: coverage is only reported)
 
 
 def _int_field(raw: dict[str, Any], key: str, default: int | None, case_id: str) -> int | None:
@@ -85,6 +122,48 @@ def _choice(raw: dict[str, Any], key: str, allowed: tuple[str, ...], case_id: st
     if value is not None and value not in allowed:
         raise EvalError(f"case {case_id!r}: {key} must be one of {list(allowed)}")
     return value
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _tables(raw: dict[str, Any], key: str, allowed: set[str], case_id: str) -> list[dict]:
+    items = raw.get(key, [])
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        raise EvalError(f"case {case_id!r}: {key} must be a list of tables")
+    for item in items:
+        unknown = item.keys() - allowed
+        if unknown:
+            raise EvalError(f"case {case_id!r}: {key} has unknown keys {sorted(unknown)}")
+    return items
+
+
+def _expected_numbers(raw: dict[str, Any], case_id: str) -> tuple[ExpectedNumber, ...]:
+    out = []
+    for item in _tables(raw, "expect_numbers", {"value", "tolerance"}, case_id):
+        value = item.get("value")
+        tolerance = item.get("tolerance", DEFAULT_NUMBER_TOLERANCE)
+        if not _is_number(value):
+            raise EvalError(f"case {case_id!r}: expect_numbers needs a numeric 'value'")
+        if not _is_number(tolerance) or tolerance < 0:
+            raise EvalError(f"case {case_id!r}: expect_numbers 'tolerance' must be >= 0")
+        out.append(ExpectedNumber(float(value), float(tolerance)))
+    return tuple(out)
+
+
+def _key_points(raw: dict[str, Any], case_id: str) -> tuple[KeyPoint, ...]:
+    out = []
+    for item in _tables(raw, "key_points", {"text", "any_terms"}, case_id):
+        text, terms = item.get("text"), item.get("any_terms")
+        if not isinstance(text, str) or not text.strip():
+            raise EvalError(f"case {case_id!r}: every key point needs a 'text'")
+        if not isinstance(terms, list) or not terms or not all(
+            isinstance(t, str) and t.strip() for t in terms
+        ):
+            raise EvalError(f"case {case_id!r}: key point 'any_terms' must be non-empty strings")
+        out.append(KeyPoint(text.strip(), tuple(t.strip().lower() for t in terms)))
+    return tuple(out)
 
 
 def _parse_case(raw: Any, index: int) -> EvalCase:
@@ -114,6 +193,10 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         ):
             raise EvalError(f"case {case_id!r}: {key} must be a list of non-empty strings")
         phrase_lists[key] = tuple(v.strip().lower() for v in values)
+    key_points = _key_points(raw, case_id)
+    min_key_points = _int_field(raw, "min_key_points", 0, case_id) or 0
+    if min_key_points > len(key_points):
+        raise EvalError(f"case {case_id!r}: min_key_points exceeds the number of key points")
     return EvalCase(
         id=case_id.strip(),
         question=question.strip(),
@@ -129,6 +212,10 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         forbid_tool=tools["forbid_tool"],
         split=_choice(raw, "split", SPLITS, case_id) or "dev",
         category=_choice(raw, "category", CATEGORIES, case_id),
+        expect_numbers=_expected_numbers(raw, case_id),
+        max_tool_calls=_int_field(raw, "max_tool_calls", None, case_id),
+        key_points=key_points,
+        min_key_points=min_key_points,
     )
 
 
@@ -172,3 +259,37 @@ def select_cases(
         for c in cases
         if (split is None or c.split == split) and (category is None or c.category == category)
     ]
+
+
+def load_qrels(path: Path) -> dict[str, Qrels]:
+    """Relevance labels per case ID. A missing file means no labels yet.
+
+    Format: one table per case, ``[case-id]`` with ``relevant`` and ``not_relevant`` lists of
+    OpenAlex work IDs (``W…``). A work in both lists is an error."""
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        raise EvalError(f"invalid TOML in {path}: {exc}") from exc
+    out: dict[str, Qrels] = {}
+    for case_id, table in raw.items():
+        if not isinstance(table, dict):
+            raise EvalError(f"{path}: [{case_id}] must be a table")
+        unknown = table.keys() - {"relevant", "not_relevant"}
+        if unknown:
+            raise EvalError(f"{path}: [{case_id}] has unknown keys {sorted(unknown)}")
+        lists = {}
+        for key in ("relevant", "not_relevant"):
+            ids = table.get(key, [])
+            if not isinstance(ids, list) or not all(
+                isinstance(i, str) and _WORK_ID.match(i) for i in ids
+            ):
+                raise EvalError(f"{path}: [{case_id}] {key} must be a list of work IDs (W…)")
+            lists[key] = frozenset(ids)
+        both = sorted(lists["relevant"] & lists["not_relevant"])
+        if both:
+            raise EvalError(f"{path}: [{case_id}] lists {', '.join(both)} as both kinds")
+        out[case_id] = Qrels(lists["relevant"], lists["not_relevant"])
+    return out

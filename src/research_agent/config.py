@@ -268,8 +268,14 @@ class EvalConfig:
     max_cost_usd: float
     price_input_per_mtok: float  # USD per million input tokens of the agent's model
     price_output_per_mtok: float
+    redundant_query_jaccard: float  # two searches this similar (word sets) count as redundant
+    low_support_overlap: float  # claims sharing fewer of their words with the cited text: flagged
 
     def __post_init__(self) -> None:
+        for name in ("redundant_query_jaccard", "low_support_overlap"):
+            value = getattr(self, name)
+            if not _is_number(value) or not 0 < value <= 1:
+                raise ConfigError(f"eval.{name} must be a number in (0, 1], got {value!r}")
         for name in ("runs_dir", "tool_cache_dir"):
             if not isinstance(getattr(self, name), Path):
                 object.__setattr__(self, name, Path(getattr(self, name)))

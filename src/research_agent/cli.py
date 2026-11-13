@@ -34,14 +34,22 @@ from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
     EvalCase,
     EvalError,
+    Qrels,
     RecordingLLMClient,
     RunBudget,
+    ScoreSettings,
+    aggregate,
+    flags,
     load_cases,
+    load_qrels,
+    metrics_line,
     read_records,
     rescore,
     run_cases,
+    score_records,
     select_cases,
     summarize_records,
+    write_scores,
     write_summary,
 )
 from research_agent.evaluation.runner import fingerprint, git_commit
@@ -612,6 +620,7 @@ def chat(
 
 
 DEFAULT_CASES = Path("evals/cases.toml")
+DEFAULT_QRELS = Path("evals/qrels.toml")
 FROZEN_TTL_DAYS = 36500.0  # the evaluation tool cache never expires; delete it to refresh
 
 eval_app = typer.Typer(
@@ -626,6 +635,37 @@ CASES_OPTION = typer.Option(DEFAULT_CASES, "--cases", help="TOML file with evalu
 ONLY_OPTION = typer.Option([], "--only", help="Only this case id (repeatable; any split).")
 SPLIT_OPTION = typer.Option("dev", "--split", help="'dev', 'test' (held out) or 'all'.")
 CATEGORY_OPTION = typer.Option(None, "--category", help="e.g. literature, rainfall, enso.")
+QRELS_OPTION = typer.Option(
+    DEFAULT_QRELS, "--qrels", help="Relevance labels per case (a missing file means none)."
+)
+
+
+def _qrels_or_exit(path: Path, cases: list[EvalCase]) -> dict[str, Qrels]:
+    try:
+        qrels = load_qrels(path)
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    unknown = sorted(qrels.keys() - {c.id for c in cases})
+    if unknown:
+        typer.echo(f"warning: {path} labels unknown case(s): {', '.join(unknown)}", err=True)
+    return qrels
+
+
+def _score_and_report(
+    cfg: Config,
+    run_dir: Path,
+    records: list[dict],
+    cases: list[EvalCase],
+    qrels: dict[str, Qrels],
+    budget: RunBudget,
+) -> tuple[list[dict], dict]:
+    """Metrics of the records (reported, never failures), written to score.json and report.md."""
+    settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
+    scores = score_records(records, cases, qrels, cfg.limits, settings, budget)
+    agg = aggregate(scores)
+    write_scores(run_dir, scores, agg)
+    return scores, agg
 
 
 def _cases_or_exit(
@@ -746,12 +786,14 @@ def eval_run(
     max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Token cap."),
     max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="USD cap."),
     out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
+    qrels_file: Path = QRELS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Run cases with the real model within a run budget; one record per case is written.
+    """Run cases with the real model within a run budget; one record per case is written,
+    then score.json and report.md (metrics, reported only).
 
     Without --live only the plan is printed (cases, worst-case tokens, budget): nothing is
     called. Exits non-zero if any case fails, is aborted or is skipped.
@@ -761,6 +803,7 @@ def eval_run(
     if not selected:
         typer.echo("error: no case matches the selection", err=True)
         raise typer.Exit(code=1)
+    qrels = _qrels_or_exit(qrels_file, _cases_or_exit(cases, [], "all", None))
     budget = _budget(cfg, max_calls, max_tokens, max_cost)
     if budget.max_cost_usd > 0 and not budget.priced:
         typer.echo("error: a cost cap needs prices in [eval] (price_*_per_mtok)", err=True)
@@ -840,7 +883,9 @@ def eval_run(
     summary = summarize_records(records, budget)
     write_summary(out_dir, {"run_id": run_id, **meta, **summary})
     typer.echo(_summary_line(summary))
-    typer.echo(f"Records: {out_dir}")
+    _, agg = _score_and_report(cfg, out_dir, records, selected, qrels, budget)
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Records and report.md: {out_dir}")
     if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)
 
@@ -849,9 +894,15 @@ def eval_run(
 def eval_score(
     run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
     cases: Path = CASES_OPTION,
+    qrels_file: Path = QRELS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
 ) -> None:
-    """Score stored run records again with the current cases and checks (free, offline)."""
+    """Score stored run records again with the current cases and checks (free, offline).
+
+    Also writes score.json and report.md into RUN_DIR (metrics: tools, trajectory, numbers,
+    citation support, key points, retrieval against --qrels, efficiency). Metrics are reported
+    only; the exit code depends on the case checks.
+    """
     cfg = _load_or_exit(config)
     try:
         records = read_records(run_dir)
@@ -862,10 +913,18 @@ def eval_score(
     if not records:
         typer.echo(f"error: no run records in {run_dir}", err=True)
         raise typer.Exit(code=1)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    budget = _budget(cfg, None, None, None)
     rescored = rescore(records, case_list, cfg.limits)
-    for record in rescored:
+    scores, agg = _score_and_report(cfg, run_dir, rescored, case_list, qrels, budget)
+    for record, score in zip(rescored, scores, strict=True):
         typer.echo(_record_line(record))
-    summary = summarize_records(rescored, _budget(cfg, None, None, None))
+        flagged = flags(score)
+        if flagged:
+            typer.echo(f"    ~ {flagged}")
+    summary = summarize_records(rescored, budget)
     typer.echo(_summary_line(summary))
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Report: {run_dir / 'report.md'}")
     if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)
