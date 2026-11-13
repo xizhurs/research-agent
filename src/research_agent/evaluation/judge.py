@@ -38,6 +38,9 @@ from research_agent.llm.anthropic_client import JsonClient, JsonReply
 
 RUBRIC_VERSION = 1
 VERDICTS = ("supported", "partial", "unsupported")
+# The owner's weights for the judge score: the mean over judged claims (a convention chosen
+# on 2026-11-13, not something the judge produces).
+VERDICT_SCORES = {"supported": 1.0, "partial": 0.5, "unsupported": 0.0}
 COVERAGE = ("covered", "partial", "missing")
 CONSISTENCY = ("consistent", "contradicted", "not_addressed")
 MAX_CLAIMS_PER_CALL = 10
@@ -377,6 +380,14 @@ def _excerpt(text: str) -> str:
     return text if len(text) <= EXCERPT_CHARS else text[: EXCERPT_CHARS - 1] + "…"
 
 
+def verdict_score(counts: dict[str, int]) -> float | None:
+    """Mean of ``VERDICT_SCORES`` over the judged claims (None when none is judged)."""
+    judged = sum(counts.get(v, 0) for v in VERDICTS)
+    if not judged:
+        return None
+    return round(sum(VERDICT_SCORES[v] * counts.get(v, 0) for v in VERDICTS) / judged, 3)
+
+
 def judge_section(
     record: dict[str, Any], case: EvalCase | None, model: str, cache: JudgeCache
 ) -> dict[str, Any] | None:
@@ -403,6 +414,7 @@ def judge_section(
         "unjudged": unjudged,
         **counts,
         "supported_share": round(counts["supported"] / judged, 3) if judged else None,
+        "score": verdict_score(counts),
         "flagged": flagged,
     }
     if case and case.key_points:

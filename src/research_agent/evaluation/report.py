@@ -11,6 +11,7 @@ from typing import Any
 
 from research_agent.config import Limits
 from research_agent.evaluation.cases import EvalCase, Qrels
+from research_agent.evaluation.judge import verdict_score
 from research_agent.evaluation.metrics import ERROR_KINDS, ScoreSettings, score_record
 from research_agent.evaluation.recording import RunBudget
 
@@ -47,6 +48,7 @@ def _judge_totals(scores: list[dict[str, Any]]) -> dict[str, Any] | None:
     totals["supported_share"] = (
         round(totals["supported"] / totals["judged"], 3) if totals["judged"] else None
     )
+    totals["score"] = verdict_score(totals)
     totals["model"] = sections[0]["model"]
     return totals  # fmt: skip
 
@@ -180,8 +182,59 @@ def judge_line(totals: dict[str, Any]) -> str:
     return (
         f"judge ({totals['model']}): {totals['supported']} supported, {totals['partial']} "
         f"partial, {totals['unsupported']} unsupported of {totals['judged']} judged claim(s)"
+        + (f", score {_fmt(totals['score'])}" if totals.get("score") is not None else "")
         + (f", {totals['unjudged']} not judged yet" if totals["unjudged"] else "")
     )
+
+
+_JUDGE_COLUMNS = (
+    ("judged", "judged"), ("supported", "supported"), ("partial", "partial"),
+    ("unsupported", "unsupported"), ("unjudged", "not judged"),
+    ("supported_share", "supported share"), ("score", "score"),
+)  # fmt: skip
+
+
+def _key_point_cell(points: list[dict[str, Any]] | None) -> str:
+    if not points:
+        return "-"
+    covered = sum(p["coverage"] == "covered" for p in points)
+    partial = sum(p["coverage"] == "partial" for p in points)
+    contradicted = sum(p["consistency"] == "contradicted" for p in points)
+    return f"{covered}/{len(points)} covered, {partial} partial, {contradicted} contradicted"
+
+
+def judge_tables(scores: list[dict[str, Any]], agg: dict[str, Any]) -> list[str]:
+    """The Judge section: totals by run, category and split, then one row per case.
+
+    Score = mean over judged claims of supported 1, partial 0.5, unsupported 0."""
+    totals = agg["all"]["judge"]
+    if not totals:
+        return []
+    head = " | ".join(label for _, label in _JUDGE_COLUMNS)
+    lines = [
+        "## Judge", "",
+        f"Model {totals['model']}. Each evidence claim is rated against the text it cites; "
+        "score = mean over judged claims of supported 1, partial 0.5, unsupported 0. "
+        "Reported only, never a case failure.", "",
+        f"| group | claims | {head} |", "|---|---|" + "---|" * len(_JUDGE_COLUMNS),
+    ]  # fmt: skip
+    groups = [("all", agg["all"])]
+    groups += [(f"category {k}", v) for k, v in agg["by_category"].items()]
+    groups += [(f"split {k}", v) for k, v in agg["by_split"].items()]
+    for name, group in groups:
+        j = group.get("judge")
+        if j:
+            cells = " | ".join(_fmt(j[k]) for k, _ in _JUDGE_COLUMNS)
+            lines.append(f"| {name} | {j['claims']} | {cells} |")
+    lines += ["", f"| case | claims | {head} | key points |",
+              "|---|---|" + "---|" * (len(_JUDGE_COLUMNS) + 1)]  # fmt: skip
+    for s in scores:
+        j = s.get("judge")
+        if j:
+            cells = " | ".join(_fmt(j.get(k)) for k, _ in _JUDGE_COLUMNS)
+            lines.append(f"| {s['case_id']} | {j['claims']} | {cells} | "
+                         f"{_key_point_cell(j.get('key_points'))} |")  # fmt: skip
+    return [*lines, ""]
 
 
 _COLUMNS = (
@@ -250,7 +303,8 @@ def _case_section(s: dict[str, Any]) -> list[str]:
     if judge:
         items.append(
             f"- judge ({judge['model']}): {judge['supported']} supported, {judge['partial']} "
-            f"partial, {judge['unsupported']} unsupported, {judge['unjudged']} not judged"
+            f"partial, {judge['unsupported']} unsupported, {judge['unjudged']} not judged, "
+            f"score {_fmt(judge.get('score'))}"
         )
         items += [f"  - {f['verdict']} {f['sources']}: {f['text']} -- {f['reason']}"
                   for f in judge["flagged"]]  # fmt: skip
@@ -273,15 +327,15 @@ def render_report(scores: list[dict[str, Any]], agg: dict[str, Any]) -> str:
     rows += [(f"category {k}", v) for k, v in agg["by_category"].items()]
     rows += [(f"split {k}", v) for k, v in agg["by_split"].items()]
     lines += _table(rows)
-    if agg["all"]["judge"]:
-        lines += ["", judge_line(agg["all"]["judge"]).capitalize()]
     conv = agg.get("conversations") or {}
     if conv.get("total"):
         lines += ["", f"Conversations: {conv['passed']}/{conv['total']} with every turn passed"]
     replay = agg["all"]["replay"]
     if any(replay.values()):
         lines += ["", "Replay: " + ", ".join(f"{v} {k}" for k, v in replay.items())]
-    lines += ["", "## Cases", ""]
+    lines.append("")
+    lines += judge_tables(scores, agg)  # empty when nothing has a judge section
+    lines += ["## Cases", ""]
     for s in scores:
         lines += _case_section(s)
     return "\n".join(lines)

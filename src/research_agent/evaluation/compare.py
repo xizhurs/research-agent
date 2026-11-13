@@ -43,6 +43,7 @@ MEASURES: tuple[Measure, ...] = (
     ("cost_usd", lambda s: s["efficiency"]["cost_usd"], -1),
     ("judge_unsupported", lambda s: _judged(s, "unsupported"), -1),
     ("judge_supported_share", lambda s: _judged(s, "supported_share"), 1),
+    ("judge_score", lambda s: _judged(s, "score"), 1),
 )  # fmt: skip
 
 

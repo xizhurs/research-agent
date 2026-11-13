@@ -37,6 +37,7 @@ from research_agent.evaluation.judge import (
     parse_support,
     support_prompt,
 )
+from research_agent.evaluation.report import render_report
 from research_agent.llm import LLMConnectionError, Usage
 from research_agent.llm.anthropic_client import AnthropicJsonClient, JsonReply
 from research_agent.logging_setup import REDACTOR
@@ -281,6 +282,52 @@ def test_scores_reports_and_comparisons_show_cached_verdicts(tmp_path, limits):
     measures = compare_scores([score], [better])["measures"]
     assert measures["judge_unsupported"]["improved"] == 1
     assert measures["judge_supported_share"]["improved"] == 1
+
+
+def test_report_has_judge_tables_with_the_score(tmp_path, limits):
+    cache = judged_cache(tmp_path, "supported", "partial")
+    stats = {"iterations": 1, "search_calls": 0, "rainfall_calls": 0, "total_tokens": 0,
+             "tool_trace": [[]]}  # fmt: skip
+    a = {**make_record("a"), "stats": stats}
+    b = {**make_record("b"), "stats": stats, "category": "literature", "split": "test"}
+    b["answer"] = {**b["answer"], "claims": [{"text": "Unjudged claim.", "kind": "evidence",
+                                              "sources": ["W1"]}]}  # fmt: skip
+    case_b = EvalCase("b", "Q?", key_points=(KeyPoint("k1", ("x",)), KeyPoint("k2", ("y",))))
+    kp = [{"text": "k1", "coverage": "covered", "consistency": "consistent", "reason": "r"},
+          {"text": "k2", "coverage": "partial", "consistency": "contradicted", "reason": "r"}]
+
+    def lookup(record, case):
+        section = judge_section(record, case, MODEL, cache)
+        if record["case_id"] == "b":
+            section["key_points"] = kp
+        return section
+
+    scores = score_records([a, b], [case_b], {}, limits, ScoreSettings(0.8, 0.3), None, lookup)
+    assert scores[0]["judge"]["score"] == 0.75  # supported 1 + partial 0.5, over 2 judged
+    assert scores[1]["judge"]["score"] is None  # nothing judged yet
+    agg = aggregate(scores)
+    assert (agg["all"]["judge"]["score"], agg["by_category"]["rainfall"]["judge"]["score"]) == (
+        0.75, 0.75)
+    text = render_report(scores, agg)
+    assert "## Judge" in text and text.index("## Judge") < text.index("## Cases")
+    assert "score = mean over judged claims of supported 1, partial 0.5, unsupported 0" in text
+    assert ("| group | claims | judged | supported | partial | unsupported | not judged | "
+            "supported share | score |") in text
+    assert "| all | 3 | 2 | 1 | 1 | 0 | 1 | 0.5 | 0.75 |" in text
+    assert "| category literature | 1 | 0 | 0 | 0 | 0 | 1 | - | - |" in text
+    assert "| split dev | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 |" in text
+    assert "| a | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 | - |" in text
+    assert "| b | 1 | 0 | 0 | 0 | 0 | 1 | - | - | 1/2 covered, 1 partial, 1 contradicted |" in text
+    better = {**scores[0], "judge": {**scores[0]["judge"], "score": 1.0}}
+    assert compare_scores([scores[0]], [better])["measures"]["judge_score"]["improved"] == 1
+
+
+def test_no_judge_section_without_verdicts(limits):
+    record = {**make_record(), "stats": {"iterations": 1, "search_calls": 0,
+                                         "rainfall_calls": 0, "total_tokens": 0,
+                                         "tool_trace": [[]]}}  # fmt: skip
+    scores = score_records([record], [], {}, limits, ScoreSettings(0.8, 0.3))
+    assert "## Judge" not in render_report(scores, aggregate(scores))
 
 
 def test_plan_counts_cached_and_pending(tmp_path):
