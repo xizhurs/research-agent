@@ -39,6 +39,13 @@ from research_agent.evaluation.judge import (
     load_calibration,
     render_calibration,
 )
+from research_agent.evaluation.langfuse_import import (
+    LangfuseImportError,
+    LangfuseReader,
+    case_matcher,
+    fetch_traces,
+    trace_record,
+)
 from research_agent.evaluation.metrics import ScoreSettings, score_record
 from research_agent.evaluation.numbers import extract_numbers, unsupported_numbers, value_found
 from research_agent.evaluation.recording import (
@@ -75,6 +82,7 @@ from research_agent.evaluation.runner import (
     run_conversations,
     summarize,
     summarize_records,
+    write_record,
     write_summary,
 )
 
@@ -98,6 +106,8 @@ __all__ = [
     "JudgeCache",
     "JudgeStats",
     "KeyPoint",
+    "LangfuseImportError",
+    "LangfuseReader",
     "Qrels",
     "RecordingLLMClient",
     "ReplayDiverged",
@@ -108,6 +118,7 @@ __all__ = [
     "aggregate",
     "agreement",
     "calibration_sample",
+    "case_matcher",
     "check_record",
     "check_result",
     "check_turn",
@@ -115,6 +126,7 @@ __all__ = [
     "compare_answers",
     "compare_scores",
     "extract_numbers",
+    "fetch_traces",
     "fingerprint",
     "fixed_query",
     "flags",
@@ -144,9 +156,11 @@ __all__ = [
     "summarize",
     "summarize_records",
     "tools_hash",
+    "trace_record",
     "turn_details",
     "unsupported_numbers",
     "value_found",
+    "write_record",
     "write_scores",
     "write_summary",
 ]

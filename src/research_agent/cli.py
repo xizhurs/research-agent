@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
@@ -31,6 +31,7 @@ from research_agent.credentials import (
     Credentials,
     load_credentials,
     read_env,
+    validate_secret,
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
@@ -42,6 +43,8 @@ from research_agent.evaluation import (
     FixedSearchLLMClient,
     Judge,
     JudgeCache,
+    LangfuseImportError,
+    LangfuseReader,
     Qrels,
     RecordingLLMClient,
     ReplayLLMClient,
@@ -50,7 +53,9 @@ from research_agent.evaluation import (
     aggregate,
     agreement,
     calibration_sample,
+    case_matcher,
     compare_scores,
+    fetch_traces,
     fixed_query,
     flags,
     judge_plan,
@@ -61,6 +66,7 @@ from research_agent.evaluation import (
     load_qrels,
     metrics_line,
     read_records,
+    record_failures,
     render_calibration,
     render_comparison,
     replay_date,
@@ -72,6 +78,8 @@ from research_agent.evaluation import (
     select_cases,
     select_conversations,
     summarize_records,
+    trace_record,
+    write_record,
     write_scores,
     write_summary,
 )
@@ -83,6 +91,9 @@ from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
 from research_agent.temperature import TemperatureClient
 from research_agent.tracing import (
+    LANGFUSE_HOST_VAR,
+    LANGFUSE_PUBLIC_VAR,
+    LANGFUSE_SECRET_VAR,
     TracingError,
     answer_json,
     configure_tracing,
@@ -1182,6 +1193,11 @@ def eval_replay(
         raise typer.Exit(code=1) from exc
     case_list = _all_cases_or_exit(cases, conversations)
     qrels = _qrels_or_exit(qrels_file, case_list)
+    for record in records:
+        if record.get("mode") == "imported" and (not only or record["case_id"] in only):
+            typer.echo(f"[NOT REPLAYED] {record['case_id']}: imported from Langfuse (the "
+                       "requests were not recorded)")  # fmt: skip
+    records = [r for r in records if r.get("mode") != "imported"]
     talks: list[Conversation] = []
     turn_records = [r for r in records if r.get("conversation")]
     if turn_records:
@@ -1496,3 +1512,124 @@ def eval_judge(
     )
     if stopped or st.errors:
         raise typer.Exit(code=1)
+
+
+IMPORT_DAYS = 7  # default window for eval import-langfuse
+
+
+def _langfuse_reader(env: dict) -> LangfuseReader:
+    """The Langfuse read client from LANGFUSE_* (environment or .env). Patched in CLI tests."""
+    names = (LANGFUSE_PUBLIC_VAR, LANGFUSE_SECRET_VAR, LANGFUSE_HOST_VAR)
+    missing = [n for n in names if not (env.get(n) or "").strip()]
+    if missing:
+        raise LangfuseImportError(f"set {', '.join(missing)} (environment or .env)")
+    public = validate_secret(LANGFUSE_PUBLIC_VAR, env[LANGFUSE_PUBLIC_VAR])
+    secret = validate_secret(LANGFUSE_SECRET_VAR, env[LANGFUSE_SECRET_VAR])
+    assert public is not None and secret is not None
+    REDACTOR.add(public.reveal())
+    REDACTOR.add(secret.reveal())
+    host = env[LANGFUSE_HOST_VAR].strip()
+    if not host.startswith(("https://", "http://")):
+        raise LangfuseImportError(f"{LANGFUSE_HOST_VAR} must start with https://")
+    return LangfuseReader(host, public.reveal(), secret.reveal())
+
+
+def _day(value: str | None, default: date, option: str) -> date:
+    if value is None:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        typer.echo(f"error: {option} must be a date like 2026-11-13", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@eval_app.command("import-langfuse")
+def eval_import_langfuse(
+    since: str | None = typer.Option(None, "--since", help="First day (default: 7 days ago)."),
+    until: str | None = typer.Option(
+        None, "--until", help="Day after the last (default: tomorrow)."
+    ),
+    tag: str = typer.Option("eval", "--tag", help="Only traces with this tag (default: eval)."),
+    all_traces: bool = typer.Option(
+        False, "--all", help="All agent traces (ask, UI, chat too), not only --tag."
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, help="At most this many traces (newest)."),
+    out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Import agent traces from Langfuse as run records (network, read-only; no model call).
+
+    Uses GET /api/public/v2/observations with LANGFUSE_* keys. Each trace becomes one record:
+    eval cases by their tag, conversation turns by question and turn number, other traces
+    (--all) as lf-<trace id> with the universal checks only. Then score.json and report.md are
+    written; eval score, judge and compare work on the folder. Imported records cannot be
+    replayed (the requests are not in the trace). Only the newest trace per case is kept.
+    """
+    cfg = _load_or_exit(config)
+    today = date.today()
+    first = _day(since, today - timedelta(days=IMPORT_DAYS), "--since")
+    last = _day(until, today + timedelta(days=1), "--until")
+    if first >= last:
+        typer.echo("error: --since must be before --until", err=True)
+        raise typer.Exit(code=1)
+    case_list = _all_cases_or_exit(cases, conversations)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    window_end = datetime.combine(last, datetime.min.time())
+    iso = "%Y-%m-%dT%H:%M:%SZ"
+    try:
+        reader = _langfuse_reader(read_env(env_file))
+        try:
+            traces = fetch_traces(
+                reader, f"{first.isoformat()}T00:00:00Z", window_end.strftime(iso),
+                None if all_traces else tag, limit,
+            )  # fmt: skip
+        finally:
+            reader.close()
+    except (LangfuseImportError, CredentialError) as exc:
+        typer.echo(f"error: {REDACTOR.redact(str(exc))}", err=True)
+        raise typer.Exit(code=1) from exc
+    scope = "all agent traces" if all_traces else f"traces tagged {tag!r}"
+    typer.echo(f"Langfuse: {len(traces)} {scope} from {first} to {last} (exclusive), "
+               f"{reader.requests} request(s).")  # fmt: skip
+
+    run_id = f"langfuse-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    out_dir = out or cfg.eval.runs_dir / run_id
+    match = case_matcher(case_list)
+    by_id = {c.id: c for c in case_list}
+    records, seen = [], set()
+    for trace_id, rows in traces.items():  # newest first
+        record, why = trace_record(rows, run_id=run_id, case_for=match)
+        if record is None:
+            typer.echo(f"[SKIPPED] trace {trace_id[:12]}: {why}")
+            continue
+        if record["case_id"] in seen:
+            typer.echo(f"[SKIPPED] trace {trace_id[:12]}: an older trace of "
+                       f"{record['case_id']} (the newest is kept)")  # fmt: skip
+            continue
+        seen.add(record["case_id"])
+        if record["status"] == "ok":
+            case = by_id.get(record["case_id"]) or EvalCase(record["case_id"], record["question"])
+            record["failures"] = record_failures(case, record, cfg.limits)
+        write_record(out_dir, record)
+        records.append(record)
+        typer.echo(_record_line(record))
+    if not records:
+        typer.echo("Nothing imported.")
+        return
+    budget = _budget(cfg, None, None, None)
+    summary = summarize_records(records, budget)
+    write_summary(out_dir, {"run_id": run_id, "mode": "imported", "source": "langfuse",
+                            "since": first.isoformat(), "until": last.isoformat(),
+                            **summary})  # fmt: skip
+    typer.echo(_summary_line(summary))
+    _, agg = _score_and_report(cfg, out_dir, records, case_list, qrels, budget)
+    _echo_conversations(agg)
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Records and report.md: {out_dir}")

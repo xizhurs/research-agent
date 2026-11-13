@@ -352,6 +352,10 @@ def rescore(
         case = by_id.get(record["case_id"])
         if record["status"] != "ok":
             out.append(record)
+        elif case is None and record.get("mode") == "imported":
+            # A Langfuse trace no case asked for: the universal invariants only.
+            blank = EvalCase(record["case_id"], record["question"])
+            out.append({**record, "failures": record_failures(blank, record, limits)})
         elif case is None:
             out.append({**record, "failures": ["case no longer in the case file"]})
         else:

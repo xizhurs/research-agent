@@ -20,7 +20,7 @@ Layout:
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `temperature_plots.py` (temperature figures: lines and markers, not bars), `app.py` (layout only, the only module that imports Gradio).
 - `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/conversation/`: follow-up questions (see Conversation facts). `models.py` (`Session`, `TurnRecord`, `TaskState`, `EvidenceItem`), `state.py` (pure `apply_turn`), `context.py` (pure `build_context`), `store.py` (`SessionStore` protocol, `InMemorySessionStore`), `service.py` (`ConversationService`). The agent side is `agent/events.py` (`ToolEvent`, `TurnContext`).
-- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`), `judge.py` (`Judge`, `JudgeCache`, `judge_plan`, `judge_section`, calibration). `evals/conversations.toml`: multi-turn conversations (draft); `evals/judgements/`: the judge cache (committed). The judge's model adapter is `llm/anthropic_client.py` (`AnthropicJsonClient`, `JsonReply`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
+- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`), `judge.py` (`Judge`, `JudgeCache`, `judge_plan`, `judge_section`, calibration), `langfuse_import.py` (`LangfuseReader`, `fetch_traces`, `trace_record`, `case_matcher`). `evals/conversations.toml`: multi-turn conversations (draft); `evals/judgements/`: the judge cache (committed). The judge's model adapter is `llm/anthropic_client.py` (`AnthropicJsonClient`, `JsonReply`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -224,6 +224,43 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
   - Re-judging the replay folder of the same run used no calls (17 cached).
 - Not done yet: the owner's calibration (about 10 claims via `--sample 10`). Known limit: one sample per claim, and the judge is a different model family from the agent (deliberate), so its verdicts are not ground truth.
 
+Langfuse import (Phase 6, added 2026-11-13; read-only, no model call):
+- `eval import-langfuse [--since DATE] [--until DATE] [--tag eval | --all] [--limit 50] [--out DIR] [--env-file]`. It uses `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_HOST`, from the environment or `.env`, both keys added to `REDACTOR`. Tracing is not started.
+  - Defaults: the last 7 days to tomorrow, traces tagged `eval`, the newest 50.
+  - `--all` also imports real `ask`, `ui.ask` and `chat.turn` traces.
+  - Output: records, `summary.json`, `score.json` and `report.md` in `evals/runs/langfuse-<time>/`.
+  - Only the newest trace per case is kept; older duplicates are listed as skipped.
+  - Exits 0 when the import worked; check results are reported, not the exit code.
+- API facts, checked against the owner's Langfuse Cloud project (EU host) on 2026-11-13, not only the docs:
+  - Only `GET /api/public/v2/observations`, with Basic auth. The docs say the v1 trace and observation reads are served on Cloud only until **2026-11-16**, so nothing here uses them.
+  - `fromStartTime` and `toStartTime` bound every request. `limit` is at most 1000. Paging follows `meta.cursor`; `meta` is `{}` on the last page.
+  - `fields=core,basic,time,io,metadata,model,usage,metrics,trace_context`; `expandMetadata=attributes`.
+  - **Metadata keys are flat dotted strings** (`attributes.research_agent.iterations`). The docs implied nesting.
+  - `usageDetails` = `{input, output, total}`; `latency` is in seconds.
+  - **A trace's tags are on its root row only** (children have `tags: []`), so a tag filter returns roots only. That is why the import lists roots with the filter, then reads the rows from the earliest to the latest selected root (+1 h) unfiltered and keeps the selected traces. 36 traces took 3 requests. The Hobby rate limit is 30 requests a minute; 429/5xx get bounded retries with `Retry-After`.
+- Mapping (`trace_record`, pure):
+  - Root (`eval.case`, `eval.turn`, `ask`, `ui.ask`, `chat.turn`): input is the question, output the answer JSON.
+  - `invoke_agent`: the `RunStats` fields.
+  - `chat` generations: model calls (usage, latency, `allow_tools`, finish reason, reply text and tool calls). There is no request hash, so imported records are refused by `eval replay`.
+  - The tool trace is rebuilt from the reply's tool calls with the agent's own `_trace_name`.
+  - Tool rows: tool calls, matched by `gen_ai.tool.call.id`; status from `research_agent.tool.error`, and ambiguous from the error text; the `R` ID from the result text.
+  - Cited R texts come from the tool results (or `recall_evidence` blocks), and cited W title and abstract are parsed from the search or recall results. So the number check, support metric and judge work on imported answers.
+  - `prompt_hash` is the fingerprint of the first `chat` input's system message, so it matches a local run's `prompt_hash` for the same prompt.
+  - A turn's `conversation` section has id and turn (from the matched turn), relation and its source, context tokens, turns sent and parts left out (from the root's attributes), and recalled IDs from the `recall_evidence` arguments. `state` is None: the task state is not in the trace, and `check_turn` then skips the state expectations.
+- Cases:
+  - An `eval.case` is matched by its non-`eval` tag (the case ID).
+  - A turn is matched by question and `research_agent.turn` against `conversations.toml`.
+  - Anything else becomes `lf-<trace id[:12]>`, category `imported`, with the universal invariants only (`rescore` knows this).
+  - Skipped, with a reason: a non-agent root (`ui.search`, `ui.rainfall`), traces recorded with content capture off, or no root yet.
+  - A run whose agent or root span has level ERROR is recorded as failed, with its status message.
+- Verified:
+  - The imported "Compare the two." turn equals the local record of the same live run in its claims, cited texts, tool result and prompt hash, so the judge's cached verdicts (2 supported, 1 unsupported) apply to it without a call.
+  - A real import of the last 7 days: 36 eval traces in 3 requests became 26 records (10 older duplicates skipped). All pass their case checks and all 4 conversations pass (state checks skipped).
+  - The judge cache already covered 22 of the 44 imported claims.
+  - The number check flagged "For 2016–2025" in `scale-yearly-vague-amsterdam`, where the cited analysis covered the whole record. That is the known model-side wording error (see UI facts, map point), now caught on imported data.
+  - A first version used the tag filter on the row request too and imported empty runs (0 model calls). The fixture stand-in had assumed tags on every row. Both are fixed: the stand-in now fails if the row request is tag-filtered.
+- Fixture: `tests/fixtures/langfuse_observations.json` holds the raw v2 rows (all field groups) of two eval traces from the owner's project, fetched read-only with the owner's OK: `rainfall-event-zhengzhou` (2026-11-12) and `conv-amsterdam-rotterdam#3` (2026-11-13). The project ID is replaced by a placeholder, and it contains no keys (scanned).
+
 Evaluation phases (the approved plan; token figures use the measured ~6.5k tokens per single-turn case and the 20k worst case per case under the current limits; dollar amounts need prices in `[eval]`):
 
 | Phase | Status | Builds | Paid use |
@@ -233,7 +270,7 @@ Evaluation phases (the approved plan; token figures use the measured ~6.5k token
 | 3 Replay | built 2026-11-13; the 2-case live run replayed as same | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
 | 4 Multi-turn and fixed vs agentic | 4a (fixed vs agentic, `eval compare`) built 2026-11-13, not run live; 4b (conversations) built 2026-11-13; first live run 2026-11-13 (9 turns, 8/9, then 9/9 after a state fix) | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
 | 5 LLM judge (optional) | built 2026-11-13 with Claude Haiku 5.5 (owner's choice); the two live runs judged | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
-| 6 Langfuse import | planned | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
+| 6 Langfuse import | built 2026-11-13 on the v2 observations API, checked against the owner's project (26 eval traces imported) | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
 
 What offline scoring (phases 1-3) can and cannot judge: it can judge tool choice, arguments and errors as recorded, trajectories, retrieval against labels, key-point coverage, citation and number faithfulness, and the recorded tokens, latency and cost, plus (replay) whether changed code still gives the same answer from the same model replies. It cannot judge what the model would do with a changed prompt, tool description, model or budget, run-to-run variance, current latency or fresh OpenAlex results: those need `eval run --live`. Planned directories: `evals/baselines/<name>/` (promoted, committed records), `evals/judgements/` (committed judge cache), `evals/qrels.toml`, `evals/conversations.toml`.
 
@@ -499,6 +536,7 @@ uv run research-agent eval run --mode fixed            # plan for the fixed-sear
 uv run research-agent eval compare <run-a> <run-b>     # free: paired per-case differences
 uv run research-agent eval run --suite conversations   # plan for the multi-turn conversations
 uv run --extra judge research-agent eval judge <run>   # plan; --live judges claims (Claude Haiku 5.5)
+uv run research-agent eval import-langfuse             # free, network: Langfuse traces as run records
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 

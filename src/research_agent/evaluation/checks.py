@@ -188,7 +188,9 @@ def check_turn(expect: TurnExpect, record: dict[str, Any]) -> list[str]:
         failures.append(
             f"ran {analyses} new analysis(es) (turn limit {expect.max_new_analyses})"
         )
-    state = info.get("state") or {}
+    state = info.get("state")
+    if state is None:  # not recorded (an imported trace): state expectations are not judged
+        return failures
     places = state.get("places", [])
     for want in expect.expect_places:
         if not any(want in place.lower() for place in places):
