@@ -168,7 +168,7 @@ def patch_agent(monkeypatch, agent):
     from contextlib import contextmanager
 
     @contextmanager
-    def fake_open(cfg, creds):
+    def fake_open(cfg, creds, **overrides):
         yield agent
 
     monkeypatch.setattr("research_agent.cli._open_agent", fake_open)
@@ -188,7 +188,10 @@ def eval_args(tmp_path, *extra):
     env = tmp_path / ".env"
     env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef" + NL, encoding="utf-8")
     cases = two_case_file(tmp_path)
-    return ["eval", "--cases", str(cases), "--config", str(BASE), "--env-file", str(env), *extra]
+    return [
+        "eval", "run", "--live", "--yes", "--out", str(tmp_path / "run"), "--cases", str(cases),
+        "--config", str(BASE), "--env-file", str(env), *extra,
+    ]
 
 
 def test_eval_all_pass_exit_zero(monkeypatch, tmp_path, make_work):
@@ -238,7 +241,7 @@ def test_eval_bad_case_file_exits_nonzero(tmp_path):
     env = tmp_path / ".env"
     env.write_text("OPENAI_API_KEY=sk-test-0123456789abcdef" + NL, encoding="utf-8")
     missing = tmp_path / "nope.toml"
-    args = ["eval", "--cases", str(missing), "--config", str(BASE), "--env-file", str(env)]
+    args = ["eval", "run", "--cases", str(missing), "--config", str(BASE), "--env-file", str(env)]
     result = runner.invoke(app, args)
     assert result.exit_code == 1
     assert "not found" in result.output
@@ -247,7 +250,8 @@ def test_eval_bad_case_file_exits_nonzero(tmp_path):
 def test_eval_without_openai_key_exits_nonzero(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     args = [
-        "eval", "--cases", str(two_case_file(tmp_path)), "--config", str(BASE),
+        "eval", "run", "--live", "--yes", "--cases", str(two_case_file(tmp_path)),
+        "--config", str(BASE),
         "--env-file", str(tmp_path / "absent"),
     ]
     result = runner.invoke(app, args)

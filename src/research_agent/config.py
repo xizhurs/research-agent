@@ -255,6 +255,35 @@ class ConversationConfig:
 
 
 @dataclass(frozen=True)
+class EvalConfig:
+    """Evaluation runs: where records go, the frozen tool cache, and the paid-run budget.
+
+    A price of 0 means unknown (cost is then not estimated); ``max_cost_usd`` 0 means no cost cap.
+    """
+
+    runs_dir: Path  # one folder of run records per evaluation run
+    tool_cache_dir: Path  # OpenAlex / Open-Meteo / RONI responses kept for reproducible runs
+    max_model_calls: int  # per evaluation run, across all cases
+    max_total_tokens: int  # per evaluation run, across all cases
+    max_cost_usd: float
+    price_input_per_mtok: float  # USD per million input tokens of the agent's model
+    price_output_per_mtok: float
+
+    def __post_init__(self) -> None:
+        for name in ("runs_dir", "tool_cache_dir"):
+            if not isinstance(getattr(self, name), Path):
+                object.__setattr__(self, name, Path(getattr(self, name)))
+        for name in ("max_model_calls", "max_total_tokens"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(f"eval.{name} must be a positive integer, got {value!r}")
+        for name in ("max_cost_usd", "price_input_per_mtok", "price_output_per_mtok"):
+            value = getattr(self, name)
+            if not _is_number(value) or value < 0:
+                raise ConfigError(f"eval.{name} must be a number >= 0, got {value!r}")
+
+
+@dataclass(frozen=True)
 class Config:
     limits: Limits
     openalex: OpenAlexConfig
@@ -263,6 +292,7 @@ class Config:
     rainfall: RainfallConfig
     enso: EnsoConfig
     conversation: ConversationConfig
+    eval: EvalConfig
 
 
 def _build_section[T](cls: type[T], raw: dict[str, Any], section: str, path: Path) -> T:
@@ -297,4 +327,5 @@ def load_config(path: Path) -> Config:
         rainfall=_build_section(RainfallConfig, raw, "rainfall", path),
         enso=_build_section(EnsoConfig, raw, "enso", path),
         conversation=_build_section(ConversationConfig, raw, "conversation", path),
+        eval=_build_section(EvalConfig, raw, "eval", path),
     )

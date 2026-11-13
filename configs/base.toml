@@ -93,3 +93,16 @@ max_stored_evidence = 50
 max_recall_per_call = 5
 max_sessions = 100
 session_ttl_minutes = 120
+
+# Evaluation (research-agent eval ...). Only `eval run --live` calls the model; it stops when the
+# run would exceed max_model_calls, max_total_tokens or (if > 0) max_cost_usd, across all cases.
+# Prices are USD per million tokens for the agent's model; 0 = unknown, so cost is not estimated
+# and max_cost_usd cannot be used. Fill them in from your provider's price list.
+[eval]
+runs_dir = "evals/runs"
+tool_cache_dir = "evals/tool_cache"
+max_model_calls = 200
+max_total_tokens = 300000
+max_cost_usd = 0
+price_input_per_mtok = 0
+price_output_per_mtok = 0

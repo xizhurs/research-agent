@@ -81,6 +81,15 @@ geocode_candidates = 10
 dominance_ratio = 10.0
 same_place_km = 25.0
 dry_day_mm = 1.0
+
+[eval]
+runs_dir = "evals/runs"
+tool_cache_dir = "evals/tool_cache"
+max_model_calls = 200
+max_total_tokens = 300000
+max_cost_usd = 0
+price_input_per_mtok = 0
+price_output_per_mtok = 0
 """
 
 
@@ -269,7 +278,8 @@ def test_missing_rainfall_table(tmp_path):
 
 def test_unknown_rainfall_key(tmp_path):
     with pytest.raises(ConfigError, match="unknown rainfall keys"):
-        load_config(write(tmp_path, VALID + "bogus = 1\n"))
+        text = VALID.replace("dry_day_mm = 1.0", "dry_day_mm = 1.0\nbogus = 1")
+        load_config(write(tmp_path, text))
 
 
 def test_base_config_enso_section():
@@ -322,3 +332,25 @@ def test_unknown_enso_key(tmp_path):
 def test_missing_max_rainfall_calls(tmp_path):
     with pytest.raises(ConfigError, match="max_rainfall_calls"):
         load_config(write(tmp_path, VALID.replace("max_rainfall_calls = 3\n", "")))
+
+
+def test_base_config_eval_section():
+    cfg = load_config(BASE)
+    assert cfg.eval.runs_dir == Path("evals/runs")
+    assert cfg.eval.tool_cache_dir == Path("evals/tool_cache")
+    assert (cfg.eval.max_model_calls, cfg.eval.max_total_tokens) == (200, 300000)
+    assert cfg.eval.price_input_per_mtok == 0  # unknown until the owner fills it in
+
+
+@pytest.mark.parametrize(
+    "old, new, name",
+    [
+        ("max_model_calls = 200", "max_model_calls = 0", "max_model_calls"),
+        ("max_total_tokens = 300000", "max_total_tokens = -1", "max_total_tokens"),
+        ("max_cost_usd = 0", "max_cost_usd = -0.5", "max_cost_usd"),
+        ("price_input_per_mtok = 0", 'price_input_per_mtok = "x"', "price_input_per_mtok"),
+    ],
+)
+def test_invalid_eval_values_rejected(tmp_path, old, new, name):
+    with pytest.raises(ConfigError, match=f"eval.{name}"):
+        load_config(write(tmp_path, VALID.replace(old, new)))

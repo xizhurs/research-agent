@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import TextIO
 
+import httpx
 import typer
 
 from research_agent.agent import AgentResult, InvalidQuestionError, ResearchAgent
@@ -30,8 +31,21 @@ from research_agent.credentials import (
     read_env,
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
-from research_agent.evaluation import EvalError, load_cases, run_case, summarize
-from research_agent.llm import LLMAuthError, LLMError, OpenAIClient
+from research_agent.evaluation import (
+    EvalCase,
+    EvalError,
+    RecordingLLMClient,
+    RunBudget,
+    load_cases,
+    read_records,
+    rescore,
+    run_cases,
+    select_cases,
+    summarize_records,
+    write_summary,
+)
+from research_agent.evaluation.runner import fingerprint, git_commit
+from research_agent.llm import LLMAuthError, LLMClient, LLMError, OpenAIClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
@@ -396,15 +410,30 @@ def check_credentials(
 
 
 @contextmanager
-def _open_agent(cfg: Config, creds: Credentials) -> Iterator[ResearchAgent]:
-    """Build the real clients and yield an agent. Patched out in CLI tests."""
+def _open_agent(
+    cfg: Config,
+    creds: Credentials,
+    *,
+    wrap_llm: Callable[[LLMClient], LLMClient] | None = None,
+    http_client: httpx.Client | None = None,
+) -> Iterator[ResearchAgent]:
+    """Build the real clients and yield an agent. Patched out in CLI tests.
+
+    ``wrap_llm`` wraps the model client (evaluation recording and budget); ``http_client`` is
+    used by every tool client (evaluation with a frozen tool cache: no network).
+    """
     key = creds.openalex_api_key
-    llm = OpenAIClient.from_credentials(cfg.llm, creds)
+    llm: LLMClient = OpenAIClient.from_credentials(cfg.llm, creds)
+    if wrap_llm is not None:
+        llm = wrap_llm(llm)
+    api_key = key.reveal() if key else None
     with (
-        OpenAlexClient(cfg.openalex, cfg.limits, api_key=key.reveal() if key else None) as search,
-        RainfallClient(cfg.rainfall) as rain,
-        TemperatureClient(cfg.rainfall) as temp,
-        EnsoClient(cfg.enso) as enso_client,
+        OpenAlexClient(
+            cfg.openalex, cfg.limits, api_key=api_key, http_client=http_client
+        ) as search,
+        RainfallClient(cfg.rainfall, http_client=http_client) as rain,
+        TemperatureClient(cfg.rainfall, http_client=http_client) as temp,
+        EnsoClient(cfg.enso, http_client=http_client) as enso_client,
     ):
         yield ResearchAgent(
             llm,
@@ -583,73 +612,260 @@ def chat(
 
 
 DEFAULT_CASES = Path("evals/cases.toml")
+FROZEN_TTL_DAYS = 36500.0  # the evaluation tool cache never expires; delete it to refresh
+
+eval_app = typer.Typer(
+    help="Evaluation: list cases, run them (paid, only with --live), score stored runs (free).",
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    pretty_exceptions_show_locals=False,
+)
+app.add_typer(eval_app, name="eval")
+
+CASES_OPTION = typer.Option(DEFAULT_CASES, "--cases", help="TOML file with evaluation cases.")
+ONLY_OPTION = typer.Option([], "--only", help="Only this case id (repeatable; any split).")
+SPLIT_OPTION = typer.Option("dev", "--split", help="'dev', 'test' (held out) or 'all'.")
+CATEGORY_OPTION = typer.Option(None, "--category", help="e.g. literature, rainfall, enso.")
 
 
-@app.command("eval")
-def evaluate(
-    cases: Path = typer.Option(DEFAULT_CASES, "--cases", help="TOML file with evaluation cases."),
-    only: list[str] = typer.Option(
-        [], "--only", help="Run only this case id (repeatable). Default: all cases."
+def _cases_or_exit(
+    path: Path, only: list[str], split: str, category: str | None
+) -> list[EvalCase]:
+    if split not in ("dev", "test", "all"):
+        typer.echo("error: --split must be 'dev', 'test' or 'all'", err=True)
+        raise typer.Exit(code=1)
+    try:
+        return select_cases(
+            load_cases(path),
+            only=only,
+            split=None if split == "all" else split,
+            category=category,
+        )
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _budget(cfg: Config, calls: int | None, tokens: int | None, cost: float | None) -> RunBudget:
+    e = cfg.eval
+    return RunBudget(
+        max_calls=calls or e.max_model_calls,
+        max_tokens=tokens or e.max_total_tokens,
+        max_cost_usd=e.max_cost_usd if cost is None else cost,
+        price_input_per_mtok=e.price_input_per_mtok,
+        price_output_per_mtok=e.price_output_per_mtok,
+    )
+
+
+def _eval_tool_config(cfg: Config, frozen: bool) -> Config:
+    """Tool caches in the evaluation folder that never expire; ``frozen``: no retries either
+    (no network is used, so a miss fails at once)."""
+    root = cfg.eval.tool_cache_dir
+    retries = {"max_retries": 0} if frozen else {}
+    return replace(
+        cfg,
+        openalex=replace(
+            cfg.openalex, cache_dir=root / "openalex", cache_ttl_days=FROZEN_TTL_DAYS, **retries
+        ),
+        rainfall=replace(
+            cfg.rainfall, cache_dir=root / "open-meteo", cache_ttl_days=FROZEN_TTL_DAYS, **retries
+        ),
+        enso=replace(cfg.enso, cache_dir=root / "enso", cache_ttl_days=FROZEN_TTL_DAYS, **retries),
+    )
+
+
+def _refuse_network(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError(
+        "frozen tool cache: this response is not cached and the network is off", request=request
+    )
+
+
+def _record_line(record: dict) -> str:
+    status = record["status"]
+    label = {"ok": "PASS" if not record["failures"] else "FAIL"}.get(status, status.upper())
+    if record["stats"]:
+        st = record["stats"]
+        trace = format_trace(tuple(tuple(t) for t in st["tool_trace"]))
+        detail = (
+            f"turns={st['iterations']} searches={st['search_calls']} "
+            f"analyses={st['rainfall_calls']} tokens={st['total_tokens']} "
+            f"time={record['wall_seconds']}s tools=[{trace}] "
+            f"rejected_citations={len(record['answer']['rejected_citations'])}"
+        )
+    else:
+        detail = record["error"] or ""
+    lines = [f"[{label}] {record['case_id']}  {detail}"]
+    lines += [f"    - {f}" for f in record["failures"]]
+    return "\n".join(lines)
+
+
+def _summary_line(summary: dict) -> str:
+    cost = summary["estimated_cost_usd"]
+    money = f"~${cost:.4f}" if cost is not None else "cost unknown (no prices in [eval])"
+    not_run = summary["run_failed"] + summary["aborted"] + summary["skipped"]
+    return (
+        f"Summary: {summary['passed']}/{summary['cases']} passed | "
+        f"{summary['failed_checks']} failed checks, {not_run} not completed "
+        f"({summary['aborted']} aborted, {summary['skipped']} skipped by the budget) | "
+        f"{summary['model_calls']} model calls, "
+        f"{summary['input_tokens'] + summary['output_tokens']} tokens, {money} | "
+        f"{summary['searches']} searches | {summary['data_analyses']} data analyses | "
+        f"{summary['rejected_citations']} rejected citation(s) | "
+        f"{summary['unstructured']} unstructured answer(s)"
+    )
+
+
+@eval_app.command("list")
+def eval_list(
+    cases: Path = CASES_OPTION,
+    only: list[str] = ONLY_OPTION,
+    split: str = typer.Option("all", "--split", help="'dev', 'test' (held out) or 'all'."),
+    category: str | None = CATEGORY_OPTION,
+) -> None:
+    """List evaluation cases (free: nothing is run)."""
+    selected = _cases_or_exit(cases, only, split, category)
+    for c in selected:
+        typer.echo(f"{c.id:40} {c.split:4} {c.category or '-':11} {c.question[:70]}")
+    typer.echo(f"{len(selected)} case(s)")
+
+
+@eval_app.command("run")
+def eval_run(
+    cases: Path = CASES_OPTION,
+    only: list[str] = ONLY_OPTION,
+    split: str = SPLIT_OPTION,
+    category: str | None = CATEGORY_OPTION,
+    live: bool = typer.Option(
+        False, "--live", help="Really run: calls the model (costs tokens). Without it: plan only."
     ),
+    yes: bool = typer.Option(False, "--yes", help="Do not ask for confirmation (scripts)."),
+    frozen_tools: bool = typer.Option(
+        False, "--frozen-tools", help="Tools answer only from the evaluation cache (no network)."
+    ),
+    max_calls: int | None = typer.Option(None, "--max-calls", min=1, help="Model-call cap."),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Token cap."),
+    max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="USD cap."),
+    out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Run the evaluation cases with the real model and OpenAlex (costs tokens and searches).
+    """Run cases with the real model within a run budget; one record per case is written.
 
-    Exits non-zero if any case fails.
+    Without --live only the plan is printed (cases, worst-case tokens, budget): nothing is
+    called. Exits non-zero if any case fails, is aborted or is skipped.
     """
     cfg = _load_or_exit(config)
+    selected = _cases_or_exit(cases, only, split, category)
+    if not selected:
+        typer.echo("error: no case matches the selection", err=True)
+        raise typer.Exit(code=1)
+    budget = _budget(cfg, max_calls, max_tokens, max_cost)
+    if budget.max_cost_usd > 0 and not budget.priced:
+        typer.echo("error: a cost cap needs prices in [eval] (price_*_per_mtok)", err=True)
+        raise typer.Exit(code=1)
+
+    worst = len(selected) * cfg.limits.max_total_tokens
+    typer.echo(f"Plan: {len(selected)} case(s): {', '.join(c.id for c in selected)}")
+    typer.echo(
+        f"Worst case {worst:,} tokens ({len(selected)} x limits.max_total_tokens "
+        f"{cfg.limits.max_total_tokens:,}); run budget {budget.max_calls} model calls, "
+        f"{budget.max_tokens:,} tokens"
+        + (f", ${budget.max_cost_usd:.2f}" if budget.max_cost_usd else "")
+        + "."
+    )
+    if budget.priced:
+        typer.echo(f"Worst-case cost at the configured prices: ~${budget.cost(worst, 0):.2f}.")
+    typer.echo(f"Tools: {'frozen cache, no network' if frozen_tools else 'evaluation cache'}.")
+    if not live:
+        typer.echo("Plan only: nothing was run. Add --live to run it (calls the model).")
+        return
+
     creds = _credentials_or_exit(env_file)
     _tracing_or_exit(env_file)
     try:
-        selected = load_cases(cases)
-    except EvalError as exc:
+        creds.require_openai_key()
+    except CredentialError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    if only:
-        unknown = sorted(set(only) - {c.id for c in selected})
-        if unknown:
-            typer.echo(f"error: unknown case id(s): {', '.join(unknown)}", err=True)
-            raise typer.Exit(code=1)
-        selected = [c for c in selected if c.id in only]
+    if not yes and not typer.confirm("Run these cases with the real model?"):
+        typer.echo("cancelled: nothing was run", err=True)
+        raise typer.Exit(code=1)
 
-    reports = []
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = out or cfg.eval.runs_dir / run_id
+    meta = {
+        "mode": "agentic",
+        "git_commit": git_commit(),
+        "model": cfg.llm.model,
+        "config_hash": fingerprint(asdict(cfg)),
+    }
+    recorder = RecordingLLMClient(None, budget)
+
+    def wrap(llm: LLMClient) -> LLMClient:
+        recorder.inner = llm
+        return recorder
+
+    http = httpx.Client(transport=httpx.MockTransport(_refuse_network)) if frozen_tools else None
     try:
-        creds.require_openai_key()
-        with _open_agent(cfg, creds) as agent:
-            for case in selected:
+        with _open_agent(
+            _eval_tool_config(cfg, frozen_tools), creds, wrap_llm=wrap, http_client=http
+        ) as agent:
+
+            def run_one(case: EvalCase) -> AgentResult:
                 with observe("eval.case", "span", tags=("eval", case.id)) as span:
                     set_content(span, input=case.question)
-                    report = run_case(agent, case, cfg.limits)
-                    span.set_attribute("research_agent.eval.passed", report.passed)
-                    if report.result:
-                        set_content(span, output=answer_json(report.result.answer))
-                reports.append(report)
-                if report.result:
-                    st = report.result.stats
-                    detail = (
-                        f"turns={st.iterations} searches={st.search_calls} "
-                        f"rainfall={st.rainfall_calls} tokens={st.total_tokens}"
-                        f" tools=[{format_trace(st.tool_trace)}]"
-                        f" rejected_citations={report.rejected_citations}"
-                    )
-                else:
-                    detail = "run failed"
-                typer.echo(f"[{'PASS' if report.passed else 'FAIL'}] {case.id}  {detail}")
-                for failure in report.failures:
-                    typer.echo(f"    - {failure}")
+                    result = agent.run(case.question)
+                    set_content(span, output=answer_json(result.answer))
+                    return result
+
+            records = run_cases(
+                selected,
+                run_one,
+                recorder,
+                cfg.limits,
+                out_dir=out_dir,
+                run_id=run_id,
+                meta=meta,
+                on_record=lambda record: typer.echo(_record_line(record)),
+            )
     except (CredentialError, LLMError, RetrievalError) as exc:
+        typer.echo(f"error: {exc} (records so far are in {out_dir})", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if http is not None:
+            http.close()
+
+    summary = summarize_records(records, budget)
+    write_summary(out_dir, {"run_id": run_id, **meta, **summary})
+    typer.echo(_summary_line(summary))
+    typer.echo(f"Records: {out_dir}")
+    if summary["passed"] != summary["cases"]:
+        raise typer.Exit(code=1)
+
+
+@eval_app.command("score")
+def eval_score(
+    run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
+    cases: Path = CASES_OPTION,
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Score stored run records again with the current cases and checks (free, offline)."""
+    cfg = _load_or_exit(config)
+    try:
+        records = read_records(run_dir)
+        case_list = load_cases(cases)
+    except (FileNotFoundError, EvalError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-
-    total = summarize(reports)
-    typer.echo(
-        f"Summary: {total.passed}/{total.total} passed | {total.total_tokens} tokens | "
-        f"{total.searches} searches | {total.rainfall_calls} rainfall analyses | "
-        f"{total.rejected_citations} rejected citation(s) | "
-        f"{total.unstructured} unstructured answer(s)"
-    )
-    if total.passed != total.total:
+    if not records:
+        typer.echo(f"error: no run records in {run_dir}", err=True)
+        raise typer.Exit(code=1)
+    rescored = rescore(records, case_list, cfg.limits)
+    for record in rescored:
+        typer.echo(_record_line(record))
+    summary = summarize_records(rescored, _budget(cfg, None, None, None))
+    typer.echo(_summary_line(summary))
+    if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)
