@@ -204,11 +204,18 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
   - Each evidence claim is rated supported, partial or unsupported, only against the texts it cites (R analysis text, or W title and abstract), with a short reason.
   - Up to 10 claims per call (`MAX_CLAIMS_PER_CALL`), with each cited text sent once (S1, S2...).
   - Claims and sources are HTML-escaped inside `<source>`/`<claim>` elements, and the instructions say they are data.
-  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points`. None are approved yet.
+  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points`.
+    - The key-point rubric has its own `KEY_POINT_RUBRIC_VERSION` (3 since 2026-11-13, reason-first). Version 2 had been left verdict-first by mistake. It rated "wettest years 2023 and 2024" in `conv-amsterdam-rotterdam#3` as partial and contradicted, while its own reason said the claims matched (they do). Only key points were re-judged; the other rubrics stay at `RUBRIC_VERSION` 2.
+    - The owner approved the 10 data cases on 2026-11-13; `crop-type-dl` and `flood-sar` stay draft.
+    - First key-point results (version 3, the two live runs; only 2 approved cases have records there):
+      - `conv-amsterdam-rotterdam#3`: 3 covered, 1 missing and contradicted (the 2017 / 41.7 mm difference; the answer said 2021). All 4 are correct.
+      - `rainfall-event-zhengzhou`: 1 covered, 2 partial, 1 missing. One partial is the August 2021 maximum the answer omitted; the missing one is the station context. The other partial is the 79.0 mm point, because the answer omits the grid-cell coordinates the point's text includes. That is an over-specific key point (the coordinates are incidental), worth editing.
+    - The report's case line "key points covered: N of M" is the free word-match metric (any term in a cited claim). It can be more generous than the judge, e.g. it credited the 1955/August point because "213.9" appears.
+    - The other 8 approved cases have records only in the Langfuse import folder.
   - Reviewed key points live in `evals/key_points.toml` (added 2026-11-13), next to the case files, keyed by case or turn ID (`"conv-amsterdam-rotterdam#3"`):
     - Each entry has `status` "draft" or "approved", an optional `min_key_points`, and `[[id.point]]` tables with `text`, `any_terms` and `source`.
     - `load_cases` and `load_conversations` attach only **approved** entries (`load_key_points`, `apply_key_points`). A draft is validated but never used. Defining key points in both a case file and this file is an error.
-    - Holds 12 draft cases (48 points) written by the assistant for the owner to review. Data points come from tool outputs stored in the run records (ERA5 via Open-Meteo; RONI via `research-agent enso --year 2010`), each with its source. Literature points (`crop-type-dl`, `flood-sar`) and two station figures (Zhengzhou about 200 mm in an hour; Paris-Montsouris 42.6 °C) are domain knowledge, marked "verify".
+    - Holds 12 cases (48 points) written by the assistant: 10 data cases approved by the owner, 2 literature cases still draft. Data points come from tool outputs stored in the run records (ERA5 via Open-Meteo; RONI via `research-agent enso --year 2010`), each with its source. Literature points (`crop-type-dl`, `flood-sar`) and two station figures (Zhengzhou about 200 mm in an hour; Paris-Montsouris 42.6 °C) are domain knowledge, marked "verify".
     - The drafts surfaced a data fact: in ERA5, Zhengzhou's 2021 maximum day was 22 August (170.1 mm), not 20 July (79.0 mm).
   - Interpretations (added 2026-11-13, owner's request; `INTERPRETATION_SYSTEM`):
     - Each `interpretation` claim is rated **within** (follows from its sources, or is clearly tentative), **stretch** (somewhat beyond them: wider scope, a causal reading, a trend, more certainty, without contradicting them) or **overreach** (not supported or contradicted, or speculation stated as fact).

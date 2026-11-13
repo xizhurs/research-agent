@@ -273,6 +273,13 @@ def test_key_points_are_judged_only_when_the_case_has_them(tmp_path):
     assert judge.stats.key_point_sets == 1 and len(stub.calls) == 2
     section = judge_section(make_record(), case, MODEL, judge.cache)
     assert [p["coverage"] for p in section["key_points"]] == ["covered", "missing"]
+    # key-point rubric 3: reason before the verdicts (2 had them first and contradicted itself)
+    item = stub.calls[1]["schema"]["properties"]["points"]["items"]
+    assert list(item["properties"]) == ["n", "reason", "coverage", "consistency"]
+    entries = [json.loads(f.read_text(encoding="utf-8"))
+               for f in (tmp_path / "judgements").rglob("*.json")]  # fmt: skip
+    assert {e["kind"]: e["rubric"] for e in entries}["key_points"] == 3
+    assert {e["kind"]: e["rubric"] for e in entries}["claim_support"] == 2
     no_points, stub2 = judge_with(tmp_path)
     no_points.judge_record(make_record(), EvalCase("c", "Q?"))
     assert stub2.calls == []

@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1298,
+  "items": 4,
+  "output_tokens": 354
+ },
+ "judged_on": "2026-11-13",
+ "key": "a909ac2cf70b4c319d90fdda0c7afc8c7bd007f3869a856afba7872cf78fa3b5",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims say wettest year 2023 and second-wettest 2024 for both, with matching totals 1100.7 and 1078.3 for 2023; 2024 totals 1042.6 and 1059.3 match.",
+   "text": "Both cities' wettest years in 2016-2025 were 2023 and 2024 (Amsterdam 1100.7 and 1042.6 mm; Rotterdam 1078.3 and 1059.3 mm)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims state driest year 2025 for both, with totals 649.7 mm (Amsterdam) and 626.9 mm (Rotterdam) matching the key point.",
+   "text": "Both cities' driest year of the period was 2025 (Amsterdam 649.7 mm, Rotterdam 626.9 mm)."
+  },
+  {
+   "consistency": "contradicted",
+   "coverage": "missing",
+   "reason": "Claims say the largest difference was in 2021 (Rotterdam 908.7, Amsterdam 882.2), contradicting the key point's claim of 2017.",
+   "text": "The largest annual difference between the cities was in 2017: Amsterdam 819.2 mm against Rotterdam 777.5 mm, 41.7 mm."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims give baseline means of 777.4 mm for Amsterdam and 772.3 mm for Rotterdam, exactly matching the key point.",
+   "text": "Their 1991-2020 baselines are close: mean annual totals 777.4 mm (Amsterdam) and 772.3 mm (Rotterdam)."
+  }
+ ],
+ "rubric": 3
+}

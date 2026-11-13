@@ -3,7 +3,8 @@
 # missing and consistent / contradicted / not_addressed): the correctness and completeness
 # check, with the reference written or approved by the owner, never generated per run.
 #
-# ALL ENTRIES BELOW ARE DRAFTS written by the assistant on 2026-11-13 for the owner to review.
+# Written by the assistant on 2026-11-13. The owner approved the 10 data cases the same day;
+# crop-type-dl and flood-sar (domain knowledge) are still DRAFTS awaiting review.
 # A draft is read and validated but NOT used. To use one: check each point and its source,
 # edit or delete points, then set status = "approved". Optional min_key_points = N makes the
 # case fail when fewer than N points are covered (default 0: coverage is only reported).
@@ -18,7 +19,7 @@
 # --- extreme rainfall -----------------------------------------------------------------------
 
 ["rainfall-event-zhengzhou"]
-status = "draft"
+status = "approved"
 
 [["rainfall-event-zhengzhou".point]]
 text = "ERA5 gives 79.0 mm for 20 July 2021 at the Zhengzhou grid cell (34.75, 113.75)."
@@ -41,7 +42,7 @@ any_terms = ["station", "gauge", "understate", "smooth"]
 source = "First half: R1 caveat. Station figures: domain knowledge (assistant; widely reported as 201.9 mm in one hour on 20 July 2021). Verify before approving."
 
 ["scale-monthly-zhengzhou"]
-status = "draft"
+status = "approved"
 
 [["scale-monthly-zhengzhou".point]]
 text = "ERA5 July 2021 total at Zhengzhou: 286.2 mm."
@@ -64,7 +65,7 @@ any_terms = ["567.9", "551.6", "1958", "1957"]
 source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
 
 ["scale-yearly-vague-amsterdam"]
-status = "draft"
+status = "approved"
 
 [["scale-yearly-vague-amsterdam".point]]
 text = "The answer covers the last 10 years (2016-2025), as asked, not the whole 1950-2025 record."
@@ -89,7 +90,7 @@ source = "R1/R2 analysis texts"
 # --- dry conditions -------------------------------------------------------------------------
 
 ["dry-year-madrid"]
-status = "draft"
+status = "approved"
 
 [["dry-year-madrid".point]]
 text = "In ERA5, 2022 was not a dry year by annual total in Madrid: 460.9 mm, 1.16 times the 1991-2020 mean (395.6 mm), rank 47 of 76 (1 = driest)."
@@ -114,7 +115,7 @@ source = "R1 caveat"
 # --- temperature ----------------------------------------------------------------------------
 
 ["temperature-hot-day-paris"]
-status = "draft"
+status = "approved"
 
 [["temperature-hot-day-paris".point]]
 text = "ERA5 daily maximum on 25 July 2019 at the Paris grid cell: 41.4 degrees C, the hottest of 27,759 days in 1950-2025."
@@ -137,7 +138,7 @@ any_terms = ["42.6", "station"]
 source = "Smoothing: R1 caveat. 42.6 degrees C: domain knowledge (assistant; Meteo-France record of 25 July 2019, also noted in CLAUDE.md). Verify before approving."
 
 ["temperature-yearly-madrid"]
-status = "draft"
+status = "approved"
 
 [["temperature-yearly-madrid".point]]
 text = "ERA5 2024 annual mean in Madrid: 15.7 degrees C, rank 4 of 76 (95% of years were cooler)."
@@ -160,7 +161,7 @@ any_terms = ["trend"]
 source = "R1 caveat"
 
 ["temperature-cold-moscow"]
-status = "draft"
+status = "approved"
 
 [["temperature-cold-moscow".point]]
 text = "The coldest ERA5 daily minimum since 1950 at the Moscow grid cell was -41.5 degrees C on 31 December 1978."
@@ -185,7 +186,7 @@ source = "R1 analysis text"
 # --- ambiguity --------------------------------------------------------------------------------
 
 ["rainfall-ambiguous-city"]
-status = "draft"
+status = "approved"
 
 [["rainfall-ambiguous-city".point]]
 text = "The place is ambiguous: at least ten places are called Springfield and none clearly dominates."
@@ -205,7 +206,7 @@ source = "Tool instruction (do not guess)"
 # --- conversation ---------------------------------------------------------------------------
 
 ["conv-amsterdam-rotterdam#3"]
-status = "draft"
+status = "approved"
 
 [["conv-amsterdam-rotterdam#3".point]]
 text = "Both cities' wettest years in 2016-2025 were 2023 and 2024 (Amsterdam 1100.7 and 1042.6 mm; Rotterdam 1078.3 and 1059.3 mm)."
@@ -230,7 +231,7 @@ source = "R2, R3"
 # --- ENSO -------------------------------------------------------------------------------------
 
 ["enso-year-2010"]
-status = "draft"
+status = "approved"
 
 [["enso-year-2010".point]]
 text = "2010 had both phases: a strong El Nino (ASO 2009 to FMA 2010, peak +1.50 in NDJ 2009) ended early in the year."

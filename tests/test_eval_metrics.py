@@ -376,12 +376,16 @@ def test_key_points_may_not_be_defined_twice(tmp_path):
         load_cases(write(tmp_path, inline))
 
 
-def test_shipped_key_point_drafts_are_valid_and_unused():
+def test_shipped_key_points_attach_only_the_approved_cases():
     import tomllib
 
     raw = tomllib.loads((ROOT_EVALS / "key_points.toml").read_text(encoding="utf-8"))
-    assert {v["status"] for v in raw.values()} == {"draft"}  # all await the owner's review
+    drafts = {k for k, v in raw.items() if v["status"] == "draft"}
+    approved = {k for k, v in raw.items() if v["status"] == "approved"}
+    # The owner approved the 10 data cases on 2026-11-13; the literature cases await review.
+    assert drafts == {"crop-type-dl", "flood-sar"} and len(approved) == 10
     cases = load_cases(ROOT_EVALS / "cases.toml")
     turns = [t for c in load_conversations(ROOT_EVALS / "conversations.toml") for t in c.turns]
     assert set(raw) <= {c.id for c in cases} | {t.id for t in turns}
-    assert not any(c.key_points for c in [*cases, *turns])
+    attached = {c.id for c in [*cases, *turns] if c.key_points}
+    assert attached == approved  # drafts are never attached
