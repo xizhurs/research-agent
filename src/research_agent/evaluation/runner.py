@@ -7,7 +7,6 @@ works' text and analyses, the stats and the failures), so ``eval score`` never r
 
 from __future__ import annotations
 
-import hashlib
 import json
 import statistics
 import subprocess
@@ -22,12 +21,19 @@ from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.config import Limits
 from research_agent.evaluation.cases import EvalCase
 from research_agent.evaluation.checks import answer_dict, check_record, check_result, stats_dict
-from research_agent.evaluation.recording import EvalBudgetExceeded, RecordingLLMClient, RunBudget
+from research_agent.evaluation.recording import (
+    EvalBudgetExceeded,
+    RecordingLLMClient,
+    RunBudget,
+    fingerprint,
+)
+from research_agent.evaluation.replay import ReplayDiverged
 from research_agent.llm import LLMAuthError, LLMError
 from research_agent.retrieval import AuthError, RetrievalError
 
 SCHEMA_VERSION = 1
-STATUSES = ("ok", "failed", "aborted", "skipped")  # failed: the run failed; aborted: budget
+STATUSES = ("ok", "failed", "aborted", "skipped", "diverged")
+# failed: the run failed; aborted/skipped: the run budget; diverged: a replay request differed
 
 
 class EvalAgent(Protocol):
@@ -103,11 +109,6 @@ def git_commit(cwd: Path | None = None) -> str | None:
     return out.stdout.strip() or None if out.returncode == 0 else None
 
 
-def fingerprint(value: Any) -> str:
-    text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
 def _tool_calls(log_calls: list[dict], tool_results: dict[str, str], events) -> list[dict]:
     """Every tool call that ran, with the result text the model saw and its recorded outcome.
 
@@ -161,6 +162,7 @@ def build_record(
         "config_hash": meta.get("config_hash"),
         "prompt_hash": fingerprint(instructions) if instructions else None,
         "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "today": meta.get("today"),  # the date the tools and the agent used (replay pins it)
         "status": status,
         "error": error,
         "wall_seconds": None if wall_seconds is None else round(wall_seconds, 3),
@@ -204,11 +206,14 @@ def run_cases(
     meta: dict[str, Any],
     on_record: Callable[[dict[str, Any]], None] = lambda record: None,
     clock: Callable[[], float] = time.perf_counter,
+    annotate: Callable[[EvalCase, dict[str, Any]], dict[str, Any]] = lambda case, record: record,
 ) -> list[dict[str, Any]]:
     """Run each case within the run budget, writing one record per case to ``out_dir``.
 
     A case is skipped when the budget cannot cover one more worst-case case; a case cut off by
-    the budget mid-way is recorded as aborted. Auth failures abort the whole run (re-raised).
+    the budget mid-way is recorded as aborted, and a replayed case whose request differed from
+    the recording as diverged. Auth failures abort the whole run (re-raised). ``annotate`` may
+    add to each record before it is written (replay adds its comparison).
     """
     records = []
     for case in cases:
@@ -228,6 +233,12 @@ def run_cases(
                     case, run_id=run_id, meta=meta, status="aborted", log=recorder.log,
                     failures=[f"aborted: {exc}"], wall_seconds=clock() - started, error=str(exc),
                 )
+            except ReplayDiverged as exc:
+                record = build_record(
+                    case, run_id=run_id, meta=meta, status="diverged", log=recorder.log,
+                    failures=[f"diverged at {exc}"], wall_seconds=clock() - started,
+                    error=str(exc),
+                )
             except (LLMError, RetrievalError, InvalidQuestionError) as exc:
                 message = f"{type(exc).__name__}: {exc}"
                 record = build_record(
@@ -241,6 +252,7 @@ def run_cases(
                     result=result, wall_seconds=clock() - started,
                 )
                 record["failures"] = record_failures(case, record, limits)
+        record = annotate(case, record)
         write_record(out_dir, record)
         records.append(record)
         on_record(record)
@@ -301,6 +313,7 @@ def summarize_records(
         "run_failed": sum(1 for r in records if r["status"] == "failed"),
         "aborted": sum(1 for r in records if r["status"] == "aborted"),
         "skipped": sum(1 for r in records if r["status"] == "skipped"),
+        "diverged": sum(1 for r in records if r["status"] == "diverged"),
         "model_calls": sum(len(r["llm_calls"]) for r in records),
         "input_tokens": tin,
         "output_tokens": tout,

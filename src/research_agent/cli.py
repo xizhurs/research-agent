@@ -36,6 +36,7 @@ from research_agent.evaluation import (
     EvalError,
     Qrels,
     RecordingLLMClient,
+    ReplayLLMClient,
     RunBudget,
     ScoreSettings,
     aggregate,
@@ -44,6 +45,8 @@ from research_agent.evaluation import (
     load_qrels,
     metrics_line,
     read_records,
+    replay_date,
+    replay_section,
     rescore,
     run_cases,
     score_records,
@@ -424,33 +427,39 @@ def _open_agent(
     *,
     wrap_llm: Callable[[LLMClient], LLMClient] | None = None,
     http_client: httpx.Client | None = None,
+    llm: LLMClient | None = None,
+    today: Callable[[], date] | None = None,
 ) -> Iterator[ResearchAgent]:
     """Build the real clients and yield an agent. Patched out in CLI tests.
 
     ``wrap_llm`` wraps the model client (evaluation recording and budget); ``http_client`` is
-    used by every tool client (evaluation with a frozen tool cache: no network).
+    used by every tool client (evaluation with a frozen tool cache: no network); ``llm``
+    replaces the OpenAI client (replay: no key needed); ``today`` pins the date the agent and
+    the rainfall/temperature clients use (evaluation runs and replay).
     """
     key = creds.openalex_api_key
-    llm: LLMClient = OpenAIClient.from_credentials(cfg.llm, creds)
+    model: LLMClient = llm if llm is not None else OpenAIClient.from_credentials(cfg.llm, creds)
     if wrap_llm is not None:
-        llm = wrap_llm(llm)
+        model = wrap_llm(model)
     api_key = key.reveal() if key else None
+    dated = {"today": today} if today is not None else {}
     with (
         OpenAlexClient(
             cfg.openalex, cfg.limits, api_key=api_key, http_client=http_client
         ) as search,
-        RainfallClient(cfg.rainfall, http_client=http_client) as rain,
-        TemperatureClient(cfg.rainfall, http_client=http_client) as temp,
+        RainfallClient(cfg.rainfall, http_client=http_client, **dated) as rain,
+        TemperatureClient(cfg.rainfall, http_client=http_client, **dated) as temp,
         EnsoClient(cfg.enso, http_client=http_client) as enso_client,
     ):
         yield ResearchAgent(
-            llm,
+            model,
             search,
             cfg.limits,
             cfg.reporting,
             rainfall=rain,
             enso=enso_client,
             temperature=temp,
+            **dated,
         )
 
 
@@ -742,11 +751,14 @@ def _record_line(record: dict) -> str:
 def _summary_line(summary: dict) -> str:
     cost = summary["estimated_cost_usd"]
     money = f"~${cost:.4f}" if cost is not None else "cost unknown (no prices in [eval])"
-    not_run = summary["run_failed"] + summary["aborted"] + summary["skipped"]
+    not_run = (
+        summary["run_failed"] + summary["aborted"] + summary["skipped"] + summary["diverged"]
+    )
+    diverged = f", {summary['diverged']} diverged" if summary["diverged"] else ""
     return (
         f"Summary: {summary['passed']}/{summary['cases']} passed | "
         f"{summary['failed_checks']} failed checks, {not_run} not completed "
-        f"({summary['aborted']} aborted, {summary['skipped']} skipped by the budget) | "
+        f"({summary['aborted']} aborted, {summary['skipped']} skipped by the budget{diverged}) | "
         f"{summary['model_calls']} model calls, "
         f"{summary['input_tokens'] + summary['output_tokens']} tokens, {money} | "
         f"{summary['searches']} searches | {summary['data_analyses']} data analyses | "
@@ -838,11 +850,13 @@ def eval_run(
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = out or cfg.eval.runs_dir / run_id
+    run_date = date.today()  # pinned for the whole run, so a replay can use the same date
     meta = {
         "mode": "agentic",
         "git_commit": git_commit(),
         "model": cfg.llm.model,
         "config_hash": fingerprint(asdict(cfg)),
+        "today": run_date.isoformat(),
     }
     recorder = RecordingLLMClient(None, budget)
 
@@ -853,7 +867,11 @@ def eval_run(
     http = httpx.Client(transport=httpx.MockTransport(_refuse_network)) if frozen_tools else None
     try:
         with _open_agent(
-            _eval_tool_config(cfg, frozen_tools), creds, wrap_llm=wrap, http_client=http
+            _eval_tool_config(cfg, frozen_tools),
+            creds,
+            wrap_llm=wrap,
+            http_client=http,
+            today=lambda: run_date,
         ) as agent:
 
             def run_one(case: EvalCase) -> AgentResult:
@@ -926,5 +944,122 @@ def eval_score(
     typer.echo(_summary_line(summary))
     typer.echo(metrics_line(agg))
     typer.echo(f"Report: {run_dir / 'report.md'}")
+    if summary["passed"] != summary["cases"]:
+        raise typer.Exit(code=1)
+
+
+def _replay_line(record: dict) -> str:
+    replay = record["replay"]
+    if replay["outcome"] not in ("same", "changed"):  # the status line already says diverged
+        return _record_line(record)
+    lines = [f"[{replay['outcome'].upper()}] {_record_line(record)}"]
+    lines += [f"    * {change}" for change in replay["changes"]]
+    return "\n".join(lines)
+
+
+@eval_app.command("replay")
+def eval_replay(
+    run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
+    only: list[str] = ONLY_OPTION,
+    cases: Path = CASES_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    out: Path | None = typer.Option(
+        None, "--out", help="Folder for the replayed records (default: <run>-replay-<time>)."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Replay a run through the current code with the recorded model replies (free, offline).
+
+    No model is called and no key is needed: each request must equal the recorded one, and the
+    tools answer from the evaluation tool cache with the network off. A case whose request
+    differs (prompt, tool definitions or output, forcing) stops as DIVERGED; otherwise the new
+    answer is compared with the recorded one (SAME or CHANGED, reported only). Exits non-zero
+    if any case diverges or fails its checks.
+    """
+    cfg = _load_or_exit(config)
+    try:
+        records = read_records(run_dir)
+        case_list = load_cases(cases)
+    except (FileNotFoundError, EvalError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    by_id = {c.id: c for c in case_list}
+    originals: dict[str, dict] = {}
+    for record in records:
+        case_id = record["case_id"]
+        if only and case_id not in only:
+            continue
+        if record["status"] != "ok":
+            typer.echo(f"[NOT REPLAYED] {case_id}: the original run ended '{record['status']}'")
+        elif case_id not in by_id:
+            typer.echo(f"[NOT REPLAYED] {case_id}: no longer in the case file")
+        else:
+            originals[case_id] = record
+    if not originals:
+        typer.echo(f"error: nothing to replay in {run_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    first = next(iter(originals.values()))
+    run_id = f"{first['run_id']}-replay-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    out_dir = out or cfg.eval.runs_dir / run_id
+    meta = {
+        "mode": "replay",
+        "git_commit": git_commit(),
+        "model": first["model"],
+        "config_hash": fingerprint(asdict(cfg)),
+    }
+    selected = [replace(by_id[i], question=r["question"]) for i, r in originals.items()]
+    replayer = ReplayLLMClient()
+    budget = RunBudget(max_calls=10**9, max_tokens=10**15)  # nothing is paid: no real cap
+    recorder = RecordingLLMClient(replayer, budget)
+    pinned: list[date] = [replay_date(first)]
+
+    def annotate(case: EvalCase, record: dict) -> dict:
+        record["today"] = pinned[0].isoformat()
+        return {**record, "replay": replay_section(originals[case.id], record)}
+
+    http = httpx.Client(transport=httpx.MockTransport(_refuse_network))
+    try:
+        with _open_agent(
+            _eval_tool_config(cfg, frozen=True),
+            Credentials(openalex_api_key=None, openai_api_key=None),
+            llm=recorder,
+            http_client=http,
+            today=lambda: pinned[0],
+        ) as agent:
+
+            def run_one(case: EvalCase) -> AgentResult:
+                original = originals[case.id]
+                pinned[0] = replay_date(original)
+                replayer.load(original)
+                result = agent.run(case.question)
+                replayer.finish()
+                return result
+
+            replayed = run_cases(
+                selected,
+                run_one,
+                recorder,
+                cfg.limits,
+                out_dir=out_dir,
+                run_id=run_id,
+                meta=meta,
+                on_record=lambda record: typer.echo(_replay_line(record)),
+                annotate=annotate,
+            )
+    finally:
+        http.close()
+
+    summary = summarize_records(replayed, _budget(cfg, None, None, None))
+    write_summary(out_dir, {"run_id": run_id, "replay_of": first["run_id"], **meta, **summary})
+    typer.echo(_summary_line(summary))
+    _, agg = _score_and_report(
+        cfg, out_dir, replayed, case_list, qrels, _budget(cfg, None, None, None)
+    )
+    typer.echo(metrics_line(agg))
+    outcomes = agg["all"]["replay"]
+    typer.echo("Replay: " + ", ".join(f"{v} {k}" for k, v in outcomes.items()))
+    typer.echo(f"Records and report.md: {out_dir}")
     if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)

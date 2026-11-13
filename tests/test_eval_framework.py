@@ -243,9 +243,10 @@ def test_live_run_writes_records_and_score_rescores_them_offline(
     seen = {}
 
     @contextmanager
-    def fake_open(cfg, creds, *, wrap_llm=None, http_client=None):
+    def fake_open(cfg, creds, *, wrap_llm=None, http_client=None, today=None):
         seen["cache"] = cfg.openalex.cache_dir
         seen["http"] = http_client
+        seen["today"] = today()
         llm = wrap_llm(StubLLMClient(search_then_answer()))
         search = FakeSearch(make_result([make_work("W1")]))
         yield ResearchAgent(llm, search, cfg.limits, cfg.reporting)
@@ -263,6 +264,9 @@ def test_live_run_writes_records_and_score_rescores_them_offline(
     assert seen["cache"] == Path("evals/tool_cache/openalex") and seen["http"] is not None
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["model_calls"] == 2 and summary["input_tokens"] == 400
+    (record,) = read_records(out)
+    assert record["today"] == seen["today"].isoformat()  # pinned, so a replay can use it
+    assert record["llm_calls"][0]["tools_hash"]
 
     scored = runner.invoke(app, ["eval", "score", str(out), "--cases", str(cases),
                                  "--config", str(BASE)])  # fmt: skip

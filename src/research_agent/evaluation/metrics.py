@@ -327,6 +327,8 @@ def score_record(
         "failures": record["failures"],
         "efficiency": _efficiency(record, budget),
     }
+    if "replay" in record:
+        out["replay"] = record["replay"]
     answer = record["answer"]
     if record["status"] != "ok" or answer is None:
         return out

@@ -15,6 +15,7 @@ from research_agent.evaluation.recording import RunBudget
 
 SCORE_FILE = "score.json"
 REPORT_FILE = "report.md"
+REPLAY_OUTCOMES = ("same", "changed", "diverged")
 
 
 def score_records(
@@ -81,6 +82,10 @@ def _group(scores: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "cost_usd": round(sum(costs), 6) if costs and None not in costs else None,
         "passed_per_100k_tokens": round(passed / tokens * 100_000, 2) if tokens else None,
+        "replay": {
+            outcome: sum(1 for s in scores if s.get("replay", {}).get("outcome") == outcome)
+            for outcome in REPLAY_OUTCOMES
+        },
     }
 
 
@@ -157,6 +162,10 @@ def _case_section(s: dict[str, Any]) -> list[str]:
         f"{e['tool_calls']} tool call(s), {_fmt(e['wall_seconds'])} s",
     ]
     items = [f"- failure: {f}" for f in s["failures"]]
+    replay = s.get("replay")
+    if replay:
+        items.append(f"- replay of run {replay['of']}: {replay['outcome']}")
+        items += [f"  - {change}" for change in replay["changes"]]
     if "tools" in s:
         t, n = s["tools"], s["numbers"]
         items += [f"- unsupported number(s) {u['numbers']} in {u['sources']}: {u['text']}"
@@ -190,6 +199,9 @@ def render_report(scores: list[dict[str, Any]], agg: dict[str, Any]) -> str:
     rows += [(f"category {k}", v) for k, v in agg["by_category"].items()]
     rows += [(f"split {k}", v) for k, v in agg["by_split"].items()]
     lines += _table(rows)
+    replay = agg["all"]["replay"]
+    if any(replay.values()):
+        lines += ["", "Replay: " + ", ".join(f"{v} {k}" for k, v in replay.items())]
     lines += ["", "## Cases", ""]
     for s in scores:
         lines += _case_section(s)

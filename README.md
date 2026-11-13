@@ -164,6 +164,7 @@ uv run research-agent eval run                           # free: prints the plan
 uv run research-agent eval run --live                    # the dev split with the real model (about 6.5k tokens per case)
 uv run research-agent eval run --live --only crop-type-dl --max-tokens 30000
 uv run research-agent eval score evals/runs/<run-id>     # free: score stored records again, offline
+uv run research-agent eval replay evals/runs/<run-id>    # free: the recorded model replies through the current code
 ```
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
@@ -178,6 +179,12 @@ Each case is marked `split = "test"` (held out: run only to measure, with `--spl
 - tokens, time and cost.
 
 Cases can also state `expect_numbers` (verified values that must appear in a tool result and in a claim), `max_tool_calls`, and `key_points` with `min_key_points`; these do fail a case.
+
+`eval replay` re-runs a stored run through the current code without calling a model or needing a key:
+- Each request must match the recorded one, and the tools answer from `evals/tool_cache/` with the network off. If the prompt, a tool definition or a tool's output changed, the case stops as **diverged**, with the first difference.
+- Otherwise the new answer is compared with the recorded one and marked **same** or **changed** (changed is reported only).
+- Use it to check that a code change after the model's decisions (parsing, citations, limitations) does what you expect, for free.
+- It needs the tool cache of the machine that made the run.
 
 The cases are a draft; edit them to match the questions you care about.
 

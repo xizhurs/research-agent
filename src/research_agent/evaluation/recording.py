@@ -102,6 +102,22 @@ def messages_json(messages: Sequence[Message]) -> list[dict[str, Any]]:
     return out
 
 
+def fingerprint(value: Any) -> str:
+    """A short stable hash of any JSON-able value (prompt, config, tool definitions)."""
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _tools_json(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
+    return [{"name": t.name, "description": t.description, "parameters": t.parameters}
+            for t in tools]  # fmt: skip
+
+
+def tools_hash(tools: Sequence[ToolSpec]) -> str:
+    """Fingerprint of the tool definitions sent (tells a replay that a tool description changed)."""
+    return fingerprint(_tools_json(tools))
+
+
 def request_hash(
     instructions: str,
     messages: Sequence[Message],
@@ -113,8 +129,7 @@ def request_hash(
     payload = {
         "instructions": instructions,
         "messages": messages_json(messages),
-        "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters}
-                  for t in tools],
+        "tools": _tools_json(tools),
         "max_output_tokens": max_output_tokens,
         "allow_tools": allow_tools,
     }
@@ -187,6 +202,7 @@ class RecordingLLMClient:
                 "request_hash": request_hash(
                     instructions, messages, tools, max_output_tokens, allow_tools
                 ),
+                "tools_hash": tools_hash(tools),
                 "allow_tools": allow_tools,
                 "max_output_tokens": max_output_tokens,
                 "latency_s": round(latency, 3),

@@ -20,7 +20,7 @@ Layout:
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `temperature_plots.py` (temperature figures: lines and markers, not bars), `app.py` (layout only, the only module that imports Gradio).
 - `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/conversation/`: follow-up questions (see Conversation facts). `models.py` (`Session`, `TurnRecord`, `TaskState`, `EvidenceItem`), `state.py` (pure `apply_turn`), `context.py` (pure `build_context`), `store.py` (`SessionStore` protocol, `InMemorySessionStore`), `service.py` (`ConversationService`). The agent side is `agent/events.py` (`ToolEvent`, `TurnContext`).
-- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
+- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -86,13 +86,45 @@ Evaluation metrics (Phase 2, added 2026-11-13; offline, no paid calls):
   - **Efficiency.** Time, model and tool calls, tokens, median call latency, cost (only with prices) and tokens per cited item. The totals also give passed cases per 100k tokens.
 - Not yet tried on live records: how often the number and support flags misfire on real answers is unknown until a baseline run is scored.
 
+Evaluation replay (Phase 3, added 2026-11-13; offline, free, no key):
+- `eval replay RUN_DIR [--only ID] [--out DIR] [--cases] [--qrels]` re-runs each `ok` record of a run through the current code. The model is replaced by `ReplayLLMClient`. For call k it computes `request_hash` of the actual request and, only if that equals the recorded hash, returns the recorded reply: text, tool calls with the same IDs, stop reason and usage. Usage must be exact because the loop's token rules use it.
+- Tools run for real from `evals/tool_cache/` with the network off (as with `--frozen-tools`). No tracing is started.
+- The question comes from the record. The case checks come from the current case file. Records that did not end `ok`, and cases dropped from the case file, are listed as `[NOT REPLAYED]`.
+- Outcomes:
+  - **same:** the answer is identical to the recorded one.
+  - **changed:** `compare_answers` lists added or removed references, data references, rejected citations and limitations, and per-claim kind, sources and text changes.
+  - **diverged:** the case stops, with new status `diverged`. Nothing is sent anywhere.
+
+  The first explanation found for a divergence is reported, checked in this order:
+  1. a tool result differs from the recorded text (tool, call ID and both excerpts at the first differing character; a frozen-cache miss shows up here);
+  2. a tool call ran that did not run before;
+  3. the question changed;
+  4. the prompt changed (fingerprint against `prompt_hash`);
+  5. the tool definitions changed (`tools_hash`);
+  6. the final answer is forced at a different call;
+  7. `max_output_tokens` changed;
+  8. the request structure changed.
+
+  Using fewer or more model calls than recorded also diverges.
+- Exit code (owner's choice): 1 if any case diverges or fails its checks. A changed answer is reported only. Output goes to `evals/runs/<run>-replay-<time>/`, with records (`mode` "replay" and a `replay` section), `summary.json`, `score.json` and `report.md`.
+- Date: `eval run --live` now pins `today` (the run's start date) for the agent and the rainfall and temperature clients, and stores it in each record. Replay uses the same date, so default periods, the last finished month and the "dated evidence" note do not move. Older records fall back to the date in `recorded_at`.
+- Each recorded model call now has a `tools_hash`. `fingerprint` moved to `recording.py`. `_open_agent` takes `llm=` (replay: no OpenAI client, no key) and `today=`.
+- What replay can tell: whether code after the model's decisions (tool execution, parsing, citation validation, limitations, checks) still gives the same answer, and whether a change reaches the model's input. What it cannot tell: what the model would do with that new input. That needs `eval run --live`.
+- Needs the original run's `evals/tool_cache/`, which is git-ignored and local, so replay does not run in CI or on another machine without it.
+- Verified offline:
+  - same, changed, and every divergence kind, through stub-recorded runs;
+  - the CLI with no key;
+  - the real CLI and tool clients on a stub-made record: it diverged at call 1 with "instructions changed", correctly, because that record came from the literature-only agent.
+
+  Not yet replayed from a live run.
+
 Evaluation phases (the approved plan; token figures use the measured ~6.5k tokens per single-turn case and the 20k worst case per case under the current limits; dollar amounts need prices in `[eval]`):
 
 | Phase | Status | Builds | Paid use |
 |---|---|---|---|
 | 1 Foundations | built 2026-11-12 (not run live yet) | `evaluation/` package; run records; `RecordingLLMClient` with the run budget (calls, tokens, cost) and timing; `[eval]` config; `eval list` / `run` (plan only unless `--live`) / `score`; `split` and `category` on every case; evaluation tool cache and `--frozen-tools` | Baselines, only with the owner's OK: dev split about 26 cases x 6.5k = ~170k tokens; test split 8 cases = ~50k |
 | 2 Deterministic metrics | built 2026-11-13 (`expect_numbers` on 5 cases; key points and qrels still empty, for the owner) | Scorers on stored records: tool use (argument validity, error mix, redundant calls, uncited tool results, `max_tool_calls`); trajectory (turns, voluntary vs forced stop, new works per follow-up search); number faithfulness (every number in an evidence claim citing an R ID must appear in that record's text, within its rounding; `expect_numbers` verified values); retrieval (`evals/qrels.toml`: relevant / not-relevant W IDs labelled by the owner, precision, recall, unjudged count); `key_points` coverage (verified facts with `any_terms`, curated once, never generated per run); lexical citation-support proxy; efficiency (latency, tokens, cost, tokens per cited item); `report.md`. Owner time: about 1-2 h of labelling and approving key points | none |
-| 3 Replay | planned | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
+| 3 Replay | built 2026-11-13 (not yet run on a live record) | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
 | 4 Multi-turn and fixed vs agentic | planned | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
 | 5 LLM judge (optional) | planned | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
 | 6 Langfuse import | planned | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
@@ -355,6 +387,7 @@ uv run research-agent eval list                         # free: the cases, split
 uv run research-agent eval run                          # free: prints the plan only
 uv run research-agent eval run --live --only flood-sar  # real model; costs tokens (budgeted)
 uv run research-agent eval score evals/runs/<run-id>    # free: rescore stored records, write report.md
+uv run research-agent eval replay evals/runs/<run-id>   # free: recorded replies through the current code
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 
