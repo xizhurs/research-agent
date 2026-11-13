@@ -1,0 +1,32 @@
+{
+ "call": {
+  "input_tokens": 901,
+  "items": 3,
+  "output_tokens": 220
+ },
+ "judged_on": "2026-11-13",
+ "key": "9065845d34515faa479cca2b5c05a35d0c15dd6983455855ba02012fddbebcd6",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim says Springfield is ambiguous with ten possible locations, matching the ambiguity point; does not say none dominates explicitly but implies it.",
+   "text": "The place is ambiguous: at least ten places are called Springfield and none clearly dominates."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claim mentions ten possible locations but names no specific candidates such as Missouri, Massachusetts or Illinois.",
+   "text": "It lists candidates, for example Springfield in Missouri, Massachusetts and Illinois."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim asks which Springfield the user means and gives no rainfall figure, matching the clarification request.",
+   "text": "It asks which Springfield is meant and gives no rainfall figure for an unconfirmed place."
+  }
+ ],
+ "rubric": 3
+}

@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1068,
+  "items": 4,
+  "output_tokens": 268
+ },
+ "judged_on": "2026-11-13",
+ "key": "d49780ab94303bdb8f12c413adc0c7487c391a99d794c4ff7433e5179a7605c9",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim explicitly states the ERA5 July 2021 total of 286.2 mm.",
+   "text": "ERA5 July 2021 total at Zhengzhou: 286.2 mm."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claim says it ranked 21st among 77 Julys and was not among the wettest on record; the 1950-2026 range is not stated.",
+   "text": "It ranks 21st of 77 Julys (1950-2026): wet, but not exceptional in the record."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim gives the 79.6–279.7 mm band, 1.57 times the 182.2 mm mean, and says it is above the band.",
+   "text": "It is above the 1991-2020 July 10th-90th percentile band (79.6 to 279.7 mm), about 1.57 times the baseline July mean (182.2 mm)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claim does not mention July 1958 or July 1957 totals.",
+   "text": "Several Julys were far wetter in ERA5, such as July 1958 (567.9 mm) and July 1957 (551.6 mm)."
+  }
+ ],
+ "rubric": 3
+}

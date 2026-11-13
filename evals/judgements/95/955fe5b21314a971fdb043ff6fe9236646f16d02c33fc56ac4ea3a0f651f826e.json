@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1333,
+  "items": 1,
+  "output_tokens": 139
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "955fe5b21314a971fdb043ff6fe9236646f16d02c33fc56ac4ea3a0f651f826e",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly gives a single date and value for the heaviest day since 2000, as asked. Caveats cover ERA5 gridded nature and Rx1day definition, but no station-based check or uncertainty on the 38.7 mm figure is given, and the claim is labelled evidence without a stated period beyond 'since 2000'.",
+ "relevance": "direct",
+ "rubric": 2
+}

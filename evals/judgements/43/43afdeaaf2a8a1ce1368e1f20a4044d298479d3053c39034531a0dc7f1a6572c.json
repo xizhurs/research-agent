@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1668,
+  "items": 1,
+  "output_tokens": 123
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "43afdeaaf2a8a1ce1368e1f20a4044d298479d3053c39034531a0dc7f1a6572c",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly lists longest dry spells since 1980 with dates and lengths, answering the question. Caveats on ERA5 grid data, light-rain bias, and definition are given, though the location disambiguation is mentioned briefly. Completeness is limited to the top spells only.",
+ "relevance": "direct",
+ "rubric": 2
+}

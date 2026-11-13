@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1372,
+  "items": 1,
+  "output_tokens": 93
+ },
+ "claim": "The heaviest single day of rain in Amsterdam since 2000 was 38.7 mm on 14 July 2011 (ERA5 daily precipitation).",
+ "judged_on": "2026-11-13",
+ "key": "b8b5cb7e4855f2f8e940da50faf0b2f6ce05f409870295a38ec1e30f3d2693af",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists largest annual maximum 38.7 mm on 2011-07-14 for 2000-2025 ERA5 data; claim matches, with ERA5 daily precipitation stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "4aba40d42f815eaebe84a56315e5b9b0b4dcee4d1f368d5247ba3554b05762d2"
+  }
+ ],
+ "verdict": "supported"
+}

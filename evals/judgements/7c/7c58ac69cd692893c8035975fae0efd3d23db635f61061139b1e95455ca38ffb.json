@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1480,
+  "items": 1,
+  "output_tokens": 124
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "7c58ac69cd692893c8035975fae0efd3d23db635f61061139b1e95455ca38ffb",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "The answer addresses the latest question about deep learning methods for Sentinel-2 crop mapping directly, listing CNNs, RNNs, hybrids, MLPs and transformers. It lacks comparative performance detail, and its caveats are reasonably stated.",
+ "relevance": "direct",
+ "rubric": 2
+}

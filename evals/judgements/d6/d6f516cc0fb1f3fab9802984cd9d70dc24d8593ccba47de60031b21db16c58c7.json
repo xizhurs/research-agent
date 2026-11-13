@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1016,
+  "items": 4,
+  "output_tokens": 260
+ },
+ "judged_on": "2026-11-13",
+ "key": "d6f516cc0fb1f3fab9802984cd9d70dc24d8593ccba47de60031b21db16c58c7",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim states ERA5 2024 mean 15.7 C, rank 4th of 76, with 95% of years cooler.",
+   "text": "ERA5 2024 annual mean in Madrid: 15.7 degrees C, rank 4 of 76 (95% of years were cooler)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claim gives no 1991-2020 mean, anomaly, or percentile band; not addressed.",
+   "text": "That is 0.7 degrees C above the 1991-2020 mean (15.0 degrees C), at the top of the 10th-90th percentile band (14.1 to 15.7 degrees C)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim lists 2022, 2017 and 1995 as the three warmest years, each at 16.0 C.",
+   "text": "2022, 2017 and 1995 were warmer (16.0 degrees C each)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claim ranks single years but says nothing about trend estimation.",
+   "text": "Single-year rankings are not a trend estimate."
+  }
+ ],
+ "rubric": 3
+}

@@ -20,7 +20,7 @@ Layout:
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `temperature_plots.py` (temperature figures: lines and markers, not bars), `app.py` (layout only, the only module that imports Gradio).
 - `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/conversation/`: follow-up questions (see Conversation facts). `models.py` (`Session`, `TurnRecord`, `TaskState`, `EvidenceItem`), `state.py` (pure `apply_turn`), `context.py` (pure `build_context`), `store.py` (`SessionStore` protocol, `InMemorySessionStore`), `service.py` (`ConversationService`). The agent side is `agent/events.py` (`ToolEvent`, `TurnContext`).
-- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `summarize_records`; the old `run_case`/`summarize` are kept).
+- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`), `judge.py` (`Judge`, `JudgeCache`, `judge_plan`, `judge_section`, calibration), `langfuse_import.py` (`LangfuseReader`, `fetch_traces`, `trace_record`, `case_matcher`). `evals/conversations.toml`: multi-turn conversations (draft); `evals/judgements/`: the judge cache (committed). The judge's model adapter is `llm/anthropic_client.py` (`AnthropicJsonClient`, `JsonReply`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -60,18 +60,265 @@ Evaluation framework (Phase 1 of the cost-aware plan, added 2026-11-12; plan app
 - Run records: `evals/runs/<YYYYMMDD-HHMMSS>/<case>.json` (git-ignored) plus `summary.json`. A record (schema 1) holds the case, split, category, git commit, model, config hash, prompt hash, status, wall time, every model call (request hash, `allow_tools`, usage, latency, reply text and tool calls), every executed tool call (arguments, status, `result_id`, the result text the model saw; read from the next request, so the agent loop is unchanged), the answer (`tracing.answer_json` plus cited works' title/abstract and cited analyses' formatted text) and `RunStats`. `eval score` recomputes the failures from the stored answer and stats with the current case file (a case removed from the file is reported).
 - Tools in `eval run` use `evals/tool_cache/{openalex,open-meteo,enso}` with no expiry (git-ignored; delete to refresh), so repeated runs see the same OpenAlex, ERA5 and RONI data. `--frozen-tools` also disables the network (an `httpx.MockTransport` that refuses, no retries): an uncached request becomes a tool error.
 - Held-out split (proposed by the assistant on 2026-11-12, for the owner to review): `flood-sar`, `super-resolution`, `building-extraction`, `rainfall-top-events-mumbai`, `dry-and-literature`, `enso-year-2010`, `scale-monthly-zhengzhou`, `temperature-cold-moscow` (8 of 34). Every case has a `category`.
-- Not yet verified live: no paid `eval run --live` has been made with the new runner (the Phase 1 baselines wait for the owner's OK).
+- First live run with the new runner (2026-11-13, owner's OK, run `20261113-132831`): `crop-type-dl` and `rainfall-event-zhengzhou` both passed, 14,867 tokens, 4 model calls, 1 search, 1 analysis. The full baselines (dev ~170k, test ~50k tokens) still wait for the owner's OK.
+  - `eval score` on that run gave the same result.
+  - Phase 2 metrics found 0 unsupported numbers among the 21 numbers in 4 evidence claims (the model's "1.2 times" and "rank 31st of 27,759 days" were both in R1's text), 0 low-support claims (median overlap about 0.62-0.65), 0 tool errors, 0 redundant or uncited calls, and 8 unjudged works for `crop-type-dl`. `expect_numbers` 79.0 passed.
+  - `eval replay` gave 2 same, 0 changed, 0 diverged (no key, network off).
+  - This is one run on two cases, so the misfire rate of the metrics is still largely unknown.
+
+Evaluation metrics (Phase 2, added 2026-11-13; offline, no paid calls):
+- By the owner's choice the metrics are reported and never fail a case. Only keys a case declares can fail it. Whether a metric should become a failure is decided after the first baseline.
+- `eval score RUN_DIR [--qrels evals/qrels.toml]`, and `eval run --live` at its end, write two files into the run folder:
+  - `score.json`: per-case metrics plus totals for the run, each category and each split. Keys are sorted and there are no timestamps, so the same records give byte-identical output.
+  - `report.md`: totals table, then each case's flags, then the works not yet labelled, ready to paste into `evals/qrels.toml`.
+  The terminal shows a `~` line under each case with flags and a `Metrics:` line. The exit code still depends only on the case checks. A run's own `summary.json` is not rewritten.
+- New case keys (`cases.py`, checked in `checks.check_record`, which now takes the record's tool results):
+  - `expect_numbers = [{value, tolerance=0.05}]`. The value must appear in a tool result with the sign as given (the data is still right) and in some claim by absolute value (it was reported). Both sides accept a number within its own written rounding: "286 mm" counts for 286.2. Only values verified live are used; ranks are left out because they depend on the period the model picks. Shipped cases using it:
+    - Zhengzhou 79.0 mm (2021-07-20);
+    - Zhengzhou July 2021 286.2 mm;
+    - Paris TXx 41.4 °C;
+    - Madrid 2024 15.7 °C;
+    - Moscow TNn -41.5 °C.
+  - `max_tool_calls`: counted on the trace, so calls the model requested on a forced final turn count too.
+  - `key_points = [{text, any_terms}]` with `min_key_points`. A key point is covered when one of its terms appears, case-insensitively, in a claim that cites something. Key points are curated by the owner and never generated; none have been written yet.
+- Metrics (`metrics.score_record`; a record that is failed, aborted or skipped gets efficiency only):
+  - **Tools.** Counts per tool. Each error is classified from the recorded status and the loop's `Error:` text as one of: invalid, not_found, ambiguous, budget_refused, context_refused, failed. Argument validity is 1 minus invalid ÷ calls. Redundant calls are the same tool with equal normalised arguments, or two searches whose query word sets have a Jaccard index of at least `[eval] redundant_query_jaccard` (0.8). Uncited calls are an ok search none of whose new works is cited, or an ok analysis whose R ID is not cited. Works are parsed from the `[W…]` lines of the result text.
+  - **Trajectory.** Turns and tools per turn. The stop is "forced" when the last model call had tools off. Which budget forced it is derived from the counts (model turns, searches and analyses, searches, tokens), not from the note text. Also: budget left, the share of new works per follow-up search, and how many cited works came from follow-up searches.
+  - **Retrieval.** Precision is relevant shown ÷ labelled shown; recall is relevant shown ÷ all relevant; unlabelled works are listed by ID and title.
+  - **Support.** The share of an evidence claim's content words (4 or more letters, minus a small stop-word list) found in its cited text. Claims below `[eval] low_support_overlap` (0.3) are flagged. It is a crude lexical proxy, not a judgement.
+  - **Numbers.** Every number in an evidence claim must appear in the claim's cited text: R texts as the model saw them, and W titles and abstracts. A match is within half a unit of the claim's last digit and is compared by absolute value, so a sign error is not caught. Dates are split into parts. `W…`, `R…` and digits stuck to letters (`Rx1day`) are ignored. Numbers the model derived ("about 3 times", "top 5%") are flagged too, which is why this metric is not a failure.
+  - **Efficiency.** Time, model and tool calls, tokens, median call latency, cost (only with prices) and tokens per cited item. The totals also give passed cases per 100k tokens.
+- Not yet tried on live records: how often the number and support flags misfire on real answers is unknown until a baseline run is scored.
+
+Evaluation replay (Phase 3, added 2026-11-13; offline, free, no key):
+- `eval replay RUN_DIR [--only ID] [--out DIR] [--cases] [--qrels]` re-runs each `ok` record of a run through the current code. The model is replaced by `ReplayLLMClient`. For call k it computes `request_hash` of the actual request and, only if that equals the recorded hash, returns the recorded reply: text, tool calls with the same IDs, stop reason and usage. Usage must be exact because the loop's token rules use it.
+- Tools run for real from `evals/tool_cache/` with the network off (as with `--frozen-tools`). No tracing is started.
+- The question comes from the record. The case checks come from the current case file. Records that did not end `ok`, and cases dropped from the case file, are listed as `[NOT REPLAYED]`.
+- Outcomes:
+  - **same:** the answer is identical to the recorded one.
+  - **changed:** `compare_answers` lists added or removed references, data references, rejected citations and limitations, and per-claim kind, sources and text changes.
+  - **diverged:** the case stops, with new status `diverged`. Nothing is sent anywhere.
+
+  The first explanation found for a divergence is reported, checked in this order:
+  1. a tool result differs from the recorded text (tool, call ID and both excerpts at the first differing character; a frozen-cache miss shows up here);
+  2. a tool call ran that did not run before;
+  3. the question changed;
+  4. the prompt changed (fingerprint against `prompt_hash`);
+  5. the tool definitions changed (`tools_hash`);
+  6. the final answer is forced at a different call;
+  7. `max_output_tokens` changed;
+  8. the request structure changed.
+
+  Using fewer or more model calls than recorded also diverges.
+- Exit code (owner's choice): 1 if any case diverges or fails its checks. A changed answer is reported only. Output goes to `evals/runs/<run>-replay-<time>/`, with records (`mode` "replay" and a `replay` section), `summary.json`, `score.json` and `report.md`.
+- Date: `eval run --live` now pins `today` (the run's start date) for the agent and the rainfall and temperature clients, and stores it in each record. Replay uses the same date, so default periods, the last finished month and the "dated evidence" note do not move. Older records fall back to the date in `recorded_at`.
+- Each recorded model call now has a `tools_hash`. `fingerprint` moved to `recording.py`. `_open_agent` takes `llm=` (replay: no OpenAI client, no key) and `today=`.
+- What replay can tell: whether code after the model's decisions (tool execution, parsing, citation validation, limitations, checks) still gives the same answer, and whether a change reaches the model's input. What it cannot tell: what the model would do with that new input. That needs `eval run --live`.
+- Needs the original run's `evals/tool_cache/`, which is git-ignored and local, so replay does not run in CI or on another machine without it.
+- Verified offline:
+  - same, changed, and every divergence kind, through stub-recorded runs;
+  - the CLI with no key;
+  - the real CLI and tool clients on a stub-made record: it diverged at call 1 with "instructions changed", correctly, because that record came from the literature-only agent.
+
+  - Live run `20261113-132831` (2 cases) replayed as 2 same.
+
+Fixed vs agentic search (Phase 4a, added 2026-11-13; the owner chose to split Phase 4 and build this part first):
+- `eval run --mode fixed` runs the literature cases only and lists how many others it left out. In the dev split that is 7 cases.
+- `FixedSearchLLMClient` wraps the recorder. The agent's first model call is answered by code with one scripted `search_literature` call (ID `fixed_search_1`, 0 tokens, not counted as a model call or against the run budget). Its query is the case's optional `fixed_query`, or by the owner's choice the question exactly as asked; no `fixed_query` is written yet.
+- The next call goes to the model with tools off, so it must answer from that one search.
+- Everything else is the agent's own code: prompt (the full four-tool prompt, as in agentic runs), result formatting, citation validation and limitations. So the two modes differ only in who chooses the searches. The agent loop is unchanged.
+- The OpenAI adapter builds `function_call` items for an assistant message without `provider_state`, so the scripted call is valid for the API. This was checked in the adapter code, not live.
+- Records have `mode` "fixed" and `fixed_query`. Their trajectory stop is "fixed", not "forced", because tools are off by design. The loop's `stats.iterations` counts the scripted call; `llm_calls` holds only the real call.
+- `eval replay` of a fixed run goes through the same scripted search, using the record's `fixed_query`. The replay section records the original mode.
+- Executed tool calls in a record are now listed from the tool results sent back to the model, in execution order. Name and arguments come from the model's reply, or for the scripted search from the agent's event, with `turn` None. Before this change a fixed run's search would have been missing from its record. Agentic records are unchanged.
+- `eval compare RUN_A RUN_B [--out FILE.md]` (free) scores both runs again with the current cases and pairs the cases that completed in both. For each measure it gives the count paired, the means, and improved / same / worse of B against A by direction:
+  - higher is better: passed, key-point coverage, precision, recall;
+  - lower is better: unsupported numbers, low-support claims, tokens, model calls, wall seconds, cost;
+  - neutral: works cited, works shown.
+
+  It also gives a per-case table and lists cases only in A, only in B, or not completed in both. It exits 1 if nothing is paired.
+- Estimated paid use for a comparison on the 7 dev literature cases: fixed about 7 x 4k = ~28k tokens, plus an agentic run of the same cases at about 7 x 7k = ~50k tokens (or reuse an agentic baseline). Not run yet: it needs the owner's OK.
+
+Multi-turn conversations (Phase 4b, added 2026-11-13; the conversations are drafts by the assistant for the owner to review):
+- `evals/conversations.toml` holds `[[conversation]]` tables (`id` without '#', `split`, `note`) with `[[conversation.turn]]` lists. Each turn becomes an `EvalCase` with ID `<conversation>#<n>`, category `conversation` (added to `CATEGORIES`) and the conversation's split.
+- Every key of `cases.toml` works per turn. Conversation keys (`TurnExpect`, judged by `checks.check_turn`) are:
+  - `expect_relation`: accepted labels;
+  - `expect_recall`: whether `recall_evidence` was used;
+  - `max_new_analyses`: the turn's `rainfall_calls`;
+  - `expect_places`: substrings of the task-state place labels;
+  - `expect_state_metrics`: entries of the task state's metrics;
+  - `expect_pending`: whether a clarification is pending.
+
+  The task state is built by code from tool events, so these checks judge the conversation code and the model's tool use, not model wording. A missing file means no conversations.
+- The draft has 4 conversations and 9 turns:
+  1. Amsterdam, then Rotterdam, then "compare the two" (recall expected, no new analysis);
+  2. an ambiguous Springfield (pending clarification), then Illinois;
+  3. Madrid rain in 2023, then temperature in 2023 (`temperature yearly` in the state);
+  4. Paris heat, then a crop-mapping literature question (`new_topic`). This one is held out (`split = "test"`).
+
+  Estimated live cost: about 9 turns x 7k, roughly 65k tokens (worst case 180k).
+- Commands:
+  - `eval list --suite conversations`;
+  - `eval run --suite conversations [--live] [--only CONV] [--split]`; `--mode fixed` and `--category` are refused;
+  - `eval score`, `replay` and `compare` take `--conversations` (default `evals/conversations.toml`) and handle both suites. Turn records are scored with the turn definitions.
+- Run: `run_conversations` gives each conversation a new session in `ConversationDriver` (the real `ConversationService` and `InMemorySessionStore`, span `eval.turn`) and asks the turns in order. Each turn is one ordinary record (`<id>#<n>.json`) with only that turn's model calls, plus a `conversation` section:
+  - id, turn, relation and its source;
+  - context tokens, earlier turns sent and parts left out;
+  - recalled IDs;
+  - the task state after the turn: places (labels), period, event date, year and month, metrics, sources, queries, pending city.
+
+  So all Phase 2 metrics, `report.md` (which adds a relation/context/state line per turn), compare and summaries work per turn. The totals add `conversations` (every turn passed, and which did not). Once a turn does not complete, the conversation's later turns are recorded as skipped.
+- `run_cases` and `run_conversations` share `_run_one` (budget skip, abort, divergence, failure handling).
+- Replay of a conversation run groups the turn records by conversation and replays each in a new session, turn by turn in order. It stops at the first turn that did not end ok, a missing turn, or a turn no longer in the file.
+- `ReplayLLMClient` now finds the question in the last user message (in a follow-up the context and earlier turns come first). A divergence it cannot otherwise explain in a follow-up turn is reported as "the conversation context (earlier turns) or the request structure changed".
+- Verified offline with a scripted model and a fake rainfall analyser:
+  - two turns in one session, with relation, recall, context and places recorded;
+  - a failed turn skips the rest;
+  - rescoring with changed expectations;
+  - replay gives same, same; with a smaller conversation context budget, turn 2 diverges on the context;
+  - the CLI run, score and replay.
+
+- First live run (2026-11-13, owner's OK, run `20261113-135000`, all 4 conversations including the held-out one): 9 turns, 20 model calls, 77,470 tokens (the estimate was ~65k).
+  - 8/9 turns passed. One Open-Meteo HTTP 429 was retried and recovered.
+  - The model chose `yearly` for Amsterdam and Rotterdam, `recall_evidence` plus no new analysis for "Compare the two", resolved Springfield (pending, then Illinois), used `temperature[yearly]` for the Madrid follow-up, and labelled the crop-mapping switch `new_topic`.
+  - In Amsterdam turn 1 it ran the yearly analysis twice: first with no period, then with 2016-2025. That is one wasted analysis, not flagged as redundant because the arguments differ.
+  - "What about Rotterdam?" was labelled `update` this time (`compare` on 2026-11-11). Both are accepted.
+- The failure was a real conversation-state gap, not model variance. After the `update`, Amsterdam had left the task state, and "Compare the two" (labelled `compare`, recalling R2 Amsterdam and R3 Rotterdam) did not bring it back, because recall events carry no place.
+- Fixed by the owner's choice in `conversation/state.py`: in a `compare` turn, `recalled_settings` adds the place, metric and source of each recalled stored analysis. These come from the stored item and the arguments of the call that produced it, so the state is still built by code. `update` and `continue` turns that only recall change nothing, as before.
+- Regression test in `test_conversation.py` reproduces the live sequence. It fails on the old code (checked).
+- `eval replay` of the live run then gave 9 same, 9/9 passed, 4/4 conversations, with no new paid call. The state after the last turn feeds no later turn, so no request changed.
+
+LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Claude Haiku 5.5, `claude-haiku-5-5`, key `CLAUDE_API_KEY`, model also given as `CLAUDE_MODEL`):
+- `eval judge RUN_DIR`:
+  - Without `--live` it is free: it prints the claims, how many are cached and pending, the calls, and a token and cost ceiling.
+  - `--live [--yes] [--only ID] [--max-calls] [--max-tokens] [--max-cost]` judges the uncached claims within the `[eval.judge]` caps.
+  - `--sample N` writes `calibration.md`.
+  - `--calibration evals/judge_calibration.toml` reports agreement.
+  - It exits 1 if the budget stopped it or a call failed.
+  - At the end of every `--live` run it rewrites `report.md` and `score.json` of RUN_DIR (added 2026-11-13, owner's request). This also happens when everything was cached, or after a budget stop or a failed call, so the Judge tables are current without a separate `eval score`.
+    - The refresh covers every record in the folder, even with `--only`. It re-scores them offline with the current cases and `--qrels`.
+    - It reads verdicts with the same judge model: `CLAUDE_MODEL` is taken from the command's `--env-file`, so `_score_and_report` takes `env_file`.
+    - Without `--live` nothing is written, except `calibration.md` with `--sample`.
+- Verdicts are reported only, never a case failure. `eval score`, `run`, `replay` and `compare` read the cache offline (`_judge_lookup`) and never call the model. `report.md` has a "Judge" section (added 2026-11-13, owner's request) before the cases. It shows a totals table by run, category and split, and a per-case table: claims, judged, supported, partial, unsupported, not judged, supported share and score; then interpretation judged, within, stretch, overreach, not judged and interp. score; and key points (covered, partial, contradicted). Each case's section also lists its partial and unsupported claims with reasons. **Score** = the mean over judged claims of supported 1, partial 0.5, unsupported 0 (`judge.VERDICT_SCORES`), the owner's convention, not the judge's output; it is "-" when nothing is judged. Compare gains `judge_unsupported` and `judge_overreach` (lower is better), and `judge_supported_share`, `judge_score` and `judge_interpretation_score` (higher is better), counted only for records whose claims (or interpretations) are all judged. Flags add overreaching or stretching interpretations. On the live conversation run the score was 0.912 over 17 claims, lowest for `conv-amsterdam-rotterdam#3` (0.667, the wrong "largest difference").
+- Rubric (`judge.py`, `RUBRIC_VERSION` 2 since 2026-11-13: both rubrics ask for the reason before the verdict; version 1 asked claim support verdict-first):
+  - Each evidence claim is rated supported, partial or unsupported, only against the texts it cites (R analysis text, or W title and abstract), with a short reason.
+  - Up to 10 claims per call (`MAX_CLAIMS_PER_CALL`), with each cited text sent once (S1, S2...).
+  - Claims and sources are HTML-escaped inside `<source>`/`<claim>` elements, and the instructions say they are data.
+  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points`.
+    - The key-point rubric has its own `KEY_POINT_RUBRIC_VERSION` (3 since 2026-11-13, reason-first). Version 2 had been left verdict-first by mistake. It rated "wettest years 2023 and 2024" in `conv-amsterdam-rotterdam#3` as partial and contradicted, while its own reason said the claims matched (they do). Only key points were re-judged; the other rubrics stay at `RUBRIC_VERSION` 2.
+    - The owner approved the 10 data cases on 2026-11-13; `crop-type-dl` and `flood-sar` stay draft.
+    - First key-point results (version 3, the two live runs; only 2 approved cases have records there):
+      - `conv-amsterdam-rotterdam#3`: 3 covered, 1 missing and contradicted (the 2017 / 41.7 mm difference; the answer said 2021). All 4 are correct.
+      - `rainfall-event-zhengzhou`: 1 covered, 2 partial, 1 missing. One partial is the August 2021 maximum the answer omitted; the missing one is the station context. The other partial is the 79.0 mm point, because the answer omits the grid-cell coordinates the point's text includes. That is an over-specific key point (the coordinates are incidental), worth editing.
+    - The report's case line "key points covered: N of M" is the free word-match metric (any term in a cited claim). It can be more generous than the judge, e.g. it credited the 1955/August point because "213.9" appears.
+    - The other 8 approved cases have records only in the Langfuse import folder.
+  - Reviewed key points live in `evals/key_points.toml` (added 2026-11-13), next to the case files, keyed by case or turn ID (`"conv-amsterdam-rotterdam#3"`):
+    - Each entry has `status` "draft" or "approved", an optional `min_key_points`, and `[[id.point]]` tables with `text`, `any_terms` and `source`.
+    - `load_cases` and `load_conversations` attach only **approved** entries (`load_key_points`, `apply_key_points`). A draft is validated but never used. Defining key points in both a case file and this file is an error.
+    - Holds 12 cases (48 points) written by the assistant: 10 data cases approved by the owner, 2 literature cases still draft. Data points come from tool outputs stored in the run records (ERA5 via Open-Meteo; RONI via `research-agent enso --year 2010`), each with its source. Literature points (`crop-type-dl`, `flood-sar`) and two station figures (Zhengzhou about 200 mm in an hour; Paris-Montsouris 42.6 °C) are domain knowledge, marked "verify".
+    - The drafts surfaced a data fact: in ERA5, Zhengzhou's 2021 maximum day was 22 August (170.1 mm), not 20 July (79.0 mm).
+  - Interpretations (added 2026-11-13, owner's request; `INTERPRETATION_SYSTEM`):
+    - Each `interpretation` claim is rated **within** (follows from its sources, or is clearly tentative), **stretch** (somewhat beyond them: wider scope, a causal reading, a trend, more certainty, without contradicting them) or **overreach** (not supported or contradicted, or speculation stated as fact).
+    - It is rated against the sources it cites or, when it cites none (the usual case for synthesis), all the evidence the answer cites. An answer that cites nothing has no interpretations to judge.
+    - Cached like claim support. The key kind is `interpretation`, so the same text judged under both rubrics gets separate entries; existing claim-support keys are unchanged.
+    - Score: within 1, stretch 0.5, overreach 0 (`INTERPRETATION_SCORES`).
+    - Its schema puts `reason` before `verdict` (`reason_first`), and the instructions ask for the reason first.
+      - Live, verdict-first gave the Rotterdam interpretation "overreach" with a reason ending "Sources support the pattern, so within", then "within" on a second try.
+      - Reason-first gave "within" 3 times out of 3, with matching reasons; one reason still had a small factual slip.
+      - That is a small sample. It shows verdict variance across tries, not settled judge accuracy.
+      - A first attempt at this change did not apply: an inline shell edit failed silently. The test pinning the field order caught it.
+    - Claim support was switched to reason-first too (owner's decision, 2026-11-13), with `RUBRIC_VERSION` bumped to 2 (it is in every cache key). The 24 version-1 entries were removed (git history keeps them), and both live runs were re-judged: 24 claims, 12 calls, about $0.004, no invalid reply.
+      - 21 of 24 verdicts were unchanged, including the wrong "largest difference was 2021" claim (still unsupported, with the correct 2017 / 41.7 mm).
+      - 3 changed, each now with a reason that matches its verdict: Amsterdam "notably wet" partial → supported (the v1 reason had itself concluded "accurate"); "other reported approaches" partial → supported; crop-type "methods used include 1D CNNs, LSTM…" supported → partial ("'methods used' is broader than this single study", the rubric's "broader than its sources").
+      - One judgement per claim per version, so the effect of the ordering cannot be separated from run-to-run variance.
+      - Totals on the two live runs: 20 supported, 1 partial, 1 unsupported; 2 interpretations, both within.
+    - Live 2026-11-13: the two live runs hold only 2 interpretation claims, both within. The agent labels few claims as interpretation.
+  - Answer quality (added 2026-11-13, owner's request; `ANSWER_SYSTEM`, kind `answer_quality`, one judgement per answer):
+    - Reference-free: the judge sees the question, the claims and the limitations, not the sources. It rates how well the answer serves the question, not whether it is true.
+    - Three dimensions, each 1 / 0.5 / 0 by position: **relevance** direct / partial / off; **completeness** complete / gaps / major_gaps; **caveats** adequate / thin / missing. The answer score is their mean (`answer_score`). The schema is reason-first.
+    - A rightly declined question (off-topic or unsafe), or a needed clarification of a genuinely ambiguous one, is direct and complete.
+    - A conversation turn is rated with its earlier questions (`with_conversation_context`, derived from the sibling turn records in the run folder, so recorded runs work too). The earlier questions are part of the cache key.
+    - Shown as an "Answer quality" sub-table of the Judge section (totals by run, category and split; one row per case), in the case lines, flags (score below 1) and compare (`judge_answer_score`).
+    - Live 2026-11-13 on the two live runs (11 answers, about $0.002 per pass):
+      - The first version rated the Springfield clarification request "partial / major gaps" (0.5) and the follow-up "I mean Springfield, Illinois." 0.667, because the judge did not see the earlier turn. Both were rubric faults, fixed by the clarification rule and the conversation context; the first ratings were discarded (never committed).
+      - After the fix: 1.0 and 0.833; mean 0.944 for the conversation run and 0.833 for the 2-case run. Most non-1.0 ratings are "gaps" (e.g. no seasonal detail).
+      - `conv-amsterdam-rotterdam#3` rates 1.0 although its "largest difference was 2021" claim is wrong: this rubric does not check truth; claim support caught it.
+- Replies:
+  - `output_config.format` asks for a JSON schema; `_parse` checks again that each number appears exactly once, with valid choices and a reason, cut to 300 characters.
+  - An invalid, refused (`stop_reason` "refusal"; Haiku has no server-side fallback) or truncated (`max_tokens`) reply is counted and not cached, so it is retried next time.
+- Private records (added 2026-11-13, owner's request): a Langfuse import whose trace is not tagged `eval` (real `ask`, UI or chat use via `--all`, or another `--tag`; `is_private_record`) holds users' questions and answers.
+  - Its verdicts go to `[eval.judge] private_cache_dir` (`evals/judgements_private`, git-ignored, must differ from `cache_dir`), never the committed cache.
+  - `JudgeCaches.for_record` routes per record in judging (one `Judge` per cache, one shared budget, `merge_stats`), in the plan (`judge_plan_routed`) and in the offline lookup, so reports still show them.
+  - The calibration sheet uses eval records only.
+  - Tested end to end: a real-use claim never appears in the committed folder.
+- Cache: `evals/judgements/<key[:2]>/<key>.json`, committed. The key is a sha256 of rubric version, model, claim text and the sha256s of the cited texts. It uses texts, not IDs, because the same analysis can be R1 in one run and R7 in another, and a replay of a run hits the same entries. An entry holds the verdict, reason, claim, source IDs and text hashes (not the abstracts), the call's tokens and the date. One judge sample per claim: the verdict stays fixed until the text changes.
+- Adapter: `llm/anthropic_client.py` (`AnthropicJsonClient`), separate from the agent's `LLMClient`.
+  - It uses the official `anthropic` SDK, 2.8.0 at the time of writing, in the optional extra `uv sync --extra judge` (CI does not install it, and the SDK is imported only when a client is built from credentials).
+  - One `messages.create` with `system`, one user message, and `output_config={"effort", "format": {"type": "json_schema", "schema"}}`. No `temperature` and no prefill: Haiku 5.5 rejects both, and SDK 2.8 has no sampling parameters.
+  - Adaptive thinking stays on (the model's default) and counts toward `max_output_tokens` (4000). Text is read by block type, because a reply can start with `thinking` blocks.
+  - SDK errors map to `LLMAuthError` (no server text), `LLMRateLimitError`, `LLMConnectionError` and `LLMApiError`.
+  - The SDK surface (`output_config`, exceptions, `Usage`) was checked in the installed package, and a live call worked.
+- Config `[eval.judge]`:
+  - `model` ("claude-haiku-5-5"; `CLAUDE_MODEL` from the environment or `.env` overrides it), `effort` ("low"), `timeout_seconds`, `max_retries`, `max_output_tokens`, `max_calls` (100), `max_tokens` (200k), `max_cost_usd`, and `cache_dir`.
+  - Prices 0.10 / 0.50 USD per million tokens are Claude Haiku 5.5's first-party rates for prompts up to 100K tokens, from Anthropic's model table cached 2026-11-03. They are not re-verified; update them if the model changes.
+  - `CLAUDE_API_KEY` is loaded, validated and redacted like the other keys, and `check-credentials` shows it.
+- First live use (2026-11-13), on the two live runs, 11 records:
+  - 22 evidence claims in 10 calls, 19,290 input and 2,773 output tokens, about $0.0033. No reply failed validation.
+  - Verdicts: 19 supported, 2 partial, 1 unsupported.
+  - The unsupported one is a real agent error the lexical checks could not catch. "Compare the two" (conv-amsterdam-rotterdam#3) said the largest annual difference between the cities was 2021 (26.5 mm). From the cited R2/R3 texts it was 2017 (819.2 vs 777.5 mm, 41.7 mm). Every number in the claim was present, so the Phase 2 number check passed it. This was checked by recomputing from the stored texts.
+  - The two partials are judgement calls ("notably wet"; "other reported approaches" broader than the cited abstracts).
+  - Reasons sometimes exceed the requested 25 words; they are cut to 300 characters.
+  - Re-judging the replay folder of the same run used no calls (17 cached).
+- Not done yet: the owner's calibration (about 10 claims via `--sample 10`). Known limit: one sample per claim, and the judge is a different model family from the agent (deliberate), so its verdicts are not ground truth.
+
+Langfuse import (Phase 6, added 2026-11-13; read-only, no model call):
+- `eval import-langfuse [--since DATE] [--until DATE] [--tag eval | --all] [--limit 50] [--out DIR] [--env-file]`. It uses `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_HOST`, from the environment or `.env`, both keys added to `REDACTOR`. Tracing is not started.
+  - Defaults: the last 7 days to tomorrow, traces tagged `eval`, the newest 50.
+  - `--all` also imports real `ask`, `ui.ask` and `chat.turn` traces.
+  - Output: records, `summary.json`, `score.json` and `report.md` in `evals/runs/langfuse-<time>/`.
+  - Only the newest trace per case is kept; older duplicates are listed as skipped.
+  - Judging an `--all` import keeps the real-use verdicts out of git: they go to the private judge cache (see LLM judge).
+  - Exits 0 when the import worked; check results are reported, not the exit code.
+- API facts, checked against the owner's Langfuse Cloud project (EU host) on 2026-11-13, not only the docs:
+  - Only `GET /api/public/v2/observations`, with Basic auth. The docs say the v1 trace and observation reads are served on Cloud only until **2026-11-16**, so nothing here uses them.
+  - `fromStartTime` and `toStartTime` bound every request. `limit` is at most 1000. Paging follows `meta.cursor`; `meta` is `{}` on the last page.
+  - `fields=core,basic,time,io,metadata,model,usage,metrics,trace_context`; `expandMetadata=attributes`.
+  - **Metadata keys are flat dotted strings** (`attributes.research_agent.iterations`). The docs implied nesting.
+  - `usageDetails` = `{input, output, total}`; `latency` is in seconds.
+  - **A trace's tags are on its root row only** (children have `tags: []`), so a tag filter returns roots only. That is why the import lists roots with the filter, then reads the rows from the earliest to the latest selected root (+1 h) unfiltered and keeps the selected traces. 36 traces took 3 requests. The Hobby rate limit is 30 requests a minute; 429/5xx get bounded retries with `Retry-After`.
+- Mapping (`trace_record`, pure):
+  - Root (`eval.case`, `eval.turn`, `ask`, `ui.ask`, `chat.turn`): input is the question, output the answer JSON.
+  - `invoke_agent`: the `RunStats` fields.
+  - `chat` generations: model calls (usage, latency, `allow_tools`, finish reason, reply text and tool calls). There is no request hash, so imported records are refused by `eval replay`.
+  - The tool trace is rebuilt from the reply's tool calls with the agent's own `_trace_name`.
+  - Tool rows: tool calls, matched by `gen_ai.tool.call.id`; status from `research_agent.tool.error`, and ambiguous from the error text; the `R` ID from the result text.
+  - Cited R texts come from the tool results (or `recall_evidence` blocks), and cited W title and abstract are parsed from the search or recall results. So the number check, support metric and judge work on imported answers.
+  - `prompt_hash` is the fingerprint of the first `chat` input's system message, so it matches a local run's `prompt_hash` for the same prompt.
+  - A turn's `conversation` section has id and turn (from the matched turn), relation and its source, context tokens, turns sent and parts left out (from the root's attributes), and recalled IDs from the `recall_evidence` arguments. `state` is None: the task state is not in the trace, and `check_turn` then skips the state expectations.
+- Cases:
+  - An `eval.case` is matched by its non-`eval` tag (the case ID).
+  - A turn is matched by question and `research_agent.turn` against `conversations.toml`.
+  - Anything else becomes `lf-<trace id[:12]>`, category `imported`, with the universal invariants only (`rescore` knows this).
+  - Skipped, with a reason: a non-agent root (`ui.search`, `ui.rainfall`), traces recorded with content capture off, or no root yet.
+  - A run whose agent or root span has level ERROR is recorded as failed, with its status message.
+- Verified:
+  - The imported "Compare the two." turn equals the local record of the same live run in its claims, cited texts, tool result and prompt hash, so the judge's cached verdicts (2 supported, 1 unsupported) apply to it without a call.
+  - A real import of the last 7 days: 36 eval traces in 3 requests became 26 records (10 older duplicates skipped). All pass their case checks and all 4 conversations pass (state checks skipped).
+  - The judge cache already covered 22 of the 44 imported claims.
+  - The number check flagged "For 2016–2025" in `scale-yearly-vague-amsterdam`, where the cited analysis covered the whole record. That is the known model-side wording error (see UI facts, map point), now caught on imported data.
+  - A first version used the tag filter on the row request too and imported empty runs (0 model calls). The fixture stand-in had assumed tags on every row. Both are fixed: the stand-in now fails if the row request is tag-filtered.
+- Fixture: `tests/fixtures/langfuse_observations.json` holds the raw v2 rows (all field groups) of two eval traces from the owner's project, fetched read-only with the owner's OK: `rainfall-event-zhengzhou` (2026-11-12) and `conv-amsterdam-rotterdam#3` (2026-11-13). The project ID is replaced by a placeholder, and it contains no keys (scanned).
 
 Evaluation phases (the approved plan; token figures use the measured ~6.5k tokens per single-turn case and the 20k worst case per case under the current limits; dollar amounts need prices in `[eval]`):
 
 | Phase | Status | Builds | Paid use |
 |---|---|---|---|
-| 1 Foundations | built 2026-11-12 (not run live yet) | `evaluation/` package; run records; `RecordingLLMClient` with the run budget (calls, tokens, cost) and timing; `[eval]` config; `eval list` / `run` (plan only unless `--live`) / `score`; `split` and `category` on every case; evaluation tool cache and `--frozen-tools` | Baselines, only with the owner's OK: dev split about 26 cases x 6.5k = ~170k tokens; test split 8 cases = ~50k |
-| 2 Deterministic metrics | planned | Scorers on stored records: tool use (argument validity, error mix, redundant calls, uncited tool results, `max_tool_calls`); trajectory (turns, voluntary vs forced stop, new works per follow-up search); number faithfulness (every number in an evidence claim citing an R ID must appear in that record's text, within its rounding; `expect_numbers` verified values); retrieval (`evals/qrels.toml`: relevant / not-relevant W IDs labelled by the owner, precision, recall, unjudged count); `key_points` coverage (verified facts with `any_terms`, curated once, never generated per run); lexical citation-support proxy; efficiency (latency, tokens, cost, tokens per cited item); `report.md`. Owner time: about 1-2 h of labelling and approving key points | none |
-| 3 Replay | planned | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
-| 4 Multi-turn and fixed vs agentic | planned | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
-| 5 LLM judge (optional) | planned | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
-| 6 Langfuse import | planned | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
+| 1 Foundations | built 2026-11-12; first live run 2026-11-13 (2 cases) | `evaluation/` package; run records; `RecordingLLMClient` with the run budget (calls, tokens, cost) and timing; `[eval]` config; `eval list` / `run` (plan only unless `--live`) / `score`; `split` and `category` on every case; evaluation tool cache and `--frozen-tools` | Baselines, only with the owner's OK: dev split about 26 cases x 6.5k = ~170k tokens; test split 8 cases = ~50k |
+| 2 Deterministic metrics | built 2026-11-13 (`expect_numbers` on 5 cases; key points and qrels still empty, for the owner) | Scorers on stored records: tool use (argument validity, error mix, redundant calls, uncited tool results, `max_tool_calls`); trajectory (turns, voluntary vs forced stop, new works per follow-up search); number faithfulness (every number in an evidence claim citing an R ID must appear in that record's text, within its rounding; `expect_numbers` verified values); retrieval (`evals/qrels.toml`: relevant / not-relevant W IDs labelled by the owner, precision, recall, unjudged count); `key_points` coverage (verified facts with `any_terms`, curated once, never generated per run); lexical citation-support proxy; efficiency (latency, tokens, cost, tokens per cited item); `report.md`. Owner time: about 1-2 h of labelling and approving key points | none |
+| 3 Replay | built 2026-11-13; the 2-case live run replayed as same | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
+| 4 Multi-turn and fixed vs agentic | 4a (fixed vs agentic, `eval compare`) built 2026-11-13, not run live; 4b (conversations) built 2026-11-13; first live run 2026-11-13 (9 turns, 8/9, then 9/9 after a state fix) | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
+| 5 LLM judge (optional) | built 2026-11-13 with Claude Haiku 5.5 (owner's choice); the two live runs judged | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
+| 6 Langfuse import | built 2026-11-13 on the v2 observations API, checked against the owner's project (26 eval traces imported) | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
 
 What offline scoring (phases 1-3) can and cannot judge: it can judge tool choice, arguments and errors as recorded, trajectories, retrieval against labels, key-point coverage, citation and number faithfulness, and the recorded tokens, latency and cost, plus (replay) whether changed code still gives the same answer from the same model replies. It cannot judge what the model would do with a changed prompt, tool description, model or budget, run-to-run variance, current latency or fresh OpenAlex results: those need `eval run --live`. Planned directories: `evals/baselines/<name>/` (promoted, committed records), `evals/judgements/` (committed judge cache), `evals/qrels.toml`, `evals/conversations.toml`.
 
@@ -96,7 +343,7 @@ Rainfall facts (M6 and M7; Open-Meteo verified live on 2026-11-02):
 - Dry and wet share one archive request and cache entry, so a dry analysis after a wet one of the same city makes no network call; it still costs one rainfall call of the budget. `tool_trace` names rainfall calls with their metric (`analyze_rainfall_extremes[dry]`), and eval cases can state `expect_metric` ("wet" or "dry"), judged on that trace.
 - Dry caveats (code-added): ERA5 is not a gauge; regional studies (Spain, Vietnam; no global figure found) show ERA5 has too many light-rain days, which can shorten dry spells; a dry spell is not a drought index; yearly CDD restarts on 1 January and mostly reflects dry-season length where there is one. The prompt forbids calling a dry spell or dry year a "drought" unless a retrieved work says so, and tells the model to leave `start_year`/`end_year` unset unless the question names a period (without that rule it chose 1940-2022 for "how dry was 2022", so ranks were not comparable between questions).
 - Live plausibility check on 2026-11-02 (1950-2025): baseline mean yearly CDD about 274 days for Cairo, 51 Perth, 50 Madrid; Cairo's longest unbroken spell was 700 days (more than a calendar-year CDD can show); Madrid's driest years by total were 1994, 2005, 2015.
-- Known gaps: numbers inside a claim are not machine-checked against the cited analysis (only that the cited `R…` exists); ERA5 at 0.25 degrees smooths local extremes, so rankings for flash events can look mild; place names the geocoder lists twice were reported as ambiguous when the two populations were within `dominance_ratio` (for example "Singapore": 6.1M and 5.6M entries, both Singapore, Singapore); the `same_place_km` merge (below) should resolve this if the two entries are within 25 km, not re-checked; `change-detection` returned an unstructured answer once in four live runs after the two-tool prompt was introduced (M6); 3 of 3 reruns and the full 12-case re-run after M7 (12/12) passed, so it looks like run-to-run variance, but that is not proven.
+- Known gaps: numbers inside a claim are checked against the cited analysis only by `eval score` (reported, not enforced; see Evaluation metrics), not in `ask` or the UI; ERA5 at 0.25 degrees smooths local extremes, so rankings for flash events can look mild; place names the geocoder lists twice were reported as ambiguous when the two populations were within `dominance_ratio` (for example "Singapore": 6.1M and 5.6M entries, both Singapore, Singapore); the `same_place_km` merge (below) should resolve this if the two entries are within 25 km, not re-checked; `change-detection` returned an unstructured answer once in four live runs after the two-tool prompt was introduced (M6); 3 of 3 reruns and the full 12-case re-run after M7 (12/12) passed, so it looks like run-to-run variance, but that is not proven.
 
 ENSO facts (M8; NOAA CPC files fetched 2026-11-02):
 - Tool `analyze_enso_events(phase?, start_year?, end_year?, year?)`, offered only together with the rainfall tool (`ResearchAgent(..., rainfall=..., enso=...)`; `enso` without `rainfall` raises `ValueError`). Without `enso` the literature-only and two-tool prompts are byte-identical to before (tested). `ask` always passes the real client. The prompt tells the model: events/dates/strength/counts only from the tool, literature for causes, impacts and what a paper counted, both when a question needs both.
@@ -211,7 +458,7 @@ Ask the user before the milestone that needs each one. Do not assume.
 
 - `research-agent chat` (CLI) and the UI Ask tab support follow-ups. `ask` and `eval` stay single-turn and unchanged; with no context the prompt is byte-identical (tested).
 - Per turn: `ConversationService.ask(session_id, question)` loads the session, `build_context`, runs the agent with a `TurnContext`, `apply_turn`, and stores the new session. A failed turn leaves the session unchanged. An unknown or expired ID starts a new session (never another one's). Each turn keeps its own budgets, error mapping and citation validation.
-- Task state (`TaskState`: places, period, event date or year, metrics, sources, searches, pending clarification) is built only from tool events (`AgentResult.events`), never from model text. The model labels the turn in its JSON (`relation`: continue, update, compare, new_topic; only asked in conversation mode). `new_topic` archives the topic as one line and starts a new state; `compare` adds to the state; `update`/`continue` replace only what the turn used. A missing label counts as `update` (`relation_source="default"`). An ambiguous place sets `pending` (with candidates) until a rainfall call resolves one.
+- Task state (`TaskState`: places, period, event date or year, metrics, sources, searches, pending clarification) is built only from tool events (`AgentResult.events`), never from model text. The model labels the turn in its JSON (`relation`: continue, update, compare, new_topic; only asked in conversation mode). `new_topic` archives the topic as one line and starts a new state; `compare` adds to the state, including the places, metrics and sources of stored analyses it recalled (since 2026-11-13); `update`/`continue` replace only what the turn used. A missing label counts as `update` (`relation_source="default"`). An ambiguous place sets `pending` (with candidates) until a rainfall call resolves one.
 - Context (`[conversation] max_context_tokens`, 2000) is filled in priority order: task state (always), the last turn, the current topic's evidence index (ID and label only), other recent turns (`recent_turns`), code-written one-line summaries of older turns and archived topics. Earlier answers are sent as claim digests marked "model-written, not evidence". Tool output is never resent. Left-out items are counted and reported as a limitation. Headers and separators are costed, so the context never exceeds the budget unless the task state alone does (tested over a range of budgets). The context is added to the turn's first token estimate.
 - Evidence reuse: stored items (`EvidenceItem`, at most `max_stored_evidence`, oldest dropped) can be shown again with the `recall_evidence` tool (offered only when something is stored; at most `max_recall_per_call` IDs). It costs context tokens and a model turn, but no search or analysis budget and no network. Only items shown in the current turn (new or recalled) are citable; an ID that appears only in an earlier answer is rejected and its claim downgraded (tested). `R…` IDs continue across a session (`next_data_number`). Reused items add a limitation, and recalled works do not trigger the "no search was run" note.
 - Sessions: `InMemorySessionStore` (thread-safe, `max_sessions` LRU, `session_ttl_minutes` idle expiry, lost on restart). A persistent store would implement `SessionStore` and rebuild `EvidenceItem.record` from `EvidenceItem.ref` (tool and arguments, mostly a cache hit).
@@ -221,7 +468,7 @@ Ask the user before the milestone that needs each one. Do not assume.
   - "What about Rotterdam?": Rotterdam was analysed with the same period and metric, and Amsterdam was recalled. The model labelled it compare, not update.
   - "Compare the two": recalls only, no new analysis.
   - Context sent: about 270 and 470 tokens.
-- Known gaps: the relation label is the model's call and is not evaluated by eval cases (no multi-turn eval yet); there is no per-session token cap; the UI conversation has not been tried live in a browser.
+- Known gaps: the relation label is the model's call; since 2026-11-13 it is checked by the conversation evals (`evals/conversations.toml`, not yet run live); there is no per-session token cap; the UI conversation has not been tried live in a browser.
 
 ## Tracing (added 2026-11-11)
 
@@ -238,6 +485,7 @@ Ask the user before the milestone that needs each one. Do not assume.
 - `load_credentials` never mutates `os.environ`. Keys are held in `Secret`, whose `repr`/`str`/format are redacted; call `.reveal()` only at the point of use. Errors name the variable, never the value.
 - Never read, print or commit `.env`. To check configuration use `uv run research-agent check-credentials` (offline: presence and format only; it cannot tell if a provider accepts the key).
 - `OPENAI_API_KEY` is used by `OpenAIClient.from_credentials`, which raises `CredentialError` if it is missing.
+- `CLAUDE_API_KEY` (optional) is used only by the evaluation judge (`AnthropicJsonClient.from_credentials`); `CLAUDE_MODEL` (not a secret) names the judge model.
 
 ## Architecture
 
@@ -330,7 +578,13 @@ uv run research-agent ui                                # web interface on http:
 uv run research-agent eval list                         # free: the cases, split and category
 uv run research-agent eval run                          # free: prints the plan only
 uv run research-agent eval run --live --only flood-sar  # real model; costs tokens (budgeted)
-uv run research-agent eval score evals/runs/<run-id>    # free: rescore stored records
+uv run research-agent eval score evals/runs/<run-id>    # free: rescore stored records, write report.md
+uv run research-agent eval replay evals/runs/<run-id>   # free: recorded replies through the current code
+uv run research-agent eval run --mode fixed            # plan for the fixed-search baseline (literature)
+uv run research-agent eval compare <run-a> <run-b>     # free: paired per-case differences
+uv run research-agent eval run --suite conversations   # plan for the multi-turn conversations
+uv run --extra judge research-agent eval judge <run>   # plan; --live judges claims (Claude Haiku 5.5)
+uv run research-agent eval import-langfuse             # free, network: Langfuse traces as run records
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 

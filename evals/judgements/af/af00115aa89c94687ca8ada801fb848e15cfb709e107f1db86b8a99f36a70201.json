@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1571,
+  "items": 1,
+  "output_tokens": 107
+ },
+ "claim": "The ERA5 grid-cell annual totals suggest especially wet recent years, but the result does not provide the rainfall total for every year in the last decade, so it is not enough to characterize the entire decade year by year.",
+ "judged_on": "2026-11-13",
+ "key": "af00115aa89c94687ca8ada801fb848e15cfb709e107f1db86b8a99f36a70201",
+ "kind": "interpretation",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists wettest years including 2023, 2024, 2012 and gives baseline; it does not provide annual totals for every decade year, so the claim's caveat is consistent with the data. Tentative wording ('suggest') matches evidence.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "00506d6c19306cbbcf82715f4cf6ff2281379be7edbf0209625310411c8bd6e2"
+  }
+ ],
+ "verdict": "within"
+}

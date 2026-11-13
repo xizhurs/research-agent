@@ -226,7 +226,7 @@ def test_run_without_live_prints_the_plan_and_builds_nothing(monkeypatch, tmp_pa
     args = ["eval", "run", "--cases", str(cases_file(tmp_path)), "--config", str(BASE)]
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
-    assert "Plan: 1 case(s): crop" in result.output  # the held-out case is not in the dev split
+    assert "Plan (agentic): 1 case(s): crop" in result.output  # the held-out case is not dev
     assert "Worst case 20,000 tokens" in result.output and "nothing was run" in result.output
 
 
@@ -243,9 +243,10 @@ def test_live_run_writes_records_and_score_rescores_them_offline(
     seen = {}
 
     @contextmanager
-    def fake_open(cfg, creds, *, wrap_llm=None, http_client=None):
+    def fake_open(cfg, creds, *, wrap_llm=None, http_client=None, today=None):
         seen["cache"] = cfg.openalex.cache_dir
         seen["http"] = http_client
+        seen["today"] = today()
         llm = wrap_llm(StubLLMClient(search_then_answer()))
         search = FakeSearch(make_result([make_work("W1")]))
         yield ResearchAgent(llm, search, cfg.limits, cfg.reporting)
@@ -263,6 +264,9 @@ def test_live_run_writes_records_and_score_rescores_them_offline(
     assert seen["cache"] == Path("evals/tool_cache/openalex") and seen["http"] is not None
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["model_calls"] == 2 and summary["input_tokens"] == 400
+    (record,) = read_records(out)
+    assert record["today"] == seen["today"].isoformat()  # pinned, so a replay can use it
+    assert record["llm_calls"][0]["tools_hash"]
 
     scored = runner.invoke(app, ["eval", "score", str(out), "--cases", str(cases),
                                  "--config", str(BASE)])  # fmt: skip

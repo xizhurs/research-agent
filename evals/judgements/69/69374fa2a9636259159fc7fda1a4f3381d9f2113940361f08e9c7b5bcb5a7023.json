@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1467,
+  "items": 1,
+  "output_tokens": 128
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "69374fa2a9636259159fc7fda1a4f3381d9f2113940361f08e9c7b5bcb5a7023",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers wet vs dry relative to normal with a baseline comparison and ratio; caveats cover reanalysis, missing-day handling, percentile band, and place matching. Could mention the 1.11 ratio is only modestly above normal, but it says 'somewhat wetter'.",
+ "relevance": "direct",
+ "rubric": 2
+}

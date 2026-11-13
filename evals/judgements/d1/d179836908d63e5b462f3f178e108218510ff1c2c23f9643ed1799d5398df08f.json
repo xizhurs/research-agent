@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1110,
+  "items": 1,
+  "output_tokens": 132
+ },
+ "caveats": "adequate",
+ "completeness": "major_gaps",
+ "judged_on": "2026-11-13",
+ "key": "d179836908d63e5b462f3f178e108218510ff1c2c23f9643ed1799d5398df08f",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Declines the request citing a tool limit on start years (1940 onward), gives no record or alternative source. Relevance is partial since it addresses the question only by refusal; it lacks any pointer to other data sources. Limitations are stated, though the tool-restriction claim is a bit thin.",
+ "relevance": "partial",
+ "rubric": 2
+}

@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1567,
+  "items": 1,
+  "output_tokens": 99
+ },
+ "caveats": "adequate",
+ "completeness": "major_gaps",
+ "judged_on": "2026-11-13",
+ "key": "5a14e9fd875b1d8891d93fb78673df684efcc1eb7b3c5984f0a82fa95bf30681",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Answers only with the two wettest years and a baseline comparison, not the decade's yearly totals; the answer itself admits this gap. Caveats on ERA5 and place matching are well covered.",
+ "relevance": "partial",
+ "rubric": 2
+}

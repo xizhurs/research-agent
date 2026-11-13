@@ -1,0 +1,33 @@
+{
+ "call": {
+  "input_tokens": 2504,
+  "items": 1,
+  "output_tokens": 81
+ },
+ "claim": "The literature results show several families of methods, but are not an exhaustive survey or a direct, controlled comparison across all methods.",
+ "judged_on": "2026-11-13",
+ "key": "a79d940ad8bf56cb03b9032aacd9b41b245602c535ff8260a579cd36de81e18f",
+ "kind": "interpretation",
+ "model": "claude-haiku-5-5",
+ "reason": "Claim is a modest meta-observation that the four sources cover several method families without being an exhaustive survey or controlled comparison; this follows from the sources' scope.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W3183470088",
+   "sha256": "453b18e14eea0c2cbf74a5d692f2e37ca0ed2217881b783b553ffd187d768ae1"
+  },
+  {
+   "id": "W3122949800",
+   "sha256": "0aac4312bd5a566cc6a3e55d8930c3a94a68720e881e24cf3b216a6fec7465af"
+  },
+  {
+   "id": "W3217764757",
+   "sha256": "64b25a8b952bbcbcdbaf18e1f01d64ea21766b995fec5c77061b08eb76b475b6"
+  },
+  {
+   "id": "W4390607664",
+   "sha256": "595ec08363a739b9b870a6b972ff8dceac3ff082a9c4bddc572f03f2a0b7f495"
+  }
+ ],
+ "verdict": "within"
+}

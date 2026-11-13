@@ -11,7 +11,8 @@ from research_agent.agent import AgentResult
 from research_agent.agent.budget import OVERSHOOT_PREFIX
 from research_agent.agent.tools import RAINFALL_TOOL_NAME, TEMPERATURE_TOOL_NAME, format_recalled
 from research_agent.config import Limits
-from research_agent.evaluation.cases import EvalCase
+from research_agent.evaluation.cases import EvalCase, KeyPoint, TurnExpect
+from research_agent.evaluation.numbers import value_found
 from research_agent.tracing import answer_json
 
 
@@ -42,11 +43,23 @@ def check_result(case: EvalCase, result: AgentResult, limits: Limits) -> list[st
     return check_record(case, answer_dict(result), stats_dict(result), limits)
 
 
+def covered_key_points(key_points: tuple[KeyPoint, ...], claims: list[dict]) -> list[KeyPoint]:
+    """Key points with a term in a claim that cites something (citations are already valid)."""
+    cited_text = " ".join(c["text"] for c in claims if c["sources"]).lower()
+    return [k for k in key_points if any(term in cited_text for term in k.any_terms)]
+
+
 def check_record(
-    case: EvalCase, answer: dict[str, Any], stats: dict[str, Any], limits: Limits
+    case: EvalCase,
+    answer: dict[str, Any],
+    stats: dict[str, Any],
+    limits: Limits,
+    tool_results: list[str] | None = None,
 ) -> list[str]:
     """The checks on stored data: ``answer`` and ``stats`` as written by ``answer_dict`` and
-    ``stats_dict``. Returns the failed expectations (empty means the case passed)."""
+    ``stats_dict``; ``tool_results`` are the texts the model saw (from a run record; without
+    them the tool side of ``expect_numbers`` is not checked). Returns the failed expectations
+    (empty means the case passed)."""
     failures: list[str] = []
     claims = answer["claims"]
     trace = [list(turn) for turn in stats["tool_trace"]]
@@ -127,4 +140,68 @@ def check_record(
     leaked = [p for p in case.forbidden_phrases if p in text]
     if leaked:
         failures.append(f"answer contains forbidden phrase(s): {leaked}")
+
+    requested_calls = sum(len(turn) for turn in trace)
+    if case.max_tool_calls is not None and requested_calls > case.max_tool_calls:
+        failures.append(
+            f"requested {requested_calls} tool call(s) (case limit {case.max_tool_calls})"
+        )
+    # Tool side: the data is still right (signed). Claim side: it was reported (by absolute
+    # value, so "41.5 °C below zero" counts for -41.5).
+    claim_texts = [c["text"] for c in claims]
+    for expected in case.expect_numbers:
+        label = f"{expected.value:g} (±{expected.tolerance:g})"
+        if tool_results is not None and not value_found(
+            expected.value, expected.tolerance, tool_results
+        ):
+            failures.append(f"expected value {label} not found in any tool result")
+        if not value_found(expected.value, expected.tolerance, claim_texts, signed=False):
+            failures.append(f"expected value {label} not found in any claim")
+    if case.min_key_points:
+        covered = len(covered_key_points(case.key_points, claims))
+        if covered < case.min_key_points:
+            failures.append(
+                f"covered {covered} of {len(case.key_points)} key point(s) "
+                f"(case minimum {case.min_key_points})"
+            )
+    return failures
+
+
+def check_turn(expect: TurnExpect, record: dict[str, Any]) -> list[str]:
+    """The conversation checks of one completed turn record: the model's relation label and
+    recalled IDs, the analyses it ran, and the task state the code built after the turn."""
+    info = record.get("conversation") or {}
+    failures = []
+    relation = info.get("relation")
+    if expect.expect_relation and relation not in expect.expect_relation:
+        failures.append(
+            f"relation {relation!r} ({info.get('relation_source')}) is not one of "
+            f"{list(expect.expect_relation)}"
+        )
+    recalled = info.get("recalled", [])
+    if expect.expect_recall is True and not recalled:
+        failures.append("expected stored evidence to be recalled; nothing was")
+    if expect.expect_recall is False and recalled:
+        failures.append(f"expected no recall; recalled {recalled}")
+    analyses = record["stats"]["rainfall_calls"]
+    if expect.max_new_analyses is not None and analyses > expect.max_new_analyses:
+        failures.append(
+            f"ran {analyses} new analysis(es) (turn limit {expect.max_new_analyses})"
+        )
+    state = info.get("state")
+    if state is None:  # not recorded (an imported trace): state expectations are not judged
+        return failures
+    places = state.get("places", [])
+    for want in expect.expect_places:
+        if not any(want in place.lower() for place in places):
+            failures.append(f"task state has no place matching {want!r}; places: {places}")
+    metrics = state.get("metrics", [])
+    for metric in expect.expect_state_metrics:
+        if metric not in metrics:
+            failures.append(f"task state lacks metric {metric!r}; metrics: {metrics}")
+    pending = state.get("pending")
+    if expect.expect_pending is True and pending is None:
+        failures.append("expected a pending clarification (ambiguous place); there is none")
+    if expect.expect_pending is False and pending is not None:
+        failures.append(f"expected no pending clarification; still pending for {pending!r}")
     return failures

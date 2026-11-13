@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1245,
+  "items": 4,
+  "output_tokens": 326
+ },
+ "judged_on": "2026-11-13",
+ "key": "5659df63d52b454bfcdd593631cd458469eb0f8a5f6b4c826dbdf861d7e27f4f",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claim 1 states ERA5 estimates 79.0 mm in Zhengzhou on 20 July 2021, but gives no grid cell coordinates.",
+   "text": "ERA5 gives 79.0 mm for 20 July 2021 at the Zhengzhou grid cell (34.75, 113.75)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims state 22nd among 76 annual maxima, 72.4th percentile, and 1.2 times the 66.8 mm 1991-2020 average, matching the key point.",
+   "text": "In the ERA5 record the day is not exceptional: about the 22nd of 76 annual maxima (72nd percentile), 1.2 times the 1991-2020 mean annual maximum (66.8 mm)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claims give the 1955 record of 213.9 mm but do not mention the 2021-08-22 value of 170.1 mm or that 2021's maximum fell in August.",
+   "text": "ERA5's largest Zhengzhou daily totals are 1955-06-22 (213.9 mm) and 2021-08-22 (170.1 mm); in ERA5 even 2021's own maximum fell in August, not on 20 July."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claims do not mention the grid resolution, station measurements, or the hourly rainfall figure.",
+   "text": "A reanalysis grid cell of about 25 km strongly understates the local extreme: Zhengzhou's station measured several hundred mm that day, with about 200 mm in a single hour."
+  }
+ ],
+ "rubric": 3
+}

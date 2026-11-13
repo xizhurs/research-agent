@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1462,
+  "items": 1,
+  "output_tokens": 104
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "ccb3bc1a62c15bd2b28f9ce2e43fa5cab97b5c9c7da69d641e8b719eb259fc5a",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers wet vs dry relative to normal with a ratio and percentile band; limitations on ERA5 gridding, missing days, and place matching are stated. Could note the single-year, precipitation-only scope.",
+ "relevance": "direct",
+ "rubric": 2
+}

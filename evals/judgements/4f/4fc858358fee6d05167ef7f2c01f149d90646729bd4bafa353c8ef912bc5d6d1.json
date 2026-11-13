@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2647,
+  "items": 3,
+  "output_tokens": 304
+ },
+ "claim": "Methods used for crop-type mapping from Sentinel-2 time series include 1D convolutional neural networks (1D CNNs), long short-term memory networks (LSTMs), gated recurrent units (GRUs), and hybrid LSTM-CNN and GRU-CNN models.",
+ "judged_on": "2026-11-13",
+ "key": "4fc858358fee6d05167ef7f2c01f149d90646729bd4bafa353c8ef912bc5d6d1",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S1 names 1D CNN, LSTM, GRU, LSTM-CNN and GRU-CNN models for crop type mapping with Sentinel-2 time series; all elements stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W3183470088",
+   "sha256": "453b18e14eea0c2cbf74a5d692f2e37ca0ed2217881b783b553ffd187d768ae1"
+  }
+ ],
+ "verdict": "supported"
+}

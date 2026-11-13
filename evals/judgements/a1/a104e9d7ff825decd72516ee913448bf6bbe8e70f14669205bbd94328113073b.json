@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1132,
+  "items": 4,
+  "output_tokens": 281
+ },
+ "judged_on": "2026-11-13",
+ "key": "a104e9d7ff825decd72516ee913448bf6bbe8e70f14669205bbd94328113073b",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims explicitly reference 2016–2025 as the period analyzed, matching the decade asked about.",
+   "text": "The answer covers the last 10 years (2016-2025), as asked, not the whole 1950-2025 record."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claims give 2023 at 1100.7 mm and 2024 at 1042.6 mm as wettest, exceeding the mean, but do not mention the percentile band or the 1950-2025 record claim.",
+   "text": "2023 (1100.7 mm) and 2024 (1042.6 mm) were the wettest years of the decade, both well above the 1991-2020 10th-90th percentile band (641.6 to 918.4 mm); 2023 is the wettest year in the 1950-2025 ERA5 record."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claims do not mention 2025 or 2018 totals or which years were driest.",
+   "text": "2025 (649.7 mm) and 2018 (650.7 mm) were the driest years of the decade, near the bottom of the band."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim states the 1991–2020 annual mean is 777.4 mm.",
+   "text": "The 1991-2020 baseline mean annual total is 777.4 mm."
+  }
+ ],
+ "rubric": 3
+}

@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1269,
+  "items": 4,
+  "output_tokens": 322
+ },
+ "judged_on": "2026-11-13",
+ "key": "6d1f178db34ef2aae772f066f5703db867264a769363598d6bc2ae18c12a1b73",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claims give 460.9 mm, 1.16 times the 1991–2020 baseline mean of 395.6 mm, and rank 47 of 76; matches key point.",
+   "text": "In ERA5, 2022 was not a dry year by annual total in Madrid: 460.9 mm, 1.16 times the 1991-2020 mean (395.6 mm), rank 47 of 76 (1 = driest)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claims say 67-day dry run exceeds the baseline median CDD of 46.0 days, not the mean of 49.8 days; the key point's specific mean figure is not stated, though the comparison direction is similar.",
+   "text": "Its longest dry run in 2022 was 67 days, longer than the 1991-2020 mean yearly CDD (49.8 days)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claims do not name the driest years 1994, 2005, or 2015 or their totals.",
+   "text": "The driest years in the record were 1994 (209.2 mm), 2005 (224.2 mm) and 2015 (245.0 mm)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claims state a dry run is not a drought index, but do not mention evaporation, soil moisture or accumulated deficit.",
+   "text": "A dry spell or a low total is not a drought index (no evaporation, soil moisture or accumulated deficit)."
+  }
+ ],
+ "rubric": 3
+}

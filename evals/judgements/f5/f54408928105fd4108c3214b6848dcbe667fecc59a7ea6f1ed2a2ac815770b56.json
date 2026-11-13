@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1761,
+  "items": 2,
+  "output_tokens": 175
+ },
+ "claim": "This is a grid-cell reanalysis estimate, not a station measurement, and it does not describe urban heat at finer scales. One hot day alone does not establish a heatwave.",
+ "judged_on": "2026-11-13",
+ "key": "f54408928105fd4108c3214b6848dcbe667fecc59a7ea6f1ed2a2ac815770b56",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source says values are ERA5 grid-cell reanalysis, not station measurements, not urban heat, and one hot day is not a heatwave. All stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "f442d5d0777a82ce7c8e38d43f5b56e065dceecf9891f7021955dd7bd8dec8ee"
+  }
+ ],
+ "verdict": "supported"
+}

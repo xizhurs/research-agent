@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 3211,
+  "items": 3,
+  "output_tokens": 358
+ },
+ "claim": "A study of Henan’s July 2021 extreme precipitation identifies three moisture-transport routes, involving the western Pacific subtropical high (WPSH), the WPSH with Typhoon In-Fa, and the WPSH with Typhoon Cempaka. It reports that southern China supplied 38.1% of moisture sources and the western North Pacific 30.0%; the WPSH–In-Fa route had the highest moistening and precipitating efficiency.",
+ "judged_on": "2026-11-13",
+ "key": "c15ddd8676697a56c475a297c025061189ca348be75d01f0fe6fa49fff233419",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S2 abstract states the three routes (WPSH; WPSH with In-Fa; WPSH with Cempaka), 38.1% from southern China, 30.0% from western North Pacific, and WPSH-In-Fa highest efficiency. All match.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W4210343332",
+   "sha256": "e34ff716bbcff3aba2afba3a623eb341cc631e1e7d3175961ec9b93f085d0c0d"
+  }
+ ],
+ "verdict": "supported"
+}

@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
@@ -21,6 +21,8 @@ from research_agent.agent.tools import format_enso, format_rainfall, format_temp
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.conversation import ConversationService, InMemorySessionStore
 from research_agent.credentials import (
+    CLAUDE_MODEL_VAR,
+    CLAUDE_VAR,
     DEFAULT_ENV_FILE,
     ENV_FILE_ENV_VAR,
     OPENAI_VAR,
@@ -29,28 +31,73 @@ from research_agent.credentials import (
     Credentials,
     load_credentials,
     read_env,
+    validate_secret,
 )
 from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
+    Conversation,
+    ConversationDriver,
+    EvalBudgetExceeded,
     EvalCase,
     EvalError,
+    FixedSearchLLMClient,
+    Judge,
+    JudgeCache,
+    JudgeCaches,
+    LangfuseImportError,
+    LangfuseReader,
+    Qrels,
     RecordingLLMClient,
+    ReplayLLMClient,
     RunBudget,
+    ScoreSettings,
+    aggregate,
+    agreement,
+    calibration_sample,
+    case_matcher,
+    compare_scores,
+    fetch_traces,
+    fixed_query,
+    flags,
+    is_private_record,
+    judge_plan_routed,
+    judge_section,
+    load_calibration,
     load_cases,
+    load_conversations,
+    load_qrels,
+    merge_stats,
+    metrics_line,
     read_records,
+    record_failures,
+    render_calibration,
+    render_comparison,
+    replay_date,
+    replay_section,
     rescore,
     run_cases,
+    run_conversations,
+    score_records,
     select_cases,
+    select_conversations,
     summarize_records,
+    trace_record,
+    with_conversation_context,
+    write_record,
+    write_scores,
     write_summary,
 )
 from research_agent.evaluation.runner import fingerprint, git_commit
 from research_agent.llm import LLMAuthError, LLMClient, LLMError, OpenAIClient
+from research_agent.llm.anthropic_client import AnthropicJsonClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
 from research_agent.temperature import TemperatureClient
 from research_agent.tracing import (
+    LANGFUSE_HOST_VAR,
+    LANGFUSE_PUBLIC_VAR,
+    LANGFUSE_SECRET_VAR,
     TracingError,
     answer_json,
     configure_tracing,
@@ -404,6 +451,10 @@ def check_credentials(
         + ("set" if creds.openalex_api_key else "not set (optional; small anonymous budget)")
     )
     typer.echo(f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed for ask)"))
+    typer.echo(
+        f"{CLAUDE_VAR}: "
+        + ("set" if creds.claude_api_key else "not set (optional; only for eval judge --live)")
+    )
     if require_openai and creds.openai_api_key is None:
         typer.echo(f"error: {OPENAI_VAR} is required but not set", err=True)
         raise typer.Exit(code=1)
@@ -416,33 +467,39 @@ def _open_agent(
     *,
     wrap_llm: Callable[[LLMClient], LLMClient] | None = None,
     http_client: httpx.Client | None = None,
+    llm: LLMClient | None = None,
+    today: Callable[[], date] | None = None,
 ) -> Iterator[ResearchAgent]:
     """Build the real clients and yield an agent. Patched out in CLI tests.
 
     ``wrap_llm`` wraps the model client (evaluation recording and budget); ``http_client`` is
-    used by every tool client (evaluation with a frozen tool cache: no network).
+    used by every tool client (evaluation with a frozen tool cache: no network); ``llm``
+    replaces the OpenAI client (replay: no key needed); ``today`` pins the date the agent and
+    the rainfall/temperature clients use (evaluation runs and replay).
     """
     key = creds.openalex_api_key
-    llm: LLMClient = OpenAIClient.from_credentials(cfg.llm, creds)
+    model: LLMClient = llm if llm is not None else OpenAIClient.from_credentials(cfg.llm, creds)
     if wrap_llm is not None:
-        llm = wrap_llm(llm)
+        model = wrap_llm(model)
     api_key = key.reveal() if key else None
+    dated = {"today": today} if today is not None else {}
     with (
         OpenAlexClient(
             cfg.openalex, cfg.limits, api_key=api_key, http_client=http_client
         ) as search,
-        RainfallClient(cfg.rainfall, http_client=http_client) as rain,
-        TemperatureClient(cfg.rainfall, http_client=http_client) as temp,
+        RainfallClient(cfg.rainfall, http_client=http_client, **dated) as rain,
+        TemperatureClient(cfg.rainfall, http_client=http_client, **dated) as temp,
         EnsoClient(cfg.enso, http_client=http_client) as enso_client,
     ):
         yield ResearchAgent(
-            llm,
+            model,
             search,
             cfg.limits,
             cfg.reporting,
             rainfall=rain,
             enso=enso_client,
             temperature=temp,
+            **dated,
         )
 
 
@@ -612,6 +669,8 @@ def chat(
 
 
 DEFAULT_CASES = Path("evals/cases.toml")
+DEFAULT_QRELS = Path("evals/qrels.toml")
+DEFAULT_CONVERSATIONS = Path("evals/conversations.toml")
 FROZEN_TTL_DAYS = 36500.0  # the evaluation tool cache never expires; delete it to refresh
 
 eval_app = typer.Typer(
@@ -626,6 +685,101 @@ CASES_OPTION = typer.Option(DEFAULT_CASES, "--cases", help="TOML file with evalu
 ONLY_OPTION = typer.Option([], "--only", help="Only this case id (repeatable; any split).")
 SPLIT_OPTION = typer.Option("dev", "--split", help="'dev', 'test' (held out) or 'all'.")
 CATEGORY_OPTION = typer.Option(None, "--category", help="e.g. literature, rainfall, enso.")
+QRELS_OPTION = typer.Option(
+    DEFAULT_QRELS, "--qrels", help="Relevance labels per case (a missing file means none)."
+)
+CONVERSATIONS_OPTION = typer.Option(
+    DEFAULT_CONVERSATIONS, "--conversations", help="TOML file with evaluation conversations."
+)
+SUITE_OPTION = typer.Option(
+    "cases", "--suite", help="'cases' (single questions) or 'conversations' (multi-turn)."
+)
+
+
+def _suite_or_exit(suite: str) -> str:
+    if suite not in ("cases", "conversations"):
+        typer.echo("error: --suite must be 'cases' or 'conversations'", err=True)
+        raise typer.Exit(code=1)
+    return suite
+
+
+def _conversations_or_exit(path: Path, only: list[str], split: str) -> list[Conversation]:
+    if split not in ("dev", "test", "all"):
+        typer.echo("error: --split must be 'dev', 'test' or 'all'", err=True)
+        raise typer.Exit(code=1)
+    try:
+        return select_conversations(
+            load_conversations(path), only=only, split=None if split == "all" else split
+        )
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _all_cases_or_exit(cases: Path, conversations: Path) -> list[EvalCase]:
+    """Every case and every conversation turn (for scoring records of either suite)."""
+    try:
+        turns = [t for c in load_conversations(conversations) for t in c.turns]
+        return load_cases(cases) + turns
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _echo_conversations(agg: dict) -> None:
+    conv = agg["conversations"]
+    if conv["total"]:
+        failed = f" (not: {', '.join(conv['failed'])})" if conv["failed"] else ""
+        typer.echo(
+            f"Conversations: {conv['passed']}/{conv['total']} with every turn passed{failed}"
+        )
+
+
+def _qrels_or_exit(path: Path, cases: list[EvalCase]) -> dict[str, Qrels]:
+    try:
+        qrels = load_qrels(path)
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    unknown = sorted(qrels.keys() - {c.id for c in cases})
+    if unknown:
+        typer.echo(f"warning: {path} labels unknown case(s): {', '.join(unknown)}", err=True)
+    return qrels
+
+
+def _judge_model(cfg: Config, env_file: Path = DEFAULT_ENV_FILE) -> str:
+    """CLAUDE_MODEL (environment or .env) if set, else [eval.judge] model ("" = none)."""
+    return (read_env(env_file).get(CLAUDE_MODEL_VAR) or cfg.eval.judge.model or "").strip()
+
+
+def _judge_lookup(cfg: Config, env_file: Path = DEFAULT_ENV_FILE):
+    """Cached judge verdicts per record (reads files only; never calls the model)."""
+    model = _judge_model(cfg, env_file)
+    if not model:
+        return None
+    caches = JudgeCaches(JudgeCache(cfg.eval.judge.cache_dir),
+                         JudgeCache(cfg.eval.judge.private_cache_dir))  # fmt: skip
+    return lambda record, case: judge_section(record, case, model, caches.for_record(record))
+
+
+def _score_and_report(
+    cfg: Config,
+    run_dir: Path,
+    records: list[dict],
+    cases: list[EvalCase],
+    qrels: dict[str, Qrels],
+    budget: RunBudget,
+    env_file: Path = DEFAULT_ENV_FILE,
+) -> tuple[list[dict], dict]:
+    """Metrics of the records (reported, never failures), written to score.json and report.md."""
+    settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
+    scores = score_records(
+        with_conversation_context(records), cases, qrels, cfg.limits, settings, budget,
+        _judge_lookup(cfg, env_file),
+    )  # fmt: skip
+    agg = aggregate(scores)
+    write_scores(run_dir, scores, agg)
+    return scores, agg
 
 
 def _cases_or_exit(
@@ -702,11 +856,14 @@ def _record_line(record: dict) -> str:
 def _summary_line(summary: dict) -> str:
     cost = summary["estimated_cost_usd"]
     money = f"~${cost:.4f}" if cost is not None else "cost unknown (no prices in [eval])"
-    not_run = summary["run_failed"] + summary["aborted"] + summary["skipped"]
+    not_run = (
+        summary["run_failed"] + summary["aborted"] + summary["skipped"] + summary["diverged"]
+    )
+    diverged = f", {summary['diverged']} diverged" if summary["diverged"] else ""
     return (
         f"Summary: {summary['passed']}/{summary['cases']} passed | "
         f"{summary['failed_checks']} failed checks, {not_run} not completed "
-        f"({summary['aborted']} aborted, {summary['skipped']} skipped by the budget) | "
+        f"({summary['aborted']} aborted, {summary['skipped']} skipped by the budget{diverged}) | "
         f"{summary['model_calls']} model calls, "
         f"{summary['input_tokens'] + summary['output_tokens']} tokens, {money} | "
         f"{summary['searches']} searches | {summary['data_analyses']} data analyses | "
@@ -721,8 +878,18 @@ def eval_list(
     only: list[str] = ONLY_OPTION,
     split: str = typer.Option("all", "--split", help="'dev', 'test' (held out) or 'all'."),
     category: str | None = CATEGORY_OPTION,
+    suite: str = SUITE_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
 ) -> None:
-    """List evaluation cases (free: nothing is run)."""
+    """List evaluation cases or conversations (free: nothing is run)."""
+    if _suite_or_exit(suite) == "conversations":
+        selected_conversations = _conversations_or_exit(conversations, only, split)
+        for conv in selected_conversations:
+            typer.echo(f"{conv.id:40} {conv.split:4} {len(conv.turns)} turn(s)")
+            for turn in conv.turns:
+                typer.echo(f"    {turn.id:36} {turn.question[:70]}")
+        typer.echo(f"{len(selected_conversations)} conversation(s)")
+        return
     selected = _cases_or_exit(cases, only, split, category)
     for c in selected:
         typer.echo(f"{c.id:40} {c.split:4} {c.category or '-':11} {c.question[:70]}")
@@ -746,28 +913,64 @@ def eval_run(
     max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Token cap."),
     max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="USD cap."),
     out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
+    qrels_file: Path = QRELS_OPTION,
+    mode: str = typer.Option(
+        "agentic",
+        "--mode",
+        help="'agentic' (the model chooses its searches) or 'fixed' (literature cases: one "
+        "search with the case's fixed_query or the question, then one model call, tools off).",
+    ),
+    suite: str = SUITE_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Run cases with the real model within a run budget; one record per case is written.
+    """Run cases (or, with --suite conversations, multi-turn conversations) with the real model
+    within a run budget; one record per case or turn is written, then score.json and report.md
+    (metrics, reported only).
 
     Without --live only the plan is printed (cases, worst-case tokens, budget): nothing is
-    called. Exits non-zero if any case fails, is aborted or is skipped.
+    called. Exits non-zero if any case or turn fails, is aborted or is skipped.
     """
     cfg = _load_or_exit(config)
-    selected = _cases_or_exit(cases, only, split, category)
+    if mode not in ("agentic", "fixed"):
+        typer.echo("error: --mode must be 'agentic' or 'fixed'", err=True)
+        raise typer.Exit(code=1)
+    talks: list[Conversation] = []
+    if _suite_or_exit(suite) == "conversations":
+        if mode == "fixed" or category:
+            typer.echo("error: conversations take neither --mode fixed nor --category", err=True)
+            raise typer.Exit(code=1)
+        talks = _conversations_or_exit(conversations, only, split)
+        selected = [turn for conv in talks for turn in conv.turns]
+    else:
+        selected = _cases_or_exit(cases, only, split, category)
+    if mode == "fixed":
+        dropped = [c.id for c in selected if c.category != "literature"]
+        if dropped:
+            typer.echo(f"Fixed mode: literature cases only ({len(dropped)} other(s) left out).")
+        selected = [c for c in selected if c.category == "literature"]
     if not selected:
         typer.echo("error: no case matches the selection", err=True)
         raise typer.Exit(code=1)
+    qrels = _qrels_or_exit(qrels_file, _all_cases_or_exit(cases, conversations))
     budget = _budget(cfg, max_calls, max_tokens, max_cost)
     if budget.max_cost_usd > 0 and not budget.priced:
         typer.echo("error: a cost cap needs prices in [eval] (price_*_per_mtok)", err=True)
         raise typer.Exit(code=1)
 
     worst = len(selected) * cfg.limits.max_total_tokens
-    typer.echo(f"Plan: {len(selected)} case(s): {', '.join(c.id for c in selected)}")
+    if talks:
+        typer.echo(
+            f"Plan (conversations): {len(talks)} conversation(s), {len(selected)} turn(s): "
+            f"{', '.join(c.id for c in talks)}"
+        )
+    else:
+        typer.echo(
+            f"Plan ({mode}): {len(selected)} case(s): {', '.join(c.id for c in selected)}"
+        )
     typer.echo(
         f"Worst case {worst:,} tokens ({len(selected)} x limits.max_total_tokens "
         f"{cfg.limits.max_total_tokens:,}); run budget {budget.max_calls} model calls, "
@@ -795,41 +998,69 @@ def eval_run(
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = out or cfg.eval.runs_dir / run_id
+    run_date = date.today()  # pinned for the whole run, so a replay can use the same date
     meta = {
-        "mode": "agentic",
+        "mode": mode,
         "git_commit": git_commit(),
         "model": cfg.llm.model,
         "config_hash": fingerprint(asdict(cfg)),
+        "today": run_date.isoformat(),
     }
     recorder = RecordingLLMClient(None, budget)
+    fixed = FixedSearchLLMClient(recorder) if mode == "fixed" else None
 
     def wrap(llm: LLMClient) -> LLMClient:
         recorder.inner = llm
-        return recorder
+        return fixed or recorder  # fixed mode: the scripted search is not a model call
+
+    def annotate(case: EvalCase, record: dict) -> dict:
+        return {**record, "fixed_query": fixed_query(case)} if fixed else record
 
     http = httpx.Client(transport=httpx.MockTransport(_refuse_network)) if frozen_tools else None
     try:
         with _open_agent(
-            _eval_tool_config(cfg, frozen_tools), creds, wrap_llm=wrap, http_client=http
+            _eval_tool_config(cfg, frozen_tools),
+            creds,
+            wrap_llm=wrap,
+            http_client=http,
+            today=lambda: run_date,
         ) as agent:
+            if talks:
+                driver = ConversationDriver(
+                    lambda q, ctx, **kw: agent.run(q, ctx, **kw), cfg.conversation
+                )
+                records = run_conversations(
+                    talks,
+                    driver.ask,
+                    recorder,
+                    cfg.limits,
+                    out_dir=out_dir,
+                    run_id=run_id,
+                    meta=meta,
+                    on_record=lambda record: typer.echo(_record_line(record)),
+                )
+            else:
 
-            def run_one(case: EvalCase) -> AgentResult:
-                with observe("eval.case", "span", tags=("eval", case.id)) as span:
-                    set_content(span, input=case.question)
-                    result = agent.run(case.question)
-                    set_content(span, output=answer_json(result.answer))
-                    return result
+                def run_one(case: EvalCase) -> AgentResult:
+                    if fixed is not None:
+                        fixed.start(fixed_query(case))
+                    with observe("eval.case", "span", tags=("eval", case.id)) as span:
+                        set_content(span, input=case.question)
+                        result = agent.run(case.question)
+                        set_content(span, output=answer_json(result.answer))
+                        return result
 
-            records = run_cases(
-                selected,
-                run_one,
-                recorder,
-                cfg.limits,
-                out_dir=out_dir,
-                run_id=run_id,
-                meta=meta,
-                on_record=lambda record: typer.echo(_record_line(record)),
-            )
+                records = run_cases(
+                    selected,
+                    run_one,
+                    recorder,
+                    cfg.limits,
+                    out_dir=out_dir,
+                    run_id=run_id,
+                    meta=meta,
+                    on_record=lambda record: typer.echo(_record_line(record)),
+                    annotate=annotate,
+                )
     except (CredentialError, LLMError, RetrievalError) as exc:
         typer.echo(f"error: {exc} (records so far are in {out_dir})", err=True)
         raise typer.Exit(code=1) from exc
@@ -840,7 +1071,10 @@ def eval_run(
     summary = summarize_records(records, budget)
     write_summary(out_dir, {"run_id": run_id, **meta, **summary})
     typer.echo(_summary_line(summary))
-    typer.echo(f"Records: {out_dir}")
+    _, agg = _score_and_report(cfg, out_dir, records, selected, qrels, budget)
+    _echo_conversations(agg)
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Records and report.md: {out_dir}")
     if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)
 
@@ -849,23 +1083,605 @@ def eval_run(
 def eval_score(
     run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
     cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
 ) -> None:
-    """Score stored run records again with the current cases and checks (free, offline)."""
+    """Score stored run records again with the current cases and checks (free, offline).
+
+    Also writes score.json and report.md into RUN_DIR (metrics: tools, trajectory, numbers,
+    citation support, key points, retrieval against --qrels, efficiency; conversation turns
+    also show their relation, recall, context and task state). Metrics are reported only; the
+    exit code depends on the case checks.
+    """
     cfg = _load_or_exit(config)
     try:
         records = read_records(run_dir)
-        case_list = load_cases(cases)
-    except (FileNotFoundError, EvalError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
     if not records:
         typer.echo(f"error: no run records in {run_dir}", err=True)
         raise typer.Exit(code=1)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    budget = _budget(cfg, None, None, None)
     rescored = rescore(records, case_list, cfg.limits)
-    for record in rescored:
+    scores, agg = _score_and_report(cfg, run_dir, rescored, case_list, qrels, budget)
+    for record, score in zip(rescored, scores, strict=True):
         typer.echo(_record_line(record))
-    summary = summarize_records(rescored, _budget(cfg, None, None, None))
+        flagged = flags(score)
+        if flagged:
+            typer.echo(f"    ~ {flagged}")
+    summary = summarize_records(rescored, budget)
     typer.echo(_summary_line(summary))
+    _echo_conversations(agg)
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Report: {run_dir / 'report.md'}")
     if summary["passed"] != summary["cases"]:
         raise typer.Exit(code=1)
+
+
+def _replay_line(record: dict) -> str:
+    replay = record["replay"]
+    if replay["outcome"] not in ("same", "changed"):  # the status line already says diverged
+        return _record_line(record)
+    lines = [f"[{replay['outcome'].upper()}] {_record_line(record)}"]
+    lines += [f"    * {change}" for change in replay["changes"]]
+    return "\n".join(lines)
+
+
+def _replayable_conversations(
+    records: list[dict], path: Path, only: list[str]
+) -> tuple[list[Conversation], dict[str, dict]]:
+    """Conversations to replay, each cut at its first turn that did not end ok (later turns
+    depend on it), with the recorded questions; and the original turn records by case ID."""
+    try:
+        specs = {c.id: c for c in load_conversations(path)}
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    grouped: dict[str, dict[int, dict]] = {}
+    for record in records:
+        conv = record["conversation"]
+        if not only or conv["id"] in only:
+            grouped.setdefault(conv["id"], {})[conv["turn"]] = record
+    talks, originals = [], {}
+    for conv_id, turns in grouped.items():
+        spec = specs.get(conv_id)
+        if spec is None:
+            typer.echo(f"[NOT REPLAYED] {conv_id}: no longer in the conversation file")
+            continue
+        kept = []
+        for number in sorted(turns):
+            record = turns[number]
+            if number != len(kept) + 1 or record["status"] != "ok":
+                typer.echo(
+                    f"[NOT REPLAYED] {conv_id} from turn {number}: the original turn ended "
+                    f"'{record['status']}' or an earlier turn is missing"
+                )
+                break
+            if number > len(spec.turns):
+                typer.echo(f"[NOT REPLAYED] {conv_id} from turn {number}: no longer in the file")
+                break
+            kept.append(replace(spec.turns[number - 1], question=record["question"]))
+            originals[record["case_id"]] = record
+        if kept:
+            talks.append(Conversation(conv_id, spec.split, tuple(kept)))
+    return talks, originals
+
+
+@eval_app.command("replay")
+def eval_replay(
+    run_dir: Path = typer.Argument(..., help="A run folder written by eval run."),
+    only: list[str] = ONLY_OPTION,
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    out: Path | None = typer.Option(
+        None, "--out", help="Folder for the replayed records (default: <run>-replay-<time>)."
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Replay a run through the current code with the recorded model replies (free, offline).
+
+    No model is called and no key is needed: each request must equal the recorded one, and the
+    tools answer from the evaluation tool cache with the network off. A case whose request
+    differs (prompt, tool definitions or output, forcing, conversation context) stops as
+    DIVERGED; otherwise the new answer is compared with the recorded one (SAME or CHANGED,
+    reported only). Conversations are replayed turn by turn in a new session. Exits non-zero
+    if any case diverges or fails its checks.
+    """
+    cfg = _load_or_exit(config)
+    try:
+        records = read_records(run_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    for record in records:
+        if record.get("mode") == "imported" and (not only or record["case_id"] in only):
+            typer.echo(f"[NOT REPLAYED] {record['case_id']}: imported from Langfuse (the "
+                       "requests were not recorded)")  # fmt: skip
+    records = [r for r in records if r.get("mode") != "imported"]
+    talks: list[Conversation] = []
+    turn_records = [r for r in records if r.get("conversation")]
+    if turn_records:
+        talks, originals = _replayable_conversations(turn_records, conversations, only)
+        selected = [turn for conv in talks for turn in conv.turns]
+    else:
+        by_id = {c.id: c for c in case_list}
+        originals = {}
+        for record in records:
+            case_id = record["case_id"]
+            if only and case_id not in only:
+                continue
+            if record["status"] != "ok":
+                typer.echo(
+                    f"[NOT REPLAYED] {case_id}: the original run ended '{record['status']}'"
+                )
+            elif case_id not in by_id:
+                typer.echo(f"[NOT REPLAYED] {case_id}: no longer in the case file")
+            else:
+                originals[case_id] = record
+        selected = [replace(by_id[i], question=r["question"]) for i, r in originals.items()]
+    if not originals:
+        typer.echo(f"error: nothing to replay in {run_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    first = next(iter(originals.values()))
+    run_id = f"{first['run_id']}-replay-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    out_dir = out or cfg.eval.runs_dir / run_id
+    meta = {
+        "mode": "replay",
+        "git_commit": git_commit(),
+        "model": first["model"],
+        "config_hash": fingerprint(asdict(cfg)),
+    }
+    replayer = ReplayLLMClient()
+    budget = RunBudget(max_calls=10**9, max_tokens=10**15)  # nothing is paid: no real cap
+    recorder = RecordingLLMClient(replayer, budget)
+    # A run has one mode; a fixed-search run is replayed through the same scripted search.
+    fixed = FixedSearchLLMClient(recorder) if first.get("mode") == "fixed" else None
+    pinned: list[date] = [replay_date(first)]
+
+    def start(case: EvalCase) -> None:
+        original = originals[case.id]
+        pinned[0] = replay_date(original)
+        replayer.load(original)
+        if fixed is not None:
+            fixed.start(original["fixed_query"])
+
+    def annotate(case: EvalCase, record: dict) -> dict:
+        record["today"] = pinned[0].isoformat()
+        if fixed is not None:
+            record["fixed_query"] = originals[case.id]["fixed_query"]
+        return {**record, "replay": replay_section(originals[case.id], record)}
+
+    common = {
+        "out_dir": out_dir,
+        "run_id": run_id,
+        "meta": meta,
+        "on_record": lambda record: typer.echo(_replay_line(record)),
+        "annotate": annotate,
+    }
+    http = httpx.Client(transport=httpx.MockTransport(_refuse_network))
+    try:
+        with _open_agent(
+            _eval_tool_config(cfg, frozen=True),
+            Credentials(openalex_api_key=None, openai_api_key=None),
+            llm=fixed or recorder,
+            http_client=http,
+            today=lambda: pinned[0],
+        ) as agent:
+            if talks:
+                driver = ConversationDriver(
+                    lambda q, ctx, **kw: agent.run(q, ctx, **kw), cfg.conversation
+                )
+
+                def run_turn(conv: Conversation, case: EvalCase) -> tuple[AgentResult, dict]:
+                    start(case)
+                    outcome = driver.ask(conv, case)
+                    replayer.finish()
+                    return outcome
+
+                replayed = run_conversations(talks, run_turn, recorder, cfg.limits, **common)
+            else:
+
+                def run_one(case: EvalCase) -> AgentResult:
+                    start(case)
+                    result = agent.run(case.question)
+                    replayer.finish()
+                    return result
+
+                replayed = run_cases(selected, run_one, recorder, cfg.limits, **common)
+    finally:
+        http.close()
+
+    summary = summarize_records(replayed, _budget(cfg, None, None, None))
+    write_summary(out_dir, {"run_id": run_id, "replay_of": first["run_id"], **meta, **summary})
+    typer.echo(_summary_line(summary))
+    _, agg = _score_and_report(
+        cfg, out_dir, replayed, case_list, qrels, _budget(cfg, None, None, None)
+    )
+    _echo_conversations(agg)
+    typer.echo(metrics_line(agg))
+    outcomes = agg["all"]["replay"]
+    typer.echo("Replay: " + ", ".join(f"{v} {k}" for k, v in outcomes.items()))
+    typer.echo(f"Records and report.md: {out_dir}")
+    if summary["passed"] != summary["cases"]:
+        raise typer.Exit(code=1)
+
+
+@eval_app.command("compare")
+def eval_compare(
+    run_a: Path = typer.Argument(..., help="Run A (e.g. the fixed-search run)."),
+    run_b: Path = typer.Argument(..., help="Run B, compared against A (e.g. the agentic run)."),
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    out: Path | None = typer.Option(None, "--out", help="Also write the comparison here (.md)."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Compare two runs case by case (free, offline): quality, tokens, latency and cost.
+
+    Both runs are scored again with the current cases and checks; only cases completed in both
+    are paired. Improved / same / worse counts are B against A.
+    """
+    cfg = _load_or_exit(config)
+    try:
+        records = {run: read_records(run) for run in (run_a, run_b)}
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    case_list = _all_cases_or_exit(cases, conversations)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
+    budget = _budget(cfg, None, None, None)
+    lookup = _judge_lookup(cfg)
+    scores = {
+        run: score_records(
+            with_conversation_context(rescore(recs, case_list, cfg.limits)), case_list, qrels,
+            cfg.limits, settings, budget, lookup,
+        )
+        for run, recs in records.items()
+    }  # fmt: skip
+
+    def label(run: Path) -> str:
+        modes = sorted({r.get("mode", "agentic") for r in records[run]})
+        return f"{run.name} ({', '.join(modes) or 'empty'})"
+
+    result = compare_scores(scores[run_a], scores[run_b])
+    text = render_comparison(result, label(run_a), label(run_b))
+    typer.echo(text)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        typer.echo(f"Written: {out}")
+    if not result["paired_cases"]:
+        typer.echo("error: no case completed in both runs", err=True)
+        raise typer.Exit(code=1)
+
+
+DEFAULT_CALIBRATION = Path("evals/judge_calibration.toml")
+
+
+def _answer_summary(sections: list[dict]) -> str:
+    rated = [x["answer"] for x in sections if x.get("answer")]
+    if not rated:
+        return "."
+    mean = round(sum(a["score"] for a in rated) / len(rated), 3)
+    return f"; answer quality {mean} over {len(rated)} answer(s)."
+
+
+def _judge_client(cfg: Config, model: str, creds: Credentials):
+    """The real judge model client. Patched out in CLI tests."""
+    return AnthropicJsonClient.from_credentials(cfg.eval.judge, model, creds)
+
+
+@eval_app.command("judge")
+def eval_judge(
+    run_dir: Path = typer.Argument(..., help="A run folder written by eval run (or replay)."),
+    live: bool = typer.Option(
+        False, "--live", help="Really judge: calls the judge model (costs tokens). Else: plan."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Do not ask for confirmation (scripts)."),
+    only: list[str] = ONLY_OPTION,
+    max_calls: int | None = typer.Option(None, "--max-calls", min=1, help="Judge-call cap."),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Judge token cap."),
+    max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="Judge USD cap."),
+    sample: int = typer.Option(
+        0, "--sample", min=0, help="Write calibration.md with this many judged claims (free)."
+    ),
+    calibration: Path = typer.Option(
+        DEFAULT_CALIBRATION, "--calibration", help="Your verdicts, to measure agreement."
+    ),
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Rate evidence claims (against their cited text) and interpretations (against the
+    evidence they rest on) with the judge model, cached.
+
+    Without --live: the plan (claims, how many are cached, calls and tokens) and, if
+    --calibration exists, your agreement with the judge; nothing is called. With --live the
+    uncached claims are judged within [eval.judge] caps and written to its cache_dir, then
+    report.md and score.json of RUN_DIR are rewritten with the verdicts (every record, also
+    with --only). Verdicts are reported only, never a case failure.
+    """
+    cfg = _load_or_exit(config)
+    jc = cfg.eval.judge
+    try:
+        all_records = with_conversation_context(read_records(run_dir))
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    records = all_records
+    if only:
+        records = [r for r in records
+                   if r["case_id"] in only or (r.get("conversation") or {}).get("id") in only]
+    case_list = _all_cases_or_exit(cases, conversations)
+    cases_by_id = {c.id: c for c in case_list}
+    model = _judge_model(cfg, env_file)
+    if not model:
+        typer.echo("error: no judge model: set [eval.judge] model or CLAUDE_MODEL", err=True)
+        raise typer.Exit(code=1)
+    # Eval records' verdicts go to the committed cache, private records' (Langfuse imports of
+    # real use) to the git-ignored one.
+    caches = JudgeCaches(JudgeCache(jc.cache_dir), JudgeCache(jc.private_cache_dir))
+
+    def refresh_report() -> None:
+        """report.md and score.json of every record in RUN_DIR, with the cached verdicts."""
+        budget = _budget(cfg, None, None, None)
+        rescored = rescore(all_records, case_list, cfg.limits)
+        _score_and_report(cfg, run_dir, rescored, case_list, qrels, budget, env_file)
+        typer.echo(f"Report and score.json updated: {run_dir / 'report.md'}")
+
+    plan = judge_plan_routed(records, cases_by_id, model, caches, jc.max_output_tokens)
+    typer.echo(
+        f"Judge {model}: {plan['claims']} evidence claim(s) in {len(records)} record(s); "
+        f"{plan['cached']} cached, {plan['pending']} to judge"
+        + (f"; {plan['interpretations']} interpretation(s), "
+           f"{plan['interpretations_pending']} to judge" if plan["interpretations"] else "")
+        + (f"; {plan['answers']} answer(s), {plan['answers_pending']} to rate for quality"
+           if plan["answers"] else "")
+        + (f"; key-point sets {plan['key_point_sets_pending']}/{plan['key_point_sets']} to judge"
+           if plan["key_point_sets"] else "")
+        + f". {plan['calls']} call(s), about {plan['estimated_tokens']:,} tokens at most."
+    )  # fmt: skip
+    price = RunBudget(1, 1, price_input_per_mtok=jc.price_input_per_mtok,
+                      price_output_per_mtok=jc.price_output_per_mtok)  # fmt: skip
+    if price.priced:
+        typer.echo(f"At most ~${price.cost(plan['estimated_tokens'], 0):.4f} at the configured "
+                   "prices (input rate on all tokens; output is usually far less).")  # fmt: skip
+    try:
+        checks = load_calibration(calibration)
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if checks:
+        agree = agreement(checks, caches.public)
+        if agree["compared"]:
+            typer.echo(
+                f"Calibration: you and the judge agree on {agree['exact']}/{agree['compared']} "
+                f"verdicts exactly, {agree['binary']}/{agree['compared']} on supported vs not."
+            )
+    if sample:
+        public = [r for r in records if not is_private_record(r)]  # never users' answers
+        picked = calibration_sample(public, model, caches.public, sample)
+        path = run_dir / "calibration.md"
+        path.write_text(render_calibration(picked, model), encoding="utf-8")
+        typer.echo(f"Calibration sample of {len(picked)} judged claim(s): {path}")
+    if not live:
+        if plan["calls"]:
+            typer.echo("Plan only: nothing was judged. Add --live to judge (calls the model).")
+        return
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    if not plan["calls"]:
+        typer.echo("Nothing to judge: every claim is cached.")
+        refresh_report()
+        return
+
+    creds = _credentials_or_exit(env_file)
+    try:
+        creds.require_claude_key()
+    except CredentialError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    budget = RunBudget(
+        max_calls=max_calls or jc.max_calls,
+        max_tokens=max_tokens or jc.max_tokens,
+        max_cost_usd=jc.max_cost_usd if max_cost is None else max_cost,
+        price_input_per_mtok=jc.price_input_per_mtok,
+        price_output_per_mtok=jc.price_output_per_mtok,
+    )
+    if budget.max_cost_usd > 0 and not budget.priced:
+        typer.echo("error: a cost cap needs prices in [eval.judge]", err=True)
+        raise typer.Exit(code=1)
+    todo = plan["pending"] + plan["interpretations_pending"]
+    if not yes and not typer.confirm(
+        f"Judge {todo} claim(s) and {plan['answers_pending']} answer(s) with {model}?"
+    ):
+        typer.echo("cancelled: nothing was judged", err=True)
+        raise typer.Exit(code=1)
+    try:
+        client = _judge_client(cfg, model, creds)
+    except LLMError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    judges = {private: Judge(client, model, caches.private if private else caches.public,
+                             budget, jc.max_output_tokens)
+              for private in (False, True)}  # one budget for both  # fmt: skip
+    stopped = None
+    for record in records:
+        judge = judges[is_private_record(record)]
+        try:
+            judge.judge_record(record, cases_by_id.get(record["case_id"]))
+        except EvalBudgetExceeded as exc:
+            stopped = str(exc)
+            break
+        except LLMAuthError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except LLMError as exc:  # one record's call failed; the rest can still be judged
+            judge.stats.errors.append(f"{record['case_id']}: {exc}")
+    st = merge_stats(judges[False].stats, judges[True].stats)
+    cost = f", ~${budget.cost():.4f}" if budget.priced else ""
+    typer.echo(
+        f"Judged {st.judged} claim(s) ({st.cached} were cached) in {st.calls} call(s): "
+        f"{budget.input_tokens:,} in / {budget.output_tokens:,} out tokens{cost}."
+        + (f" Answers rated: {st.answers}." if st.answers else "")
+        + (f" Key-point sets: {st.key_point_sets}." if st.key_point_sets else "")
+    )
+    for label, count in (("reply failed validation", st.unparsed), ("refused", st.refused),
+                         ("hit the output cap", st.truncated)):  # fmt: skip
+        if count:
+            typer.echo(f"warning: {count} call(s) {label}; those claims stay unjudged")
+    for error in st.errors:
+        typer.echo(f"warning: {error}")
+    if stopped:
+        typer.echo(f"Stopped by the judge budget: {stopped}")
+    sections = [judge_section(r, cases_by_id.get(r["case_id"]), model, caches.for_record(r))
+                for r in records]  # fmt: skip
+    if plan["private_records"]:
+        typer.echo(f"{plan['private_records']} record(s) are not eval traces: their verdicts are "
+                   f"in {jc.private_cache_dir} (git-ignored), not {jc.cache_dir}.")  # fmt: skip
+    sections = [x for x in sections if x]
+    counts = {v: sum(x[v] for x in sections) for v in ("supported", "partial", "unsupported")}
+    interp = {v: sum(x["interpretation"][v] for x in sections)
+              for v in ("within", "stretch", "overreach")}  # fmt: skip
+    typer.echo(
+        f"Verdicts: {counts['supported']} supported, {counts['partial']} partial, "
+        f"{counts['unsupported']} unsupported; interpretations {interp['within']} within, "
+        f"{interp['stretch']} stretch, {interp['overreach']} overreach"
+        + _answer_summary(sections)
+    )
+    refresh_report()  # also after a budget stop or a failed call: what was judged is shown
+    if stopped or st.errors:
+        raise typer.Exit(code=1)
+
+
+IMPORT_DAYS = 7  # default window for eval import-langfuse
+
+
+def _langfuse_reader(env: dict) -> LangfuseReader:
+    """The Langfuse read client from LANGFUSE_* (environment or .env). Patched in CLI tests."""
+    names = (LANGFUSE_PUBLIC_VAR, LANGFUSE_SECRET_VAR, LANGFUSE_HOST_VAR)
+    missing = [n for n in names if not (env.get(n) or "").strip()]
+    if missing:
+        raise LangfuseImportError(f"set {', '.join(missing)} (environment or .env)")
+    public = validate_secret(LANGFUSE_PUBLIC_VAR, env[LANGFUSE_PUBLIC_VAR])
+    secret = validate_secret(LANGFUSE_SECRET_VAR, env[LANGFUSE_SECRET_VAR])
+    assert public is not None and secret is not None
+    REDACTOR.add(public.reveal())
+    REDACTOR.add(secret.reveal())
+    host = env[LANGFUSE_HOST_VAR].strip()
+    if not host.startswith(("https://", "http://")):
+        raise LangfuseImportError(f"{LANGFUSE_HOST_VAR} must start with https://")
+    return LangfuseReader(host, public.reveal(), secret.reveal())
+
+
+def _day(value: str | None, default: date, option: str) -> date:
+    if value is None:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        typer.echo(f"error: {option} must be a date like 2026-11-13", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@eval_app.command("import-langfuse")
+def eval_import_langfuse(
+    since: str | None = typer.Option(None, "--since", help="First day (default: 7 days ago)."),
+    until: str | None = typer.Option(
+        None, "--until", help="Day after the last (default: tomorrow)."
+    ),
+    tag: str = typer.Option("eval", "--tag", help="Only traces with this tag (default: eval)."),
+    all_traces: bool = typer.Option(
+        False, "--all", help="All agent traces (ask, UI, chat too), not only --tag."
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, help="At most this many traces (newest)."),
+    out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Import agent traces from Langfuse as run records (network, read-only; no model call).
+
+    Uses GET /api/public/v2/observations with LANGFUSE_* keys. Each trace becomes one record:
+    eval cases by their tag, conversation turns by question and turn number, other traces
+    (--all) as lf-<trace id> with the universal checks only. Then score.json and report.md are
+    written; eval score, judge and compare work on the folder. Imported records cannot be
+    replayed (the requests are not in the trace). Only the newest trace per case is kept.
+    """
+    cfg = _load_or_exit(config)
+    today = date.today()
+    first = _day(since, today - timedelta(days=IMPORT_DAYS), "--since")
+    last = _day(until, today + timedelta(days=1), "--until")
+    if first >= last:
+        typer.echo("error: --since must be before --until", err=True)
+        raise typer.Exit(code=1)
+    case_list = _all_cases_or_exit(cases, conversations)
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    window_end = datetime.combine(last, datetime.min.time())
+    iso = "%Y-%m-%dT%H:%M:%SZ"
+    try:
+        reader = _langfuse_reader(read_env(env_file))
+        try:
+            traces = fetch_traces(
+                reader, f"{first.isoformat()}T00:00:00Z", window_end.strftime(iso),
+                None if all_traces else tag, limit,
+            )  # fmt: skip
+        finally:
+            reader.close()
+    except (LangfuseImportError, CredentialError) as exc:
+        typer.echo(f"error: {REDACTOR.redact(str(exc))}", err=True)
+        raise typer.Exit(code=1) from exc
+    scope = "all agent traces" if all_traces else f"traces tagged {tag!r}"
+    typer.echo(f"Langfuse: {len(traces)} {scope} from {first} to {last} (exclusive), "
+               f"{reader.requests} request(s).")  # fmt: skip
+
+    run_id = f"langfuse-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    out_dir = out or cfg.eval.runs_dir / run_id
+    match = case_matcher(case_list)
+    by_id = {c.id: c for c in case_list}
+    records, seen = [], set()
+    for trace_id, rows in traces.items():  # newest first
+        record, why = trace_record(rows, run_id=run_id, case_for=match)
+        if record is None:
+            typer.echo(f"[SKIPPED] trace {trace_id[:12]}: {why}")
+            continue
+        if record["case_id"] in seen:
+            typer.echo(f"[SKIPPED] trace {trace_id[:12]}: an older trace of "
+                       f"{record['case_id']} (the newest is kept)")  # fmt: skip
+            continue
+        seen.add(record["case_id"])
+        if record["status"] == "ok":
+            case = by_id.get(record["case_id"]) or EvalCase(record["case_id"], record["question"])
+            record["failures"] = record_failures(case, record, cfg.limits)
+        write_record(out_dir, record)
+        records.append(record)
+        typer.echo(_record_line(record))
+    if not records:
+        typer.echo("Nothing imported.")
+        return
+    budget = _budget(cfg, None, None, None)
+    summary = summarize_records(records, budget)
+    write_summary(out_dir, {"run_id": run_id, "mode": "imported", "source": "langfuse",
+                            "since": first.isoformat(), "until": last.isoformat(),
+                            **summary})  # fmt: skip
+    typer.echo(_summary_line(summary))
+    _, agg = _score_and_report(cfg, out_dir, records, case_list, qrels, budget)
+    _echo_conversations(agg)
+    typer.echo(metrics_line(agg))
+    typer.echo(f"Records and report.md: {out_dir}")

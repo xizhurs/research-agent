@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1848,
+  "items": 1,
+  "output_tokens": 145
+ },
+ "claim": "By annual precipitation, 2022 was not especially dry compared with the record: it was 1.16 times the 1991–2020 baseline mean of 395.6 mm. Its 67-day longest dry run was nevertheless longer than the baseline median annual CDD of 46.0 days.",
+ "judged_on": "2026-11-13",
+ "key": "9a40642e2b0a46a9e631cdcd9c68b5cfdae7dfd2d73cccd84dab201e28240199",
+ "kind": "interpretation",
+ "model": "claude-haiku-5-5",
+ "reason": "Figures match the source: 2022 total 460.9 mm is 1.16x baseline mean 395.6 mm, rank 47 of 76 so not especially dry. Comparing a 67-day dry run to baseline annual CDD median of 46 days is a valid comparison, though CDD and longest run are defined similarly, so the claim is accurately stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "f76f4881c44f6001eab292f01792f90da9fc862c8942907e6903247cecdc5393"
+  }
+ ],
+ "verdict": "within"
+}

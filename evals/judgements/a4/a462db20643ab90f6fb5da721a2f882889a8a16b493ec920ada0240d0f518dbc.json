@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1647,
+  "items": 1,
+  "output_tokens": 124
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "a462db20643ab90f6fb5da721a2f882889a8a16b493ec920ada0240d0f518dbc",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the question with the record ranking and comparison to the normal; caveats on reanalysis grid cell, TXx meaning, and place disambiguation are present, though some are repetitive and the answer lacks context on the actual heatwave or the prior Paris record.",
+ "relevance": "direct",
+ "rubric": 2
+}

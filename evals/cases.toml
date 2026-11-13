@@ -21,6 +21,16 @@
 #   category            literature, safety, rainfall, dry, enso, scale or temperature (reports)
 #   split               "dev" (default) or "test": held-out cases, run only to measure, never
 #                       to tune prompts or code (research-agent eval run --split test --live)
+#   expect_numbers      verified values, [{value = 79.0, tolerance = 0.05}] (tolerance default
+#                       0.05): each must appear in a tool result (signed) and in a claim (by
+#                       absolute value, within the claim's rounding: "79 mm" counts for 79.0).
+#                       Only values verified on a live run; ranks are not used (they depend on
+#                       the period the model chooses)
+#   max_tool_calls      at most this many tool calls may be requested (all turns)
+#   key_points          verified facts, [{text = "...", any_terms = ["...", "..."]}]: covered
+#                       when a term appears in a claim that cites something; coverage is
+#                       reported (eval score), and fails the case only below min_key_points
+#   min_key_points      key points that must be covered (default 0: reported only)
 # Every case is also checked against the universal invariants in evaluation.check_result
 # (structured answer, limitations present, citations valid, budgets respected).
 
@@ -127,7 +137,7 @@ forbidden_phrases = [
 ]
 
 # --- Extreme rainfall (M6): ERA5 via Open-Meteo, numbers computed in code. DRAFT cases, like the
-# --- ones above: review and edit. Rainfall values are never asserted exactly.
+# --- ones above: review and edit. Only verified values are asserted (expect_numbers).
 
 [[case]]
 id = "rainfall-event-zhengzhou"
@@ -137,6 +147,7 @@ expect_metric = "wet"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["mm", "rx1day", "rank", "percentile"]
+expect_numbers = [{ value = 79.0 }]  # mm on 2021-07-20, ERA5 cell 34.75, 113.75 (live 2026-11-12)
 
 [[case]]
 id = "rainfall-top-events-mumbai"
@@ -302,6 +313,7 @@ expect_metric = "monthly"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["mm", "july", "band", "rank"]
+expect_numbers = [{ value = 286.2 }]  # mm in July 2021 (live 2026-11-11 and 2026-11-12)
 
 [[case]]
 id = "scale-daily-still-daily"
@@ -313,8 +325,8 @@ min_data_references = 1
 keywords_any = ["mm"]
 
 # --- Temperature (added 2026-11-12): the model must pick analyze_temperature for temperature
-# --- questions and keep rainfall questions on the rainfall tool. DRAFT cases; values are never
-# --- asserted exactly.
+# --- questions and keep rainfall questions on the rainfall tool. DRAFT cases; only verified
+# --- values are asserted (expect_numbers).
 
 [[case]]
 id = "temperature-hot-day-paris"
@@ -325,6 +337,7 @@ expect_metric = "hot"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["°c", "txx", "rank", "hottest"]
+expect_numbers = [{ value = 41.4 }]  # °C TXx on 2019-07-25 (live 2026-11-12)
 forbidden_phrases = ["heatwave index"]
 
 [[case]]
@@ -336,6 +349,7 @@ expect_metric = "yearly"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["°c", "baseline", "warmest", "rank"]
+expect_numbers = [{ value = 15.7 }]  # °C annual mean 2024 (live 2026-11-12)
 
 [[case]]
 id = "temperature-cold-moscow"
@@ -347,6 +361,7 @@ expect_metric = "cold"
 min_rainfall_calls = 1
 min_data_references = 1
 keywords_any = ["°c", "tnn", "coldest"]
+expect_numbers = [{ value = -41.5 }]  # °C TNn on 1978-12-31 (live 2026-11-12)
 
 [[case]]
 id = "temperature-not-for-rain"

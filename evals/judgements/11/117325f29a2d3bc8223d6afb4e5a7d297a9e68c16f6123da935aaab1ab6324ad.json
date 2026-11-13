@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1661,
+  "items": 2,
+  "output_tokens": 160
+ },
+ "claim": "Amsterdam received 1,100.7 mm of precipitation in 2023, compared with a 1991–2020 annual mean of 777.4 mm. The 2023 total was 1.42 times the baseline mean and above the baseline’s 10th–90th percentile band (641.6–918.4 mm).",
+ "judged_on": "2026-11-13",
+ "key": "117325f29a2d3bc8223d6afb4e5a7d297a9e68c16f6123da935aaab1ab6324ad",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source gives 2023 total 1100.7 mm, baseline mean 777.4 mm, band 641.6–918.4 mm, and ratio 1.42x; all match.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "628f4539468a27ec32ad783a8de9737e7ab165e4921793925745aee685f87d1c"
+  }
+ ],
+ "verdict": "supported"
+}

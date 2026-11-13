@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 3211,
+  "items": 3,
+  "output_tokens": 358
+ },
+ "claim": "ERA5 reanalysis estimates Zhengzhou’s July 2021 precipitation at 286.2 mm: 1.57 times the 1991–2020 July mean of 182.2 mm, and above the baseline 10th–90th percentile band of 79.6–279.7 mm. It ranked 21st wettest among 77 Julys in the record, so it was notably wet in the monthly series but not among its very wettest months.",
+ "judged_on": "2026-11-13",
+ "key": "34a77308a01f17c035e4ba4157967aa5cd2d66af0a3698443aca6254baf4cc58",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S1 gives 286.2 mm, 1.57x the 182.2 mm mean, above the 79.6–279.7 band, and rank 21 of 77. All stated figures match; the 'notably wet but not among very wettest' framing is interpretive but follows from rank 21.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "376f3d6048b72f9ee231de3e7077d1ddf90f1f5533e9af3f337d6cede0190a73"
+  }
+ ],
+ "verdict": "supported"
+}

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1697,
+  "items": 1,
+  "output_tokens": 96
+ },
+ "claim": "Yes. In ERA5, Madrid’s 2024 annual mean temperature was 15.7 °C, ranking 4th warmest among 76 years in 1950–2025; 95% of years were cooler. The three warmest listed years were 2022, 2017 and 1995, each at 16.0 °C.",
+ "judged_on": "2026-11-13",
+ "key": "0e675599a697848f07aae3c6587ccf9703cd04dc0a09ebecc5e7d955b92b0429",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source states 2024 mean 15.7 °C, rank 4 of 76, 95% cooler, and warmest years 2022, 2017, 1995 at 16.0 °C; all match the claim.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "48d2fbba8329574a16a7153fc6b575654901ac267609ee3fb0406f38402c0922"
+  }
+ ],
+ "verdict": "supported"
+}

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 3211,
+  "items": 3,
+  "output_tokens": 358
+ },
+ "claim": "Another study describes the WPSH, Typhoons In-Fa and Cempaka, and a Eurasian trough–ridge structure as contributing to the favorable circulation and moisture conditions; it also points to low-level convergence, upper-level divergence, and topographic blocking and lifting near Zhengzhou.",
+ "judged_on": "2026-11-13",
+ "key": "226bdb11d520d42e74bbf2a226f75ade5262f29562c6e0b795b7290a8a20d7e5",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S3 mentions WPSH, In-Fa and Cempaka, Eurasian trough-ridge structure, favorable circulation and water vapor, low-level convergence, high-level dispersion, and topographic blocking near Zhengzhou. 'Upper-level divergence' is paraphrase of high-level dispersion; all points are covered.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W4387916298",
+   "sha256": "c9075fca36681bbff789e95fef0612fa683e71df5665e2b261ae8641c4cb19bf"
+  }
+ ],
+ "verdict": "supported"
+}

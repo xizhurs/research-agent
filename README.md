@@ -164,9 +164,44 @@ uv run research-agent eval run                           # free: prints the plan
 uv run research-agent eval run --live                    # the dev split with the real model (about 6.5k tokens per case)
 uv run research-agent eval run --live --only crop-type-dl --max-tokens 30000
 uv run research-agent eval score evals/runs/<run-id>     # free: score stored records again, offline
+uv run research-agent eval replay evals/runs/<run-id>    # free: the recorded model replies through the current code
+uv run research-agent eval run --live --mode fixed       # baseline: one search with the question, then one answer
+uv run research-agent eval compare <run-a> <run-b>       # free: case-by-case differences between two runs
+uv run research-agent eval run --live --suite conversations  # multi-turn conversations
+uv run --extra judge research-agent eval judge evals/runs/<run-id> --live  # LLM judge (cached)
+uv run research-agent eval import-langfuse [--all]       # Langfuse traces as run records
 ```
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
+
+`eval score` (and `eval run --live` when it finishes) also writes `score.json` and `report.md` into the run folder. They hold metrics that are reported but never fail a case:
+- tool errors by kind, and redundant or uncited tool calls;
+- whether the model stopped by itself or a budget forced the answer;
+- numbers in evidence claims that the cited text does not contain;
+- claims whose words barely appear in the cited text;
+- key-point coverage;
+- retrieval precision and recall against `evals/qrels.toml`, with the works not yet labelled listed so you can label them;
+- tokens, time and cost.
+
+Cases can also state `expect_numbers` (verified values that must appear in a tool result and in a claim), `max_tool_calls`, and `key_points` with `min_key_points`; these do fail a case.
+
+`eval replay` re-runs a stored run through the current code without calling a model or needing a key:
+- Each request must match the recorded one, and the tools answer from `evals/tool_cache/` with the network off. If the prompt, a tool definition or a tool's output changed, the case stops as **diverged**, with the first difference.
+- Otherwise the new answer is compared with the recorded one and marked **same** or **changed** (changed is reported only).
+- Use it to check that a code change after the model's decisions (parsing, citations, limitations) does what you expect, for free.
+- It needs the tool cache of the machine that made the run.
+
+`eval run --mode fixed` is a baseline for the literature cases:
+- one search with the question as asked (or a case's `fixed_query`), then one model call with tools off;
+- the same prompt and the same answer checks as the agent, so only the choice of searches differs.
+
+`eval run --suite conversations` asks the conversations in `evals/conversations.toml` turn by turn in one session each, as `chat` does. Each turn is checked like a case and also on the model's relation label (continue, update, compare, new_topic), whether it recalled earlier evidence instead of repeating an analysis, and the places, metrics and pending clarification in the task state the code kept. Score, replay and compare work on these runs too.
+
+`eval judge` (optional, needs `uv sync --extra judge`, `CLAUDE_API_KEY` and `CLAUDE_MODEL` or the `[eval.judge]` model) asks an Anthropic model (Claude Haiku 5.5 by default) to rate each evidence claim against the text it cites (supported, partial or unsupported) and each interpretation against the evidence it rests on (within, stretch or overreach), with a reason. It also rates each answer as a whole, without seeing the sources: relevance, completeness and caveats. Key points (verified facts a good answer should cover) live in `evals/key_points.toml`; an entry is used only once its status is `approved`. Verdicts are committed in `evals/judgements/`, except those on real users' questions (Langfuse imports with `--all`), which go to the git-ignored `evals/judgements_private/`. Verdicts are cached in `evals/judgements/`, so an unchanged claim is never judged twice, and they are reported by `eval score` (never a case failure): `report.md` gets a Judge section with tables by run, category, split and case, and a score (supported 1, partial 0.5, unsupported 0, averaged over judged claims). `eval judge --live` rewrites `report.md` and `score.json` itself when it finishes. `--sample 10` writes a calibration sheet for checking the judge yourself.
+
+`eval import-langfuse` reads traces back from Langfuse (the `LANGFUSE_*` keys, the v2 observations API) and turns each agent trace into a run record: eval traces by default, real `ask`, UI and chat traces with `--all`. Score, the LLM judge and compare then work on them; replay does not (a trace holds no request hashes).
+
+`eval compare A B` pairs the cases of two runs and counts, for each measure, how often B did better, the same or worse than A. Measures: pass rate, unsupported numbers, low-support claims, key points, precision and recall, tokens, model calls, time and cost.
 
 The cases are a draft; edit them to match the questions you care about.
 

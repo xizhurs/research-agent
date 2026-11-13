@@ -7,7 +7,6 @@ works' text and analyses, the stats and the failures), so ``eval score`` never r
 
 from __future__ import annotations
 
-import hashlib
 import json
 import statistics
 import subprocess
@@ -20,14 +19,27 @@ from typing import Any, Protocol
 
 from research_agent.agent import AgentResult, InvalidQuestionError
 from research_agent.config import Limits
-from research_agent.evaluation.cases import EvalCase
-from research_agent.evaluation.checks import answer_dict, check_record, check_result, stats_dict
-from research_agent.evaluation.recording import EvalBudgetExceeded, RecordingLLMClient, RunBudget
+from research_agent.evaluation.cases import Conversation, EvalCase
+from research_agent.evaluation.checks import (
+    answer_dict,
+    check_record,
+    check_result,
+    check_turn,
+    stats_dict,
+)
+from research_agent.evaluation.recording import (
+    EvalBudgetExceeded,
+    RecordingLLMClient,
+    RunBudget,
+    fingerprint,
+)
+from research_agent.evaluation.replay import ReplayDiverged
 from research_agent.llm import LLMAuthError, LLMError
 from research_agent.retrieval import AuthError, RetrievalError
 
 SCHEMA_VERSION = 1
-STATUSES = ("ok", "failed", "aborted", "skipped")  # failed: the run failed; aborted: budget
+STATUSES = ("ok", "failed", "aborted", "skipped", "diverged")
+# failed: the run failed; aborted/skipped: the run budget; diverged: a replay request differed
 
 
 class EvalAgent(Protocol):
@@ -103,32 +115,33 @@ def git_commit(cwd: Path | None = None) -> str | None:
     return out.stdout.strip() or None if out.returncode == 0 else None
 
 
-def fingerprint(value: Any) -> str:
-    text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
 def _tool_calls(log_calls: list[dict], tool_results: dict[str, str], events) -> list[dict]:
     """Every tool call that ran, with the result text the model saw and its recorded outcome.
 
-    Calls in a turn made with tools disabled were ignored by the loop and have no result."""
-    executed = []
+    A call ran if its result was sent back to the model; results are in execution order, like
+    the agent's events. Calls in a turn made with tools disabled were ignored by the loop and
+    have no result. A call no recorded model reply asked for (the fixed-search mode's scripted
+    search) takes its name and arguments from the agent's event and has turn None."""
+    requested = {}
     for turn, call in enumerate(log_calls, start=1):
         for tool_call in call["tool_calls"]:
-            if tool_call["id"] in tool_results:
-                executed.append((turn, tool_call))
+            requested[tool_call["id"]] = (turn, tool_call)
     out = []
-    for index, (turn, tool_call) in enumerate(executed):
+    for index, (call_id, result) in enumerate(tool_results.items()):
         event = events[index] if index < len(events) else None
+        turn, tool_call = requested.get(call_id, (None, None))
+        if tool_call is None:
+            tool_call = {"name": event.tool if event else None,
+                         "arguments": dict(event.arguments) if event else {}}  # fmt: skip
         out.append(
             {
                 "turn": turn,
-                "id": tool_call["id"],
+                "id": call_id,
                 "name": tool_call["name"],
                 "arguments": tool_call["arguments"],
                 "status": event.status if event else None,
                 "result_id": event.result_id if event else None,
-                "result": tool_results[tool_call["id"]],
+                "result": result,
             }
         )
     return out
@@ -161,6 +174,7 @@ def build_record(
         "config_hash": meta.get("config_hash"),
         "prompt_hash": fingerprint(instructions) if instructions else None,
         "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "today": meta.get("today"),  # the date the tools and the agent used (replay pins it)
         "status": status,
         "error": error,
         "wall_seconds": None if wall_seconds is None else round(wall_seconds, 3),
@@ -204,46 +218,124 @@ def run_cases(
     meta: dict[str, Any],
     on_record: Callable[[dict[str, Any]], None] = lambda record: None,
     clock: Callable[[], float] = time.perf_counter,
+    annotate: Callable[[EvalCase, dict[str, Any]], dict[str, Any]] = lambda case, record: record,
 ) -> list[dict[str, Any]]:
     """Run each case within the run budget, writing one record per case to ``out_dir``.
 
     A case is skipped when the budget cannot cover one more worst-case case; a case cut off by
-    the budget mid-way is recorded as aborted. Auth failures abort the whole run (re-raised).
+    the budget mid-way is recorded as aborted, and a replayed case whose request differed from
+    the recording as diverged. Auth failures abort the whole run (re-raised). ``annotate`` may
+    add to each record before it is written (replay adds its comparison).
     """
     records = []
     for case in cases:
-        reason = recorder.budget.case_refusal(limits.max_total_tokens)
-        recorder.start_case()
-        if reason:
-            record = build_record(case, run_id=run_id, meta=meta, status="skipped",
-                                  failures=[f"skipped: {reason}"], error=reason)
-        else:
-            started = clock()
-            try:
-                result = run(case)
-            except (LLMAuthError, AuthError):
-                raise
-            except EvalBudgetExceeded as exc:
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="aborted", log=recorder.log,
-                    failures=[f"aborted: {exc}"], wall_seconds=clock() - started, error=str(exc),
-                )
-            except (LLMError, RetrievalError, InvalidQuestionError) as exc:
-                message = f"{type(exc).__name__}: {exc}"
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="failed", log=recorder.log,
-                    failures=[f"run failed: {message}"], wall_seconds=clock() - started,
-                    error=message,
-                )
-            else:
-                record = build_record(
-                    case, run_id=run_id, meta=meta, status="ok", log=recorder.log,
-                    result=result, failures=check_result(case, result, limits),
-                    wall_seconds=clock() - started,
-                )
+        record = annotate(case, _run_one(case, run, recorder, limits, run_id, meta, clock))
         write_record(out_dir, record)
         records.append(record)
         on_record(record)
+    return records
+
+
+def _run_one(
+    case: EvalCase,
+    run: Callable[[EvalCase], AgentResult],
+    recorder: RecordingLLMClient,
+    limits: Limits,
+    run_id: str,
+    meta: dict[str, Any],
+    clock: Callable[[], float],
+    extra: Callable[[], dict[str, Any]] = dict,
+) -> dict[str, Any]:
+    """One case (or conversation turn) within the run budget, as a record. ``extra()`` is
+    merged into the record before the checks (a conversation turn's details)."""
+    reason = recorder.budget.case_refusal(limits.max_total_tokens)
+    recorder.start_case()
+    if reason:
+        record = build_record(case, run_id=run_id, meta=meta, status="skipped",
+                              failures=[f"skipped: {reason}"], error=reason)
+        return {**record, **extra()}
+    started = clock()
+    try:
+        result = run(case)
+    except (LLMAuthError, AuthError):
+        raise
+    except EvalBudgetExceeded as exc:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="aborted", log=recorder.log,
+            failures=[f"aborted: {exc}"], wall_seconds=clock() - started, error=str(exc),
+        )
+    except ReplayDiverged as exc:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="diverged", log=recorder.log,
+            failures=[f"diverged at {exc}"], wall_seconds=clock() - started, error=str(exc),
+        )
+    except (LLMError, RetrievalError, InvalidQuestionError) as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="failed", log=recorder.log,
+            failures=[f"run failed: {message}"], wall_seconds=clock() - started, error=message,
+        )
+    else:
+        record = build_record(
+            case, run_id=run_id, meta=meta, status="ok", log=recorder.log, result=result,
+            wall_seconds=clock() - started,
+        )
+        record.update(extra())
+        record["failures"] = record_failures(case, record, limits)
+        return record
+    return {**record, **extra()}
+
+
+def run_conversations(
+    conversations: list[Conversation],
+    run_turn: Callable[[Conversation, EvalCase], tuple[AgentResult, dict[str, Any]]],
+    recorder: RecordingLLMClient,
+    limits: Limits,
+    *,
+    out_dir: Path,
+    run_id: str,
+    meta: dict[str, Any],
+    on_record: Callable[[dict[str, Any]], None] = lambda record: None,
+    clock: Callable[[], float] = time.perf_counter,
+    annotate: Callable[[EvalCase, dict[str, Any]], dict[str, Any]] = lambda case, record: record,
+) -> list[dict[str, Any]]:
+    """Run each conversation's turns in order, one record per turn (``<id>#<n>``).
+
+    ``run_turn(conversation, turn)`` asks one turn in the conversation's session and returns the
+    result and the turn's details (relation, recalled IDs, context, task state), stored as the
+    record's ``conversation`` section. Once a turn does not complete (failed, aborted, skipped,
+    diverged) the conversation's later turns are skipped: they would not follow the same thread.
+    """
+    records = []
+    for conversation in conversations:
+        stopped: str | None = None
+        for case in conversation.turns:
+            number = case.turn.turn if case.turn else 0
+            section = {"id": conversation.id, "turn": number}
+            if stopped:
+                record = build_record(case, run_id=run_id, meta=meta, status="skipped",
+                                      failures=[f"skipped: {stopped}"], error=stopped)
+                record["conversation"] = section
+            else:
+                details: dict[str, Any] = {}
+
+                def run(turn: EvalCase, conv=conversation, details=details) -> AgentResult:
+                    result, info = run_turn(conv, turn)
+                    details.update(info)
+                    return result
+
+                record = _run_one(
+                    case, run, recorder, limits, run_id, meta, clock,
+                    extra=lambda section=section, details=details: {
+                        "conversation": {**section, **details}
+                    },
+                )  # fmt: skip
+                if record["status"] != "ok":
+                    stopped = f"turn {number} of {conversation.id} ended '{record['status']}'"
+            record = annotate(case, record)
+            write_record(out_dir, record)
+            records.append(record)
+            on_record(record)
     return records
 
 
@@ -260,12 +352,22 @@ def rescore(
         case = by_id.get(record["case_id"])
         if record["status"] != "ok":
             out.append(record)
+        elif case is None and record.get("mode") == "imported":
+            # A Langfuse trace no case asked for: the universal invariants only.
+            blank = EvalCase(record["case_id"], record["question"])
+            out.append({**record, "failures": record_failures(blank, record, limits)})
         elif case is None:
             out.append({**record, "failures": ["case no longer in the case file"]})
         else:
-            failures = check_record(case, record["answer"], record["stats"], limits)
-            out.append({**record, "failures": failures})
+            out.append({**record, "failures": record_failures(case, record, limits)})
     return out
+
+
+def record_failures(case: EvalCase, record: dict[str, Any], limits: Limits) -> list[str]:
+    """The checks of a completed record, including the tool side of ``expect_numbers``."""
+    tool_results = [call["result"] for call in record["tool_calls"]]
+    failures = check_record(case, record["answer"], record["stats"], limits, tool_results)
+    return failures + (check_turn(case.turn, record) if case.turn else [])
 
 
 # --- summary -----------------------------------------------------------------------------------
@@ -296,6 +398,7 @@ def summarize_records(
         "run_failed": sum(1 for r in records if r["status"] == "failed"),
         "aborted": sum(1 for r in records if r["status"] == "aborted"),
         "skipped": sum(1 for r in records if r["status"] == "skipped"),
+        "diverged": sum(1 for r in records if r["status"] == "diverged"),
         "model_calls": sum(len(r["llm_calls"]) for r in records),
         "input_tokens": tin,
         "output_tokens": tout,

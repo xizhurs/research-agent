@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1272,
+  "items": 1,
+  "output_tokens": 68
+ },
+ "claim": "The largest annual one-day rainfall maxima in Mumbai since 1980, in ERA5, were 301.3 mm on 2020-08-05, 292.0 mm on 2017-09-20, 251.1 mm on 2016-09-22, 234.6 mm on 2011-06-10, and 220.4 mm on 1993-07-03.",
+ "judged_on": "2026-11-13",
+ "key": "0b640ae1e9a01d8acd76622e7a1cf841440a80ad4e8225a78723dbf55002dd22",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists exactly these five largest annual maxima with the same dates and values from ERA5 over 1980-2025.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "7e399e7e8bb483f51cd89d4fc2ed3d719ffaad36a3cc407d19c20d24570b7059"
+  }
+ ],
+ "verdict": "supported"
+}

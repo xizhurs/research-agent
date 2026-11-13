@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2761,
+  "items": 3,
+  "output_tokens": 301
+ },
+ "claim": "A study of the 2015–2017 Western Cape drought found fewer rain-bearing circulation patterns, less rain even on days with those patterns—especially in the shoulder seasons—and anomalously low moisture transport. The drought contributed to severe water shortages in summer 2017–2018.",
+ "judged_on": "2026-11-13",
+ "key": "b63bbe3977e52b5dc22466bdd16eff5d18f6cdae916a9ec63320bc7887dcba16",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S2 states fewer rain-bearing nodes, reduced rain on those days especially in shoulder seasons, and low moisture transport; S2 says Cape Town nearly ran out but the claim's 'severe water shortages' is in abstract as 'severe water shortage'. Consistent.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W3047897968",
+   "sha256": "c8259102f8c1e107fb6589b297691f82e8eb95a9e44bc683e992a4010d28a572"
+  }
+ ],
+ "verdict": "supported"
+}

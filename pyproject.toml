@@ -23,6 +23,9 @@ tracing = [
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
     "opentelemetry-sdk>=1.45.2",
 ]
+judge = [
+    "anthropic>=2.8.0",
+]
 
 [build-system]
 requires = ["hatchling"]

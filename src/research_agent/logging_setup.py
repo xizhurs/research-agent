@@ -30,7 +30,9 @@ class SecretRedactor(logging.Filter):
             self._secrets.add(secret)
 
     def add_credentials(self, credentials: Credentials) -> None:
-        for key in (credentials.openalex_api_key, credentials.openai_api_key):
+        keys = (credentials.openalex_api_key, credentials.openai_api_key,
+                credentials.claude_api_key)  # fmt: skip
+        for key in keys:
             if key is not None:
                 self.add(key.reveal())
 

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1603,
+  "items": 2,
+  "output_tokens": 136
+ },
+ "claim": "These are ERA5 reanalysis grid-cell estimates, not measurements from a rain gauge.",
+ "judged_on": "2026-11-13",
+ "key": "31cf6c779af84eb8839ab581d62126c3ca89aab27793b5d39a6943f42382b44a",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source states values are ERA5 reanalysis model output on a grid, not gauge measurements.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "1b9d3f7a2b221cb5ebc8042dca03b70ad6ea605ecb01b46938f8671dad8936ab"
+  }
+ ],
+ "verdict": "supported"
+}

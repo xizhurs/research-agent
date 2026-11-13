@@ -1,7 +1,8 @@
-"""Evaluation: cases, deterministic checks, budgeted paid runs and offline scoring of records.
+"""Evaluation: cases, checks, budgeted paid runs, offline scoring and replay of records.
 
 Tiers: ``pytest`` (stubbed model) and ``eval score`` (stored run records) are offline and free;
-``eval run --live`` runs the real agent within a run budget and writes one record per case.
+``eval run --live`` runs the real agent within a run budget and writes one record per case;
+``eval replay`` feeds a run's recorded model replies through the current code (offline, free).
 """
 
 from research_agent.evaluation.cases import (
@@ -9,28 +10,84 @@ from research_agent.evaluation.cases import (
     KNOWN_TOOLS,
     METRICS,
     SPLITS,
+    Conversation,
     EvalCase,
     EvalError,
+    ExpectedNumber,
+    KeyPoint,
+    Qrels,
+    TurnExpect,
     load_cases,
+    load_conversations,
+    load_qrels,
     select_cases,
+    select_conversations,
 )
-from research_agent.evaluation.checks import check_record, check_result
+from research_agent.evaluation.checks import check_record, check_result, check_turn
+from research_agent.evaluation.compare import compare_scores, render_comparison
+from research_agent.evaluation.conversation import ConversationDriver, state_dict, turn_details
+from research_agent.evaluation.fixed import FIXED_CALL_ID, FixedSearchLLMClient, fixed_query
+from research_agent.evaluation.judge import (
+    Judge,
+    JudgeCache,
+    JudgeCaches,
+    JudgeStats,
+    agreement,
+    calibration_sample,
+    claim_items,
+    is_private_record,
+    judge_plan,
+    judge_plan_routed,
+    judge_section,
+    load_calibration,
+    merge_stats,
+    render_calibration,
+    with_conversation_context,
+)
+from research_agent.evaluation.langfuse_import import (
+    LangfuseImportError,
+    LangfuseReader,
+    case_matcher,
+    fetch_traces,
+    trace_record,
+)
+from research_agent.evaluation.metrics import ScoreSettings, score_record
+from research_agent.evaluation.numbers import extract_numbers, unsupported_numbers, value_found
 from research_agent.evaluation.recording import (
     EvalBudgetExceeded,
     RecordingLLMClient,
     RunBudget,
+    fingerprint,
     request_hash,
+    tools_hash,
+)
+from research_agent.evaluation.replay import (
+    ReplayDiverged,
+    ReplayLLMClient,
+    compare_answers,
+    replay_date,
+    replay_section,
+)
+from research_agent.evaluation.report import (
+    aggregate,
+    flags,
+    metrics_line,
+    score_records,
+    write_scores,
 )
 from research_agent.evaluation.runner import (
     CaseReport,
     EvalAgent,
     EvalSummary,
     read_records,
+    record_failures,
     rescore,
     run_case,
     run_cases,
+    run_conversations,
     summarize,
     summarize_records,
+    write_record,
     write_summary,
 )
 
@@ -40,23 +97,80 @@ __all__ = [
     "METRICS",
     "SPLITS",
     "CaseReport",
+    "Conversation",
+    "ConversationDriver",
     "EvalAgent",
     "EvalBudgetExceeded",
     "EvalCase",
     "EvalError",
+    "FIXED_CALL_ID",
     "EvalSummary",
+    "ExpectedNumber",
+    "FixedSearchLLMClient",
+    "Judge",
+    "JudgeCache",
+    "JudgeCaches",
+    "JudgeStats",
+    "KeyPoint",
+    "LangfuseImportError",
+    "LangfuseReader",
+    "Qrels",
     "RecordingLLMClient",
+    "ReplayDiverged",
+    "ReplayLLMClient",
     "RunBudget",
+    "ScoreSettings",
+    "TurnExpect",
+    "aggregate",
+    "agreement",
+    "calibration_sample",
+    "case_matcher",
     "check_record",
     "check_result",
+    "check_turn",
+    "claim_items",
+    "compare_answers",
+    "compare_scores",
+    "extract_numbers",
+    "fetch_traces",
+    "fingerprint",
+    "fixed_query",
+    "flags",
+    "is_private_record",
+    "judge_plan",
+    "judge_plan_routed",
+    "judge_section",
+    "load_calibration",
+    "merge_stats",
     "load_cases",
+    "load_conversations",
+    "load_qrels",
+    "metrics_line",
     "read_records",
+    "record_failures",
+    "render_calibration",
+    "render_comparison",
+    "replay_date",
+    "replay_section",
     "request_hash",
     "rescore",
     "run_case",
     "run_cases",
+    "run_conversations",
+    "score_record",
+    "score_records",
     "select_cases",
+    "select_conversations",
+    "state_dict",
     "summarize",
     "summarize_records",
+    "tools_hash",
+    "trace_record",
+    "turn_details",
+    "unsupported_numbers",
+    "value_found",
+    "with_conversation_context",
+    "write_record",
+    "write_scores",
     "write_summary",
 ]

@@ -106,3 +106,30 @@ max_total_tokens = 300000
 max_cost_usd = 0
 price_input_per_mtok = 0
 price_output_per_mtok = 0
+# Scoring (eval score; reported, never a failure): two searches whose query word sets overlap at
+# least this much (Jaccard) count as redundant; an evidence claim sharing a smaller share of its
+# content words with the text it cites is flagged as weakly supported (a crude lexical proxy).
+redundant_query_jaccard = 0.8
+low_support_overlap = 0.3
+
+# The optional LLM judge (eval judge; Phase 5). It rates each evidence claim against the text it
+# cites (supported / partial / unsupported); results are cached in cache_dir (committed) and
+# reported only, never a case failure. Anthropic model; the key is CLAUDE_API_KEY and
+# CLAUDE_MODEL (environment or .env) overrides `model`. Prices: Claude Haiku 5.5's first-party
+# rates for prompts up to 100K tokens, from Anthropic's model table (cached 2026-11-03); verify
+# them before relying on the cost figure, and update them if you change the model.
+[eval.judge]
+model = "claude-haiku-5-5"
+effort = "low"
+timeout_seconds = 60
+max_retries = 2
+max_output_tokens = 4000
+max_calls = 100
+max_tokens = 200000
+max_cost_usd = 0
+price_input_per_mtok = 0.10
+price_output_per_mtok = 0.50
+cache_dir = "evals/judgements"
+# Verdicts on Langfuse imports not tagged "eval" (real users' questions and answers) go
+# here instead; the folder is git-ignored so they are never committed.
+private_cache_dir = "evals/judgements_private"
