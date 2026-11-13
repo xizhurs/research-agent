@@ -86,8 +86,8 @@ def test_unchanged_code_replays_to_the_same_answer(tmp_path, make_result, make_w
     originals = record_run(tmp_path, make_result, make_work, limits)
     record = replay(tmp_path, originals, search(make_result, make_work), limits)
     assert record["status"] == "ok" and record["failures"] == []
-    assert record["replay"] == {"of": "r1", "original_failures": [], "outcome": "same",
-                                "changes": []}  # fmt: skip
+    assert record["replay"] == {"of": "r1", "mode": "agentic", "original_failures": [],
+                                "outcome": "same", "changes": []}  # fmt: skip
     assert [c["request_hash"] for c in record["llm_calls"]] == [
         c["request_hash"] for c in originals[0]["llm_calls"]
     ]

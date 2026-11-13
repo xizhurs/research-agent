@@ -112,24 +112,30 @@ def git_commit(cwd: Path | None = None) -> str | None:
 def _tool_calls(log_calls: list[dict], tool_results: dict[str, str], events) -> list[dict]:
     """Every tool call that ran, with the result text the model saw and its recorded outcome.
 
-    Calls in a turn made with tools disabled were ignored by the loop and have no result."""
-    executed = []
+    A call ran if its result was sent back to the model; results are in execution order, like
+    the agent's events. Calls in a turn made with tools disabled were ignored by the loop and
+    have no result. A call no recorded model reply asked for (the fixed-search mode's scripted
+    search) takes its name and arguments from the agent's event and has turn None."""
+    requested = {}
     for turn, call in enumerate(log_calls, start=1):
         for tool_call in call["tool_calls"]:
-            if tool_call["id"] in tool_results:
-                executed.append((turn, tool_call))
+            requested[tool_call["id"]] = (turn, tool_call)
     out = []
-    for index, (turn, tool_call) in enumerate(executed):
+    for index, (call_id, result) in enumerate(tool_results.items()):
         event = events[index] if index < len(events) else None
+        turn, tool_call = requested.get(call_id, (None, None))
+        if tool_call is None:
+            tool_call = {"name": event.tool if event else None,
+                         "arguments": dict(event.arguments) if event else {}}  # fmt: skip
         out.append(
             {
                 "turn": turn,
-                "id": tool_call["id"],
+                "id": call_id,
                 "name": tool_call["name"],
                 "arguments": tool_call["arguments"],
                 "status": event.status if event else None,
                 "result_id": event.result_id if event else None,
-                "result": tool_results[tool_call["id"]],
+                "result": result,
             }
         )
     return out

@@ -181,7 +181,11 @@ def compare_answers(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
 
 def replay_section(original: dict[str, Any], replayed: dict[str, Any]) -> dict[str, Any]:
     """The ``replay`` part of a replayed record: outcome same / changed / diverged."""
-    section: dict[str, Any] = {"of": original["run_id"], "original_failures": original["failures"]}
+    section: dict[str, Any] = {
+        "of": original["run_id"],
+        "mode": original.get("mode", "agentic"),
+        "original_failures": original["failures"],
+    }
     if replayed["status"] == "diverged":
         return {**section, "outcome": "diverged", "reason": replayed["error"], "changes": []}
     if replayed["answer"] is None:

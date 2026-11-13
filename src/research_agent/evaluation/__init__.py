@@ -20,6 +20,8 @@ from research_agent.evaluation.cases import (
     select_cases,
 )
 from research_agent.evaluation.checks import check_record, check_result
+from research_agent.evaluation.compare import compare_scores, render_comparison
+from research_agent.evaluation.fixed import FIXED_CALL_ID, FixedSearchLLMClient, fixed_query
 from research_agent.evaluation.metrics import ScoreSettings, score_record
 from research_agent.evaluation.numbers import extract_numbers, unsupported_numbers, value_found
 from research_agent.evaluation.recording import (
@@ -68,8 +70,10 @@ __all__ = [
     "EvalBudgetExceeded",
     "EvalCase",
     "EvalError",
+    "FIXED_CALL_ID",
     "EvalSummary",
     "ExpectedNumber",
+    "FixedSearchLLMClient",
     "KeyPoint",
     "Qrels",
     "RecordingLLMClient",
@@ -81,14 +85,17 @@ __all__ = [
     "check_record",
     "check_result",
     "compare_answers",
+    "compare_scores",
     "extract_numbers",
     "fingerprint",
+    "fixed_query",
     "flags",
     "load_cases",
     "load_qrels",
     "metrics_line",
     "read_records",
     "record_failures",
+    "render_comparison",
     "replay_date",
     "replay_section",
     "request_hash",

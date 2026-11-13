@@ -177,7 +177,8 @@ def _forced_reason(stats: dict[str, Any], limits: Limits) -> str:
 def _trajectory(record: dict, calls: list[dict], cited: set[str], limits: Limits) -> dict:
     stats = record["stats"]
     llm = record["llm_calls"]
-    forced = bool(llm) and not llm[-1]["allow_tools"]
+    fixed = bool(record.get("fixed_query"))  # tools are off by design in fixed-search mode
+    forced = bool(llm) and not llm[-1]["allow_tools"] and not fixed
     first_shown: dict[str, int] = {}  # work ID -> index of the search that first showed it
     follow_ups = []
     searches = [c for c in calls if c["name"] == SEARCH_TOOL_NAME and not error_kind(c)]
@@ -191,7 +192,7 @@ def _trajectory(record: dict, calls: list[dict], cited: set[str], limits: Limits
     return {
         "turns": len(llm),
         "tools_per_turn": [len(turn) for turn in stats["tool_trace"]],
-        "stop": "forced" if forced else "voluntary",
+        "stop": "fixed" if fixed else "forced" if forced else "voluntary",
         "forced_by": _forced_reason(stats, limits) if forced else None,
         "budget_left": {
             "model_turns": limits.max_iterations - stats["iterations"],

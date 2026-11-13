@@ -34,17 +34,21 @@ from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
     EvalCase,
     EvalError,
+    FixedSearchLLMClient,
     Qrels,
     RecordingLLMClient,
     ReplayLLMClient,
     RunBudget,
     ScoreSettings,
     aggregate,
+    compare_scores,
+    fixed_query,
     flags,
     load_cases,
     load_qrels,
     metrics_line,
     read_records,
+    render_comparison,
     replay_date,
     replay_section,
     rescore,
@@ -799,6 +803,12 @@ def eval_run(
     max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="USD cap."),
     out: Path | None = typer.Option(None, "--out", help="Run folder (default: [eval] runs_dir)."),
     qrels_file: Path = QRELS_OPTION,
+    mode: str = typer.Option(
+        "agentic",
+        "--mode",
+        help="'agentic' (the model chooses its searches) or 'fixed' (literature cases: one "
+        "search with the case's fixed_query or the question, then one model call, tools off).",
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
@@ -811,7 +821,15 @@ def eval_run(
     called. Exits non-zero if any case fails, is aborted or is skipped.
     """
     cfg = _load_or_exit(config)
+    if mode not in ("agentic", "fixed"):
+        typer.echo("error: --mode must be 'agentic' or 'fixed'", err=True)
+        raise typer.Exit(code=1)
     selected = _cases_or_exit(cases, only, split, category)
+    if mode == "fixed":
+        dropped = [c.id for c in selected if c.category != "literature"]
+        if dropped:
+            typer.echo(f"Fixed mode: literature cases only ({len(dropped)} other(s) left out).")
+        selected = [c for c in selected if c.category == "literature"]
     if not selected:
         typer.echo("error: no case matches the selection", err=True)
         raise typer.Exit(code=1)
@@ -822,7 +840,7 @@ def eval_run(
         raise typer.Exit(code=1)
 
     worst = len(selected) * cfg.limits.max_total_tokens
-    typer.echo(f"Plan: {len(selected)} case(s): {', '.join(c.id for c in selected)}")
+    typer.echo(f"Plan ({mode}): {len(selected)} case(s): {', '.join(c.id for c in selected)}")
     typer.echo(
         f"Worst case {worst:,} tokens ({len(selected)} x limits.max_total_tokens "
         f"{cfg.limits.max_total_tokens:,}); run budget {budget.max_calls} model calls, "
@@ -852,17 +870,21 @@ def eval_run(
     out_dir = out or cfg.eval.runs_dir / run_id
     run_date = date.today()  # pinned for the whole run, so a replay can use the same date
     meta = {
-        "mode": "agentic",
+        "mode": mode,
         "git_commit": git_commit(),
         "model": cfg.llm.model,
         "config_hash": fingerprint(asdict(cfg)),
         "today": run_date.isoformat(),
     }
     recorder = RecordingLLMClient(None, budget)
+    fixed = FixedSearchLLMClient(recorder) if mode == "fixed" else None
 
     def wrap(llm: LLMClient) -> LLMClient:
         recorder.inner = llm
-        return recorder
+        return fixed or recorder  # fixed mode: the scripted search is not a model call
+
+    def annotate(case: EvalCase, record: dict) -> dict:
+        return {**record, "fixed_query": fixed_query(case)} if fixed else record
 
     http = httpx.Client(transport=httpx.MockTransport(_refuse_network)) if frozen_tools else None
     try:
@@ -875,6 +897,8 @@ def eval_run(
         ) as agent:
 
             def run_one(case: EvalCase) -> AgentResult:
+                if fixed is not None:
+                    fixed.start(fixed_query(case))
                 with observe("eval.case", "span", tags=("eval", case.id)) as span:
                     set_content(span, input=case.question)
                     result = agent.run(case.question)
@@ -890,6 +914,7 @@ def eval_run(
                 run_id=run_id,
                 meta=meta,
                 on_record=lambda record: typer.echo(_record_line(record)),
+                annotate=annotate,
             )
     except (CredentialError, LLMError, RetrievalError) as exc:
         typer.echo(f"error: {exc} (records so far are in {out_dir})", err=True)
@@ -1013,10 +1038,14 @@ def eval_replay(
     replayer = ReplayLLMClient()
     budget = RunBudget(max_calls=10**9, max_tokens=10**15)  # nothing is paid: no real cap
     recorder = RecordingLLMClient(replayer, budget)
+    # A run has one mode; a fixed-search run is replayed through the same scripted search.
+    fixed = FixedSearchLLMClient(recorder) if first.get("mode") == "fixed" else None
     pinned: list[date] = [replay_date(first)]
 
     def annotate(case: EvalCase, record: dict) -> dict:
         record["today"] = pinned[0].isoformat()
+        if fixed is not None:
+            record["fixed_query"] = originals[case.id]["fixed_query"]
         return {**record, "replay": replay_section(originals[case.id], record)}
 
     http = httpx.Client(transport=httpx.MockTransport(_refuse_network))
@@ -1024,7 +1053,7 @@ def eval_replay(
         with _open_agent(
             _eval_tool_config(cfg, frozen=True),
             Credentials(openalex_api_key=None, openai_api_key=None),
-            llm=recorder,
+            llm=fixed or recorder,
             http_client=http,
             today=lambda: pinned[0],
         ) as agent:
@@ -1033,6 +1062,8 @@ def eval_replay(
                 original = originals[case.id]
                 pinned[0] = replay_date(original)
                 replayer.load(original)
+                if fixed is not None:
+                    fixed.start(original["fixed_query"])
                 result = agent.run(case.question)
                 replayer.finish()
                 return result
@@ -1062,4 +1093,51 @@ def eval_replay(
     typer.echo("Replay: " + ", ".join(f"{v} {k}" for k, v in outcomes.items()))
     typer.echo(f"Records and report.md: {out_dir}")
     if summary["passed"] != summary["cases"]:
+        raise typer.Exit(code=1)
+
+
+@eval_app.command("compare")
+def eval_compare(
+    run_a: Path = typer.Argument(..., help="Run A (e.g. the fixed-search run)."),
+    run_b: Path = typer.Argument(..., help="Run B, compared against A (e.g. the agentic run)."),
+    cases: Path = CASES_OPTION,
+    qrels_file: Path = QRELS_OPTION,
+    out: Path | None = typer.Option(None, "--out", help="Also write the comparison here (.md)."),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+) -> None:
+    """Compare two runs case by case (free, offline): quality, tokens, latency and cost.
+
+    Both runs are scored again with the current cases and checks; only cases completed in both
+    are paired. Improved / same / worse counts are B against A.
+    """
+    cfg = _load_or_exit(config)
+    try:
+        records = {run: read_records(run) for run in (run_a, run_b)}
+        case_list = load_cases(cases)
+    except (FileNotFoundError, EvalError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    qrels = _qrels_or_exit(qrels_file, case_list)
+    settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
+    budget = _budget(cfg, None, None, None)
+    scores = {
+        run: score_records(
+            rescore(recs, case_list, cfg.limits), case_list, qrels, cfg.limits, settings, budget
+        )
+        for run, recs in records.items()
+    }
+
+    def label(run: Path) -> str:
+        modes = sorted({r.get("mode", "agentic") for r in records[run]})
+        return f"{run.name} ({', '.join(modes) or 'empty'})"
+
+    result = compare_scores(scores[run_a], scores[run_b])
+    text = render_comparison(result, label(run_a), label(run_b))
+    typer.echo(text)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        typer.echo(f"Written: {out}")
+    if not result["paired_cases"]:
+        typer.echo("error: no case completed in both runs", err=True)
         raise typer.Exit(code=1)

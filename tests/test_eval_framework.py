@@ -226,7 +226,7 @@ def test_run_without_live_prints_the_plan_and_builds_nothing(monkeypatch, tmp_pa
     args = ["eval", "run", "--cases", str(cases_file(tmp_path)), "--config", str(BASE)]
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
-    assert "Plan: 1 case(s): crop" in result.output  # the held-out case is not in the dev split
+    assert "Plan (agentic): 1 case(s): crop" in result.output  # the held-out case is not dev
     assert "Worst case 20,000 tokens" in result.output and "nothing was run" in result.output
 
 

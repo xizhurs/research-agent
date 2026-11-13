@@ -48,6 +48,7 @@ _ALLOWED_KEYS = {
     "max_tool_calls",
     "key_points",
     "min_key_points",
+    "fixed_query",
 }
 DEFAULT_NUMBER_TOLERANCE = 0.05
 _WORK_ID = re.compile(r"^W\d+$")
@@ -106,6 +107,7 @@ class EvalCase:
     max_tool_calls: int | None = None  # tool calls requested (all turns of the trace)
     key_points: tuple[KeyPoint, ...] = ()
     min_key_points: int = 0  # key points that must be covered (0: coverage is only reported)
+    fixed_query: str | None = None  # fixed-search mode's query (default: the question)
 
 
 def _int_field(raw: dict[str, Any], key: str, default: int | None, case_id: str) -> int | None:
@@ -193,6 +195,9 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         ):
             raise EvalError(f"case {case_id!r}: {key} must be a list of non-empty strings")
         phrase_lists[key] = tuple(v.strip().lower() for v in values)
+    fixed = raw.get("fixed_query")
+    if fixed is not None and not (isinstance(fixed, str) and fixed.strip()):
+        raise EvalError(f"case {case_id!r}: fixed_query must be a non-empty string")
     key_points = _key_points(raw, case_id)
     min_key_points = _int_field(raw, "min_key_points", 0, case_id) or 0
     if min_key_points > len(key_points):
@@ -216,6 +221,7 @@ def _parse_case(raw: Any, index: int) -> EvalCase:
         max_tool_calls=_int_field(raw, "max_tool_calls", None, case_id),
         key_points=key_points,
         min_key_points=min_key_points,
+        fixed_query=fixed.strip() if fixed else None,
     )
 
 

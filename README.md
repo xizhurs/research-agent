@@ -165,6 +165,8 @@ uv run research-agent eval run --live                    # the dev split with th
 uv run research-agent eval run --live --only crop-type-dl --max-tokens 30000
 uv run research-agent eval score evals/runs/<run-id>     # free: score stored records again, offline
 uv run research-agent eval replay evals/runs/<run-id>    # free: the recorded model replies through the current code
+uv run research-agent eval run --live --mode fixed       # baseline: one search with the question, then one answer
+uv run research-agent eval compare <run-a> <run-b>       # free: case-by-case differences between two runs
 ```
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
@@ -185,6 +187,12 @@ Cases can also state `expect_numbers` (verified values that must appear in a too
 - Otherwise the new answer is compared with the recorded one and marked **same** or **changed** (changed is reported only).
 - Use it to check that a code change after the model's decisions (parsing, citations, limitations) does what you expect, for free.
 - It needs the tool cache of the machine that made the run.
+
+`eval run --mode fixed` is a baseline for the literature cases:
+- one search with the question as asked (or a case's `fixed_query`), then one model call with tools off;
+- the same prompt and the same answer checks as the agent, so only the choice of searches differs.
+
+`eval compare A B` pairs the cases of two runs and counts, for each measure, how often B did better, the same or worse than A. Measures: pass rate, unsupported numbers, low-support claims, key points, precision and recall, tokens, model calls, time and cost.
 
 The cases are a draft; edit them to match the questions you care about.
 
