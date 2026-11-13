@@ -468,12 +468,54 @@ def test_cli_judge_plans_judges_and_scores(monkeypatch, tmp_path):
     assert "Judged 2 claim(s) (0 were cached) in 1 call(s)" in live.output
     assert "Verdicts: 1 supported, 0 partial, 1 unsupported" in live.output
     assert len(list((tmp_path / "judgements").rglob("*.json"))) == 2
+    # --live rewrites report.md and score.json itself (no separate eval score needed)
+    assert "Report and score.json updated" in live.output
+    report = (run / "report.md").read_text(encoding="utf-8")
+    assert "## Judge" in report and "| c | 2 | 2 | 1 | 0 | 1 | 0 | 0.5 | 0.5 |" in report
+    totals = json.loads((run / "score.json").read_text(encoding="utf-8"))["aggregate"]["all"]
+    assert totals["judge"]["judged"] == 2 and totals["judge"]["score"] == 0.5
 
     again = CliRunner().invoke(app, ["eval", "judge", str(run), "--live", "--yes", "--sample", "5",
                                      "--env-file", str(env), *common])  # fmt: skip
     assert "Nothing to judge" in again.output and "Calibration sample of 2" in again.output
+    assert "Report and score.json updated" in again.output
     assert (run / "calibration.md").exists()
 
     scored = CliRunner().invoke(app, ["eval", "score", str(run), *common])
     assert "judge (claude-haiku-5-5): 1 supported, 0 partial, 1 unsupported" in scored.output
     assert "unsupported ['W1']" in (run / "report.md").read_text(encoding="utf-8")
+
+
+def test_cli_judge_only_still_reports_every_record(monkeypatch, tmp_path):
+    """--only limits what is judged, never what the refreshed report shows."""
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    config = tmp_path / "base.toml"
+    config.write_text(BASE.read_text(encoding="utf-8").replace(
+        'cache_dir = "evals/judgements"',
+        f'cache_dir = "{(tmp_path / "judgements").as_posix()}"'), encoding="utf-8")
+    stats = {"iterations": 1, "search_calls": 0, "rainfall_calls": 0, "total_tokens": 0,
+             "tool_trace": [[]]}  # fmt: skip
+    run = tmp_path / "run"
+    run.mkdir()
+    for case_id in ("c", "d"):
+        record = {**make_record(case_id), "stats": stats}
+        if case_id == "d":
+            record["answer"] = {**record["answer"], "claims": [
+                {"text": "Another claim.", "kind": "evidence", "sources": ["R1"]}]}
+        (run / f"{case_id}.json").write_text(json.dumps(record), encoding="utf-8")
+    env = tmp_path / ".env"
+    env.write_text("CLAUDE_API_KEY=sk-ant-test-0123456789\n", encoding="utf-8")
+    cases = tmp_path / "cases.toml"
+    cases.write_text('[[case]]\nid = "c"\nquestion = "Q?"\n[[case]]\nid = "d"\nquestion = "Q?"\n',
+                     encoding="utf-8")  # fmt: skip
+    stub = StubJson(reply("supported", "partial"))  # only c's two claims are judged
+    monkeypatch.setattr("research_agent.cli._judge_client", lambda cfg, model, creds: stub)
+    result = CliRunner().invoke(app, [
+        "eval", "judge", str(run), "--live", "--yes", "--only", "c", "--env-file", str(env),
+        "--cases", str(cases), "--conversations", str(tmp_path / "none.toml"),
+        "--config", str(config)])  # fmt: skip
+    assert result.exit_code == 0, result.output
+    assert len(stub.calls) == 1
+    report = (run / "report.md").read_text(encoding="utf-8")
+    assert "| c | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 |" in report
+    assert "| d | 1 | 0 | 0 | 0 | 0 | 1 | - | - |" in report  # shown, not judged yet

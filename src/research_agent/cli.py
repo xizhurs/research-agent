@@ -764,11 +764,12 @@ def _score_and_report(
     cases: list[EvalCase],
     qrels: dict[str, Qrels],
     budget: RunBudget,
+    env_file: Path = DEFAULT_ENV_FILE,
 ) -> tuple[list[dict], dict]:
     """Metrics of the records (reported, never failures), written to score.json and report.md."""
     settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
     scores = score_records(
-        records, cases, qrels, cfg.limits, settings, budget, _judge_lookup(cfg)
+        records, cases, qrels, cfg.limits, settings, budget, _judge_lookup(cfg, env_file)
     )
     agg = aggregate(scores)
     write_scores(run_dir, scores, agg)
@@ -1384,34 +1385,46 @@ def eval_judge(
     ),
     cases: Path = CASES_OPTION,
     conversations: Path = CONVERSATIONS_OPTION,
+    qrels_file: Path = QRELS_OPTION,
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
     env_file: Path = typer.Option(
         DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
     ),
 ) -> None:
-    """Rate each evidence claim against its cited text with the judge model, cached.
+    """Rate evidence claims (against their cited text) and interpretations (against the
+    evidence they rest on) with the judge model, cached.
 
     Without --live: the plan (claims, how many are cached, calls and tokens) and, if
     --calibration exists, your agreement with the judge; nothing is called. With --live the
-    uncached claims are judged within [eval.judge] caps and written to its cache_dir; eval
-    score then shows the verdicts offline. Verdicts are reported only, never a case failure.
+    uncached claims are judged within [eval.judge] caps and written to its cache_dir, then
+    report.md and score.json of RUN_DIR are rewritten with the verdicts (every record, also
+    with --only). Verdicts are reported only, never a case failure.
     """
     cfg = _load_or_exit(config)
     jc = cfg.eval.judge
     try:
-        records = read_records(run_dir)
+        all_records = read_records(run_dir)
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    records = all_records
     if only:
         records = [r for r in records
                    if r["case_id"] in only or (r.get("conversation") or {}).get("id") in only]
-    cases_by_id = {c.id: c for c in _all_cases_or_exit(cases, conversations)}
+    case_list = _all_cases_or_exit(cases, conversations)
+    cases_by_id = {c.id: c for c in case_list}
     model = _judge_model(cfg, env_file)
     if not model:
         typer.echo("error: no judge model: set [eval.judge] model or CLAUDE_MODEL", err=True)
         raise typer.Exit(code=1)
     cache = JudgeCache(jc.cache_dir)
+
+    def refresh_report() -> None:
+        """report.md and score.json of every record in RUN_DIR, with the cached verdicts."""
+        budget = _budget(cfg, None, None, None)
+        rescored = rescore(all_records, case_list, cfg.limits)
+        _score_and_report(cfg, run_dir, rescored, case_list, qrels, budget, env_file)
+        typer.echo(f"Report and score.json updated: {run_dir / 'report.md'}")
 
     plan = judge_plan(records, cases_by_id, model, cache, jc.max_output_tokens)
     typer.echo(
@@ -1449,8 +1462,10 @@ def eval_judge(
         if plan["calls"]:
             typer.echo("Plan only: nothing was judged. Add --live to judge (calls the model).")
         return
+    qrels = _qrels_or_exit(qrels_file, case_list)
     if not plan["calls"]:
         typer.echo("Nothing to judge: every claim is cached.")
+        refresh_report()
         return
 
     creds = _credentials_or_exit(env_file)
@@ -1514,9 +1529,9 @@ def eval_judge(
     typer.echo(
         f"Verdicts: {counts['supported']} supported, {counts['partial']} partial, "
         f"{counts['unsupported']} unsupported; interpretations {interp['within']} within, "
-        f"{interp['stretch']} stretch, {interp['overreach']} overreach. "
-        f"Run eval score {run_dir} for the report."
+        f"{interp['stretch']} stretch, {interp['overreach']} overreach."
     )
+    refresh_report()  # also after a budget stop or a failed call: what was judged is shown
     if stopped or st.errors:
         raise typer.Exit(code=1)
 
