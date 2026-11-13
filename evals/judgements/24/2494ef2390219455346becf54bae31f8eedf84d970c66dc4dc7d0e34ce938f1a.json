@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1963,
+  "items": 1,
+  "output_tokens": 131
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "2494ef2390219455346becf54bae31f8eedf84d970c66dc4dc7d0e34ce938f1a",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the Rotterdam follow-up with annual totals, baseline comparison, and a link to Amsterdam. Caveats cover ERA5 grid estimates, matching, and short data period, though the Amsterdam comparison is an interpretation with no stated Amsterdam figures here.",
+ "relevance": "direct",
+ "rubric": 2
+}

@@ -204,7 +204,12 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
   - Each evidence claim is rated supported, partial or unsupported, only against the texts it cites (R analysis text, or W title and abstract), with a short reason.
   - Up to 10 claims per call (`MAX_CLAIMS_PER_CALL`), with each cited text sent once (S1, S2...).
   - Claims and sources are HTML-escaped inside `<source>`/`<claim>` elements, and the instructions say they are data.
-  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points` (none yet).
+  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points`. None are approved yet.
+  - Reviewed key points live in `evals/key_points.toml` (added 2026-11-13), next to the case files, keyed by case or turn ID (`"conv-amsterdam-rotterdam#3"`):
+    - Each entry has `status` "draft" or "approved", an optional `min_key_points`, and `[[id.point]]` tables with `text`, `any_terms` and `source`.
+    - `load_cases` and `load_conversations` attach only **approved** entries (`load_key_points`, `apply_key_points`). A draft is validated but never used. Defining key points in both a case file and this file is an error.
+    - Holds 12 draft cases (48 points) written by the assistant for the owner to review. Data points come from tool outputs stored in the run records (ERA5 via Open-Meteo; RONI via `research-agent enso --year 2010`), each with its source. Literature points (`crop-type-dl`, `flood-sar`) and two station figures (Zhengzhou about 200 mm in an hour; Paris-Montsouris 42.6 °C) are domain knowledge, marked "verify".
+    - The drafts surfaced a data fact: in ERA5, Zhengzhou's 2021 maximum day was 22 August (170.1 mm), not 20 July (79.0 mm).
   - Interpretations (added 2026-11-13, owner's request; `INTERPRETATION_SYSTEM`):
     - Each `interpretation` claim is rated **within** (follows from its sources, or is clearly tentative), **stretch** (somewhat beyond them: wider scope, a causal reading, a trend, more certainty, without contradicting them) or **overreach** (not supported or contradicted, or speculation stated as fact).
     - It is rated against the sources it cites or, when it cites none (the usual case for synthesis), all the evidence the answer cites. An answer that cites nothing has no interpretations to judge.
@@ -221,6 +226,16 @@ LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Cla
       - One judgement per claim per version, so the effect of the ordering cannot be separated from run-to-run variance.
       - Totals on the two live runs: 20 supported, 1 partial, 1 unsupported; 2 interpretations, both within.
     - Live 2026-11-13: the two live runs hold only 2 interpretation claims, both within. The agent labels few claims as interpretation.
+  - Answer quality (added 2026-11-13, owner's request; `ANSWER_SYSTEM`, kind `answer_quality`, one judgement per answer):
+    - Reference-free: the judge sees the question, the claims and the limitations, not the sources. It rates how well the answer serves the question, not whether it is true.
+    - Three dimensions, each 1 / 0.5 / 0 by position: **relevance** direct / partial / off; **completeness** complete / gaps / major_gaps; **caveats** adequate / thin / missing. The answer score is their mean (`answer_score`). The schema is reason-first.
+    - A rightly declined question (off-topic or unsafe), or a needed clarification of a genuinely ambiguous one, is direct and complete.
+    - A conversation turn is rated with its earlier questions (`with_conversation_context`, derived from the sibling turn records in the run folder, so recorded runs work too). The earlier questions are part of the cache key.
+    - Shown as an "Answer quality" sub-table of the Judge section (totals by run, category and split; one row per case), in the case lines, flags (score below 1) and compare (`judge_answer_score`).
+    - Live 2026-11-13 on the two live runs (11 answers, about $0.002 per pass):
+      - The first version rated the Springfield clarification request "partial / major gaps" (0.5) and the follow-up "I mean Springfield, Illinois." 0.667, because the judge did not see the earlier turn. Both were rubric faults, fixed by the clarification rule and the conversation context; the first ratings were discarded (never committed).
+      - After the fix: 1.0 and 0.833; mean 0.944 for the conversation run and 0.833 for the 2-case run. Most non-1.0 ratings are "gaps" (e.g. no seasonal detail).
+      - `conv-amsterdam-rotterdam#3` rates 1.0 although its "largest difference was 2021" claim is wrong: this rubric does not check truth; claim support caught it.
 - Replies:
   - `output_config.format` asks for a JSON schema; `_parse` checks again that each number appears exactly once, with valid choices and a reason, cut to 300 characters.
   - An invalid, refused (`stop_reason` "refusal"; Haiku has no server-side fallback) or truncated (`max_tokens`) reply is counted and not cached, so it is retried next time.

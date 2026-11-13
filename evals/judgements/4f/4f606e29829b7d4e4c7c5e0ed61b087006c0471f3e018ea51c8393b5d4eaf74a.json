@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1257,
+  "items": 1,
+  "output_tokens": 98
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "4f606e29829b7d4e4c7c5e0ed61b087006c0471f3e018ea51c8393b5d4eaf74a",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "The question is genuinely ambiguous across many Springfields, so the answer rightly asks which one is meant and lists options. It gives no rainfall figure, which is appropriate given the ambiguity.",
+ "relevance": "direct",
+ "rubric": 2
+}

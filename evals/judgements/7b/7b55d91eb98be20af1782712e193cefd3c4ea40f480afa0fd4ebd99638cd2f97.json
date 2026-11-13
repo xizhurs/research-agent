@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1267,
+  "items": 1,
+  "output_tokens": 124
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "7b55d91eb98be20af1782712e193cefd3c4ea40f480afa0fd4ebd99638cd2f97",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the clarified Springfield, Illinois question with a specific figure and period, and states it is reanalysis data. Limitations are repeated and the answer does not give the official station record, so caveats are adequate but somewhat redundant and the all-time record gap is only not",
+ "relevance": "direct",
+ "rubric": 2
+}

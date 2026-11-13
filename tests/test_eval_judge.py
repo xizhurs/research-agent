@@ -31,12 +31,16 @@ from research_agent.evaluation import (
     score_records,
 )
 from research_agent.evaluation.judge import (
+    ANSWER_SCHEMA,
+    ANSWER_SYSTEM,
     MAX_CLAIMS_PER_CALL,
     SUPPORT_SCHEMA,
     claim_key,
     interpretation_items,
+    parse_answer,
     parse_support,
     support_prompt,
+    with_conversation_context,
 )
 from research_agent.evaluation.report import render_report
 from research_agent.llm import LLMConnectionError, Usage
@@ -66,12 +70,25 @@ def make_record(case_id="c", claims=None, status="ok"):
             "answer": answer if status == "ok" else None}  # fmt: skip
 
 
+ANSWER_OK = JsonReply(json.dumps({"reason": "fine", "relevance": "direct",
+                                   "completeness": "complete", "caveats": "adequate"}),
+                       Usage(300, 40), "end_turn")  # fmt: skip
+
+
 class StubJson:
-    def __init__(self, *replies):
+    """Scripted claim-rubric replies; answer-quality calls get ``answer_reply`` (recorded
+    separately in ``answer_calls``, so claim tests keep their exact scripts)."""
+
+    def __init__(self, *replies, answer_reply=ANSWER_OK):
         self.replies = list(replies)
         self.calls = []
+        self.answer_calls = []
+        self.answer_reply = answer_reply
 
     def complete_json(self, **kwargs):
+        if kwargs["schema"] is ANSWER_SCHEMA:
+            self.answer_calls.append(kwargs)
+            return self.answer_reply
         self.calls.append(kwargs)
         assert self.replies, "the judge was called more often than scripted"
         return self.replies.pop(0)
@@ -197,7 +214,9 @@ def test_replies_are_validated(text, ok):
 def test_claims_are_judged_once_then_served_from_the_cache(tmp_path):
     judge, stub = judge_with(tmp_path, reply("supported", "unsupported"))
     judge.judge_record(make_record(), None)
-    assert (judge.stats.calls, judge.stats.judged, len(stub.calls)) == (1, 2, 1)
+    # one claim-support call plus one answer-quality call for the record
+    assert (judge.stats.calls, judge.stats.judged, len(stub.calls)) == (2, 2, 1)
+    assert judge.stats.answers == 1 and len(stub.answer_calls) == 1
     assert stub.calls[0]["schema"] == SUPPORT_SCHEMA
     item = SUPPORT_SCHEMA["properties"]["claims"]["items"]
     assert list(item["properties"]) == ["n", "reason", "verdict"]  # rubric 2: reason first
@@ -219,7 +238,9 @@ def test_unusable_replies_are_not_cached(tmp_path, bad, counter):
     judge, _ = judge_with(tmp_path, bad)
     judge.judge_record(make_record(), None)
     assert getattr(judge.stats, counter) == 1 and judge.stats.judged == 0
-    assert not (tmp_path / "judgements").exists()
+    kinds = [json.loads(f.read_text(encoding="utf-8"))["kind"]
+             for f in (tmp_path / "judgements").rglob("*.json")]  # fmt: skip
+    assert kinds == ["answer_quality"]  # no claim verdict was cached; the answer rating was
 
 
 def test_the_budget_stops_before_the_call(tmp_path):
@@ -235,7 +256,8 @@ def test_long_answers_are_split_into_calls(tmp_path):
     judge, stub = judge_with(tmp_path, reply(*["supported"] * MAX_CLAIMS_PER_CALL),
                              reply("partial", "partial"))  # fmt: skip
     judge.judge_record(make_record(claims=claims), None)
-    assert judge.stats.calls == 2 and judge.stats.judged == MAX_CLAIMS_PER_CALL + 2
+    assert len(stub.calls) == 2 and judge.stats.judged == MAX_CLAIMS_PER_CALL + 2
+    assert judge.stats.calls == 3  # the two claim chunks plus the answer rating
 
 
 def test_key_points_are_judged_only_when_the_case_has_them(tmp_path):
@@ -404,7 +426,8 @@ def test_plan_counts_cached_and_pending(tmp_path):
     cache = judged_cache(tmp_path, "supported", "partial")
     other = make_record("d", claims=[{"text": "New claim.", "kind": "evidence", "sources": ["R1"]}])
     plan = judge_plan([make_record(), other], {}, MODEL, cache, 4000)
-    assert (plan["claims"], plan["cached"], plan["pending"], plan["calls"]) == (3, 2, 1, 1)
+    assert (plan["claims"], plan["cached"], plan["pending"], plan["calls"]) == (3, 2, 1, 2)
+    assert (plan["answers"], plan["answers_pending"]) == (2, 1)  # d's answer is not rated yet
     assert plan["estimated_tokens"] > 4000
 
 
@@ -465,9 +488,10 @@ def test_cli_judge_plans_judges_and_scores(monkeypatch, tmp_path):
     live = CliRunner().invoke(app, ["eval", "judge", str(run), "--live", "--yes", "--sample", "5",
                                     "--env-file", str(env), *common])  # fmt: skip
     assert live.exit_code == 0, live.output
-    assert "Judged 2 claim(s) (0 were cached) in 1 call(s)" in live.output
+    assert "Judged 2 claim(s) (0 were cached) in 2 call(s)" in live.output
+    assert "Answers rated: 1." in live.output
     assert "Verdicts: 1 supported, 0 partial, 1 unsupported" in live.output
-    assert len(list((tmp_path / "judgements").rglob("*.json"))) == 2
+    assert len(list((tmp_path / "judgements").rglob("*.json"))) == 3  # 2 claims + 1 answer
     # --live rewrites report.md and score.json itself (no separate eval score needed)
     assert "Report and score.json updated" in live.output
     report = (run / "report.md").read_text(encoding="utf-8")
@@ -519,3 +543,96 @@ def test_cli_judge_only_still_reports_every_record(monkeypatch, tmp_path):
     report = (run / "report.md").read_text(encoding="utf-8")
     assert "| c | 2 | 2 | 1 | 1 | 0 | 0 | 0.5 | 0.75 |" in report
     assert "| d | 1 | 0 | 0 | 0 | 0 | 1 | - | - |" in report  # shown, not judged yet
+
+
+# --- answer quality ------------------------------------------------------------------------------
+
+
+def rating(relevance, completeness, caveats, reason="r"):
+    return JsonReply(json.dumps({"reason": reason, "relevance": relevance,
+                                 "completeness": completeness, "caveats": caveats}),
+                     Usage(300, 40), "end_turn")  # fmt: skip
+
+
+@pytest.mark.parametrize("text, ok", [
+    ('{"reason": "r", "relevance": "direct", "completeness": "gaps", "caveats": "thin"}', True),
+    ('{"reason": "r", "relevance": "maybe", "completeness": "gaps", "caveats": "thin"}', False),
+    ('{"relevance": "direct", "completeness": "gaps", "caveats": "thin"}', False),
+    ("not json", False),
+])  # fmt: skip
+def test_answer_ratings_are_validated(text, ok):
+    assert (parse_answer(text) is not None) is ok
+
+
+def test_answer_quality_is_rated_once_and_reported(tmp_path, limits):
+    judge, stub = judge_with(tmp_path, reply("supported", "supported"))
+    stub.answer_reply = rating("partial", "gaps", "missing", "Skips the comparison asked for.")
+    judge.judge_record(make_record(), None)
+    (call,) = stub.answer_calls
+    assert list(call["schema"]["properties"]) == ["reason", "relevance", "completeness",
+                                                  "caveats"]  # reason first  # fmt: skip
+    assert "<question>Q?</question>" in call["prompt"] and "<limitation>x</limitation>" in (
+        call["prompt"])
+    assert "abstract" not in call["prompt"].lower()  # reference-free: no sources sent
+    again, stub2 = judge_with(tmp_path)
+    again.judge_record(make_record(), None)
+    assert stub2.answer_calls == [] and again.stats.answers == 0  # cached
+
+    section = judge_section(make_record(), None, MODEL, judge.cache)
+    assert section["answer"] == {"relevance": "partial", "completeness": "gaps",
+                                 "caveats": "missing", "reason": "Skips the comparison asked for.",
+                                 "score": 0.333}  # (0.5 + 0.5 + 0) / 3  # fmt: skip
+    stats = {"iterations": 1, "search_calls": 0, "rainfall_calls": 0, "total_tokens": 0,
+             "tool_trace": [[]]}  # fmt: skip
+    lookup = lambda r, c: judge_section(r, c, MODEL, judge.cache)  # noqa: E731
+    (score,) = score_records([{**make_record(), "stats": stats}], [], {}, limits,
+                             ScoreSettings(0.8, 0.3), None, lookup)  # fmt: skip
+    assert "answer quality 0.333 (partial, gaps, caveats missing)" in flags(score)
+    agg = aggregate([score])
+    assert agg["all"]["judge"]["answer"] == {"answers": 1, "judged": 1, "unjudged": 0,
+                                             "direct": 0, "complete": 0, "adequate": 0,
+                                             "score": 0.333}  # fmt: skip
+    text = render_report([score], agg)
+    assert "### Answer quality" in text and "not whether it is true" in text
+    assert "| all | 1 | 1 | 0 | 0 | 0 | 0 | 0.333 |" in text
+    assert "| c | partial | gaps | missing | 0.333 |" in text
+    assert "- answer quality 0.333: relevance partial, completeness gaps, caveats missing" in text
+    better = {**score, "judge": {**score["judge"], "answer": {**score["judge"]["answer"],
+                                                              "score": 1.0}}}  # fmt: skip
+    assert compare_scores([score], [better])["measures"]["judge_answer_score"]["improved"] == 1
+
+
+def test_a_refused_answer_rating_is_not_cached(tmp_path):
+    judge, stub = judge_with(tmp_path, reply("supported", "supported"))
+    stub.answer_reply = JsonReply("", Usage(1, 1), "refusal")
+    judge.judge_record(make_record(), None)
+    assert judge.stats.refused == 1 and judge.stats.answers == 0
+    assert judge_section(make_record(), None, MODEL, judge.cache)["answer"] is None
+
+
+def test_follow_up_turns_are_rated_with_their_earlier_questions(tmp_path):
+    def turn(conv, n, question):
+        return {**make_record(f"{conv}#{n}"), "question": question,
+                "conversation": {"id": conv, "turn": n}}  # fmt: skip
+
+    records = [turn("c", 2, "What about Rotterdam?"), turn("c", 1, "Rain in Amsterdam?"),
+               turn("d", 1, "Other topic?"), make_record("single")]  # fmt: skip
+    second, first, other, single = with_conversation_context(records)
+    assert second["conversation_context"] == ["Rain in Amsterdam?"]
+    assert first["conversation_context"] == [] and other["conversation_context"] == []
+    assert "conversation_context" not in single
+
+    judge, stub = judge_with(tmp_path, reply("supported", "supported"))
+    judge.judge_record(second, None)
+    prompt = stub.answer_calls[0]["prompt"]
+    assert prompt.index("<earlier_question>Rain in Amsterdam?</earlier_question>") < prompt.index(
+        "<question>What about Rotterdam?</question>")
+    # the context is part of the cache key: the same answer without it is a different rating
+    assert judge_section(second, None, MODEL, judge.cache)["answer"] is not None
+    alone = {k: v for k, v in second.items() if k != "conversation_context"}
+    assert judge_section(alone, None, MODEL, judge.cache)["answer"] is None
+
+
+def test_answer_rubric_accepts_a_needed_clarification():
+    assert "asks the user to clarify a genuinely ambiguous question" in ANSWER_SYSTEM
+    assert "is direct and complete" in ANSWER_SYSTEM

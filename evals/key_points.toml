@@ -1,0 +1,306 @@
+# Key points: verified facts a good answer should cover, per case or conversation turn
+# ("<conversation>#<n>"). The LLM judge rates each answer against them (covered / partial /
+# missing and consistent / contradicted / not_addressed): the correctness and completeness
+# check, with the reference written or approved by the owner, never generated per run.
+#
+# ALL ENTRIES BELOW ARE DRAFTS written by the assistant on 2026-11-13 for the owner to review.
+# A draft is read and validated but NOT used. To use one: check each point and its source,
+# edit or delete points, then set status = "approved". Optional min_key_points = N makes the
+# case fail when fewer than N points are covered (default 0: coverage is only reported).
+#
+# Per point: text (the fact, for the judge), any_terms (lower-case substrings; the free
+# deterministic coverage metric counts a point covered when one appears in a cited claim) and
+# source (for the reviewer). Data facts come from the analysis text the agent's tool returned
+# (ERA5 via Open-Meteo, or NOAA CPC RONI), so they are correct for that data, not for station
+# measurements. "Domain knowledge (assistant)" points are not from a tool: verify them first.
+# A case may have key points here or in its case file, not both.
+
+# --- extreme rainfall -----------------------------------------------------------------------
+
+["rainfall-event-zhengzhou"]
+status = "draft"
+
+[["rainfall-event-zhengzhou".point]]
+text = "ERA5 gives 79.0 mm for 20 July 2021 at the Zhengzhou grid cell (34.75, 113.75)."
+any_terms = ["79.0", "79 mm"]
+source = "R1 analysis text, run 20261113-132831 (ERA5 via Open-Meteo, 1950-2025)"
+
+[["rainfall-event-zhengzhou".point]]
+text = "In the ERA5 record the day is not exceptional: about the 22nd of 76 annual maxima (72nd percentile), 1.2 times the 1991-2020 mean annual maximum (66.8 mm)."
+any_terms = ["22 of 76", "22nd", "72.4", "72nd", "66.8"]
+source = "R1 analysis text, run 20261113-132831"
+
+[["rainfall-event-zhengzhou".point]]
+text = "ERA5's largest Zhengzhou daily totals are 1955-06-22 (213.9 mm) and 2021-08-22 (170.1 mm); in ERA5 even 2021's own maximum fell in August, not on 20 July."
+any_terms = ["213.9", "170.1", "1955"]
+source = "R1 analysis text, run 20261113-132831"
+
+[["rainfall-event-zhengzhou".point]]
+text = "A reanalysis grid cell of about 25 km strongly understates the local extreme: Zhengzhou's station measured several hundred mm that day, with about 200 mm in a single hour."
+any_terms = ["station", "gauge", "understate", "smooth"]
+source = "First half: R1 caveat. Station figures: domain knowledge (assistant; widely reported as 201.9 mm in one hour on 20 July 2021). Verify before approving."
+
+["scale-monthly-zhengzhou"]
+status = "draft"
+
+[["scale-monthly-zhengzhou".point]]
+text = "ERA5 July 2021 total at Zhengzhou: 286.2 mm."
+any_terms = ["286.2", "286 mm"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["scale-monthly-zhengzhou".point]]
+text = "It ranks 21st of 77 Julys (1950-2026): wet, but not exceptional in the record."
+any_terms = ["21 of 77", "21st"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["scale-monthly-zhengzhou".point]]
+text = "It is above the 1991-2020 July 10th-90th percentile band (79.6 to 279.7 mm), about 1.57 times the baseline July mean (182.2 mm)."
+any_terms = ["279.7", "1.57", "182.2", "above the baseline band"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["scale-monthly-zhengzhou".point]]
+text = "Several Julys were far wetter in ERA5, such as July 1958 (567.9 mm) and July 1957 (551.6 mm)."
+any_terms = ["567.9", "551.6", "1958", "1957"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+["scale-yearly-vague-amsterdam"]
+status = "draft"
+
+[["scale-yearly-vague-amsterdam".point]]
+text = "The answer covers the last 10 years (2016-2025), as asked, not the whole 1950-2025 record."
+any_terms = ["2016"]
+source = "The question; the live run analysed the whole record without a period (see CLAUDE.md, UI facts)"
+
+[["scale-yearly-vague-amsterdam".point]]
+text = "2023 (1100.7 mm) and 2024 (1042.6 mm) were the wettest years of the decade, both well above the 1991-2020 10th-90th percentile band (641.6 to 918.4 mm); 2023 is the wettest year in the 1950-2025 ERA5 record."
+any_terms = ["1100.7", "1042.6"]
+source = "R2 analysis text (2016-2025), run 20261113-135000, turn conv-amsterdam-rotterdam#1; whole-record ranking from R1 of langfuse-20261113-144227"
+
+[["scale-yearly-vague-amsterdam".point]]
+text = "2025 (649.7 mm) and 2018 (650.7 mm) were the driest years of the decade, near the bottom of the band."
+any_terms = ["649.7", "650.7"]
+source = "R2 analysis text, run 20261113-135000, turn conv-amsterdam-rotterdam#1"
+
+[["scale-yearly-vague-amsterdam".point]]
+text = "The 1991-2020 baseline mean annual total is 777.4 mm."
+any_terms = ["777.4"]
+source = "R1/R2 analysis texts"
+
+# --- dry conditions -------------------------------------------------------------------------
+
+["dry-year-madrid"]
+status = "draft"
+
+[["dry-year-madrid".point]]
+text = "In ERA5, 2022 was not a dry year by annual total in Madrid: 460.9 mm, 1.16 times the 1991-2020 mean (395.6 mm), rank 47 of 76 (1 = driest)."
+any_terms = ["460.9", "1.16", "47 of 76"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["dry-year-madrid".point]]
+text = "Its longest dry run in 2022 was 67 days, longer than the 1991-2020 mean yearly CDD (49.8 days)."
+any_terms = ["67 days", "67-day", "49.8"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["dry-year-madrid".point]]
+text = "The driest years in the record were 1994 (209.2 mm), 2005 (224.2 mm) and 2015 (245.0 mm)."
+any_terms = ["209.2", "1994"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["dry-year-madrid".point]]
+text = "A dry spell or a low total is not a drought index (no evaporation, soil moisture or accumulated deficit)."
+any_terms = ["drought index", "not a drought"]
+source = "R1 caveat"
+
+# --- temperature ----------------------------------------------------------------------------
+
+["temperature-hot-day-paris"]
+status = "draft"
+
+[["temperature-hot-day-paris".point]]
+text = "ERA5 daily maximum on 25 July 2019 at the Paris grid cell: 41.4 degrees C, the hottest of 27,759 days in 1950-2025."
+any_terms = ["41.4"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["temperature-hot-day-paris".point]]
+text = "That is 6.6 degrees C above the 1991-2020 mean annual maximum (TXx 34.8 degrees C)."
+any_terms = ["6.6", "34.8"]
+source = "R1 analysis text"
+
+[["temperature-hot-day-paris".point]]
+text = "It is 15.6 degrees C above the typical 1991-2020 daily maximum for that calendar day (25.8 degrees C)."
+any_terms = ["15.6", "25.8"]
+source = "R1 analysis text"
+
+[["temperature-hot-day-paris".point]]
+text = "Station measurements were higher (Paris-Montsouris recorded 42.6 degrees C, the city's record); a 25 km reanalysis cell smooths urban extremes."
+any_terms = ["42.6", "station"]
+source = "Smoothing: R1 caveat. 42.6 degrees C: domain knowledge (assistant; Meteo-France record of 25 July 2019, also noted in CLAUDE.md). Verify before approving."
+
+["temperature-yearly-madrid"]
+status = "draft"
+
+[["temperature-yearly-madrid".point]]
+text = "ERA5 2024 annual mean in Madrid: 15.7 degrees C, rank 4 of 76 (95% of years were cooler)."
+any_terms = ["15.7", "4 of 76", "fourth"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["temperature-yearly-madrid".point]]
+text = "That is 0.7 degrees C above the 1991-2020 mean (15.0 degrees C), at the top of the 10th-90th percentile band (14.1 to 15.7 degrees C)."
+any_terms = ["0.7", "15.0"]
+source = "R1 analysis text"
+
+[["temperature-yearly-madrid".point]]
+text = "2022, 2017 and 1995 were warmer (16.0 degrees C each)."
+any_terms = ["16.0"]
+source = "R1 analysis text"
+
+[["temperature-yearly-madrid".point]]
+text = "Single-year rankings are not a trend estimate."
+any_terms = ["trend"]
+source = "R1 caveat"
+
+["temperature-cold-moscow"]
+status = "draft"
+
+[["temperature-cold-moscow".point]]
+text = "The coldest ERA5 daily minimum since 1950 at the Moscow grid cell was -41.5 degrees C on 31 December 1978."
+any_terms = ["41.5", "1978"]
+source = "R1 analysis text, Langfuse import langfuse-20261113-144227"
+
+[["temperature-cold-moscow".point]]
+text = "The second coldest, -39.0 degrees C on 1 January 1979, belongs to the same cold spell crossing New Year (counted in two calendar years)."
+any_terms = ["39.0", "same cold", "new year"]
+source = "R1 analysis text; CLAUDE.md temperature known gaps"
+
+[["temperature-cold-moscow".point]]
+text = "Other very cold nights: 31 January 1956 (-38.0), 10 January 1950 (-35.4) and 13 February 2012 (-35.2 degrees C)."
+any_terms = ["38.0", "35.4", "35.2"]
+source = "R1 analysis text"
+
+[["temperature-cold-moscow".point]]
+text = "The 1991-2020 mean annual minimum (TNn) is -27.5 degrees C."
+any_terms = ["27.5"]
+source = "R1 analysis text"
+
+# --- ambiguity --------------------------------------------------------------------------------
+
+["rainfall-ambiguous-city"]
+status = "draft"
+
+[["rainfall-ambiguous-city".point]]
+text = "The place is ambiguous: at least ten places are called Springfield and none clearly dominates."
+any_terms = ["ambiguous", "several", "multiple", "which springfield"]
+source = "Tool result (ambiguous), Langfuse import langfuse-20261113-144227"
+
+[["rainfall-ambiguous-city".point]]
+text = "It lists candidates, for example Springfield in Missouri, Massachusetts and Illinois."
+any_terms = ["missouri", "massachusetts", "illinois"]
+source = "Tool result"
+
+[["rainfall-ambiguous-city".point]]
+text = "It asks which Springfield is meant and gives no rainfall figure for an unconfirmed place."
+any_terms = ["which", "specify", "clarify"]
+source = "Tool instruction (do not guess)"
+
+# --- conversation ---------------------------------------------------------------------------
+
+["conv-amsterdam-rotterdam#3"]
+status = "draft"
+
+[["conv-amsterdam-rotterdam#3".point]]
+text = "Both cities' wettest years in 2016-2025 were 2023 and 2024 (Amsterdam 1100.7 and 1042.6 mm; Rotterdam 1078.3 and 1059.3 mm)."
+any_terms = ["1100.7", "1078.3", "1059.3"]
+source = "R2 (Amsterdam) and R3 (Rotterdam) analysis texts, run 20261113-135000"
+
+[["conv-amsterdam-rotterdam#3".point]]
+text = "Both cities' driest year of the period was 2025 (Amsterdam 649.7 mm, Rotterdam 626.9 mm)."
+any_terms = ["649.7", "626.9"]
+source = "R2, R3"
+
+[["conv-amsterdam-rotterdam#3".point]]
+text = "The largest annual difference between the cities was in 2017: Amsterdam 819.2 mm against Rotterdam 777.5 mm, 41.7 mm."
+any_terms = ["41.7", "819.2"]
+source = "Computed from R2 and R3 by the assistant (the live answer said 2021, 26.5 mm; the judge rated that unsupported)"
+
+[["conv-amsterdam-rotterdam#3".point]]
+text = "Their 1991-2020 baselines are close: mean annual totals 777.4 mm (Amsterdam) and 772.3 mm (Rotterdam)."
+any_terms = ["777.4", "772.3"]
+source = "R2, R3"
+
+# --- ENSO -------------------------------------------------------------------------------------
+
+["enso-year-2010"]
+status = "draft"
+
+[["enso-year-2010".point]]
+text = "2010 had both phases: a strong El Nino (ASO 2009 to FMA 2010, peak +1.50 in NDJ 2009) ended early in the year."
+any_terms = ["1.50", "1.5", "2009"]
+source = "research-agent enso --year 2010 (NOAA CPC RONI, fetched 2026-11-13)"
+
+[["enso-year-2010".point]]
+text = "A strong La Nina followed from AMJ 2010 to AMJ 2011, peaking at -1.63 in OND 2010."
+any_terms = ["1.63", "2011"]
+source = "research-agent enso --year 2010"
+
+[["enso-year-2010".point]]
+text = "So 2010 was a transition year rather than purely an El Nino or a La Nina year."
+any_terms = ["both", "transition"]
+source = "Follows from the two events above"
+
+[["enso-year-2010".point]]
+text = "Events follow NOAA's rule on the RONI index; papers using ONI or other indices can give slightly different dates."
+any_terms = ["roni", "oni"]
+source = "ENSO tool caveat"
+
+# --- literature (domain knowledge; review carefully) ----------------------------------------
+
+["crop-type-dl"]
+status = "draft"
+
+[["crop-type-dl".point]]
+text = "Recurrent networks (LSTM, GRU) are widely used to model Sentinel-2 time series for crop type mapping."
+any_terms = ["lstm", "gru", "recurrent"]
+source = "Domain knowledge (assistant); also W3183470088 (five deep learning models incl. LSTM and GRU)"
+
+[["crop-type-dl".point]]
+text = "Temporal (1D) convolutional networks such as TempCNN are common and often match or beat recurrent networks."
+any_terms = ["1d cnn", "1d-cnn", "tempcnn", "temporal convolution", "convolutional"]
+source = "Domain knowledge (assistant); 1D-CNN in W3183470088"
+
+[["crop-type-dl".point]]
+text = "Attention-based and Transformer models (for example self-attention over the time series) are among the strongest current approaches."
+any_terms = ["attention", "transformer"]
+source = "Domain knowledge (assistant); W3217764757 (attention-based deep learning)"
+
+[["crop-type-dl".point]]
+text = "Key challenges are cloud gaps and irregular sampling, and transferring models across regions and years (domain adaptation, self-supervised pre-training)."
+any_terms = ["cloud", "missing", "transfer", "domain adaptation", "self-supervised"]
+source = "W3183470088 (missing data from clouds), W4390607664 (self-supervised pre-training); domain knowledge (assistant)"
+
+["flood-sar"]
+status = "draft"
+
+[["flood-sar".point]]
+text = "Open water looks dark in SAR images because smooth water reflects the radar signal away from the sensor (low backscatter); most methods build on this."
+any_terms = ["backscatter", "dark", "specular"]
+source = "Domain knowledge (assistant)"
+
+[["flood-sar".point]]
+text = "Thresholding of Sentinel-1 VV/VH backscatter (for example Otsu or split-based thresholds) is a common baseline."
+any_terms = ["threshold", "otsu"]
+source = "Domain knowledge (assistant)"
+
+[["flood-sar".point]]
+text = "Change detection between a pre-flood and a during-flood image separates flood water from permanent water."
+any_terms = ["change detection", "pre-flood", "before and after"]
+source = "Domain knowledge (assistant)"
+
+[["flood-sar".point]]
+text = "Machine and deep learning segmentation (random forests, CNNs such as U-Net) is increasingly used."
+any_terms = ["u-net", "unet", "cnn", "random forest", "deep learning"]
+source = "Domain knowledge (assistant)"
+
+[["flood-sar".point]]
+text = "Known difficulties: flooded vegetation and urban areas (double bounce raises backscatter), wind-roughened water and speckle."
+any_terms = ["vegetation", "urban", "double bounce", "speckle"]
+source = "Domain knowledge (assistant)"

@@ -54,6 +54,7 @@ MEASURES: tuple[Measure, ...] = (
     ("judge_score", lambda s: _judged(s, "score"), 1),
     ("judge_interpretation_score", lambda s: _interpreted(s, "score"), 1),
     ("judge_overreach", lambda s: _interpreted(s, "overreach"), -1),
+    ("judge_answer_score", lambda s: ((s.get("judge") or {}).get("answer") or {}).get("score"), 1),
 )  # fmt: skip
 
 

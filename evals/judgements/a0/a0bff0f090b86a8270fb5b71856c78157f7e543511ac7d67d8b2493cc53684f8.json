@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1507,
+  "items": 1,
+  "output_tokens": 145
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "a0bff0f090b86a8270fb5b71856c78157f7e543511ac7d67d8b2493cc53684f8",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the question with ERA5-based ranking and baseline comparison. Claims state the record context and the 1.2x ratio. Caveats on gridded reanalysis and single-day metric are present, though somewhat repetitive; it lacks gauge-based comparison and the framing of the July 2021 event's mul",
+ "relevance": "direct",
+ "rubric": 2
+}

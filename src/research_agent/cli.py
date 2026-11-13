@@ -79,6 +79,7 @@ from research_agent.evaluation import (
     select_conversations,
     summarize_records,
     trace_record,
+    with_conversation_context,
     write_record,
     write_scores,
     write_summary,
@@ -769,8 +770,9 @@ def _score_and_report(
     """Metrics of the records (reported, never failures), written to score.json and report.md."""
     settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
     scores = score_records(
-        records, cases, qrels, cfg.limits, settings, budget, _judge_lookup(cfg, env_file)
-    )
+        with_conversation_context(records), cases, qrels, cfg.limits, settings, budget,
+        _judge_lookup(cfg, env_file),
+    )  # fmt: skip
     agg = aggregate(scores)
     write_scores(run_dir, scores, agg)
     return scores, agg
@@ -1336,8 +1338,8 @@ def eval_compare(
     lookup = _judge_lookup(cfg)
     scores = {
         run: score_records(
-            rescore(recs, case_list, cfg.limits), case_list, qrels, cfg.limits, settings, budget,
-            lookup,
+            with_conversation_context(rescore(recs, case_list, cfg.limits)), case_list, qrels,
+            cfg.limits, settings, budget, lookup,
         )
         for run, recs in records.items()
     }  # fmt: skip
@@ -1359,6 +1361,14 @@ def eval_compare(
 
 
 DEFAULT_CALIBRATION = Path("evals/judge_calibration.toml")
+
+
+def _answer_summary(sections: list[dict]) -> str:
+    rated = [x["answer"] for x in sections if x.get("answer")]
+    if not rated:
+        return "."
+    mean = round(sum(a["score"] for a in rated) / len(rated), 3)
+    return f"; answer quality {mean} over {len(rated)} answer(s)."
 
 
 def _judge_client(cfg: Config, model: str, creds: Credentials):
@@ -1403,7 +1413,7 @@ def eval_judge(
     cfg = _load_or_exit(config)
     jc = cfg.eval.judge
     try:
-        all_records = read_records(run_dir)
+        all_records = with_conversation_context(read_records(run_dir))
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1432,6 +1442,8 @@ def eval_judge(
         f"{plan['cached']} cached, {plan['pending']} to judge"
         + (f"; {plan['interpretations']} interpretation(s), "
            f"{plan['interpretations_pending']} to judge" if plan["interpretations"] else "")
+        + (f"; {plan['answers']} answer(s), {plan['answers_pending']} to rate for quality"
+           if plan["answers"] else "")
         + (f"; key-point sets {plan['key_point_sets_pending']}/{plan['key_point_sets']} to judge"
            if plan["key_point_sets"] else "")
         + f". {plan['calls']} call(s), about {plan['estimated_tokens']:,} tokens at most."
@@ -1485,7 +1497,9 @@ def eval_judge(
         typer.echo("error: a cost cap needs prices in [eval.judge]", err=True)
         raise typer.Exit(code=1)
     todo = plan["pending"] + plan["interpretations_pending"]
-    if not yes and not typer.confirm(f"Judge {todo} claim(s) with {model}?"):
+    if not yes and not typer.confirm(
+        f"Judge {todo} claim(s) and {plan['answers_pending']} answer(s) with {model}?"
+    ):
         typer.echo("cancelled: nothing was judged", err=True)
         raise typer.Exit(code=1)
     try:
@@ -1511,6 +1525,7 @@ def eval_judge(
     typer.echo(
         f"Judged {st.judged} claim(s) ({st.cached} were cached) in {st.calls} call(s): "
         f"{budget.input_tokens:,} in / {budget.output_tokens:,} out tokens{cost}."
+        + (f" Answers rated: {st.answers}." if st.answers else "")
         + (f" Key-point sets: {st.key_point_sets}." if st.key_point_sets else "")
     )
     for label, count in (("reply failed validation", st.unparsed), ("refused", st.refused),
@@ -1529,7 +1544,8 @@ def eval_judge(
     typer.echo(
         f"Verdicts: {counts['supported']} supported, {counts['partial']} partial, "
         f"{counts['unsupported']} unsupported; interpretations {interp['within']} within, "
-        f"{interp['stretch']} stretch, {interp['overreach']} overreach."
+        f"{interp['stretch']} stretch, {interp['overreach']} overreach"
+        + _answer_summary(sections)
     )
     refresh_report()  # also after a budget stop or a failed call: what was judged is shown
     if stopped or st.errors:

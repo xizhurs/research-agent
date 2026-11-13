@@ -59,6 +59,8 @@ _ALLOWED_KEYS = {
     "fixed_query",
 }
 DEFAULT_NUMBER_TOLERANCE = 0.05
+KEY_POINTS_FILE = "key_points.toml"  # next to the case files: reviewed key points per case
+KEY_POINT_STATUSES = ("draft", "approved")
 _WORK_ID = re.compile(r"^W\d+$")
 
 
@@ -265,7 +267,7 @@ def load_cases(path: Path) -> list[EvalCase]:
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     if duplicates:
         raise EvalError(f"{path}: duplicate case ids: {duplicates}")
-    return cases
+    return apply_key_points(cases, load_key_points(path.parent / KEY_POINTS_FILE))
 
 
 def select_cases(
@@ -426,7 +428,9 @@ def load_conversations(path: Path) -> list[Conversation]:
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     if duplicates:
         raise EvalError(f"{path}: duplicate conversation ids: {duplicates}")
-    return conversations
+    approved = load_key_points(path.parent / KEY_POINTS_FILE)
+    return [replace(c, turns=tuple(apply_key_points(list(c.turns), approved)))
+            for c in conversations]  # fmt: skip
 
 
 def select_conversations(
@@ -439,3 +443,68 @@ def select_conversations(
             raise EvalError(f"unknown conversation id(s): {', '.join(unknown)}")
         return [c for c in conversations if c.id in only]
     return [c for c in conversations if split is None or c.split == split]
+
+
+# --- reviewed key points (evals/key_points.toml) -------------------------------------------------
+
+
+def load_key_points(path: Path) -> dict[str, tuple[tuple[KeyPoint, ...], int]]:
+    """The *approved* key points per case or turn ID (``"<conversation>#<n>"``), with their
+    ``min_key_points``. A missing file means none; ``status = "draft"`` entries are read and
+    validated but not used, so an unreviewed draft never affects a check or a report.
+
+    Format: ``["case-id"]`` with ``status`` ("draft" or "approved"), optional
+    ``min_key_points``, and ``[["case-id".point]]`` tables with ``text``, ``any_terms`` and an
+    optional ``source`` (where the fact comes from, for the reviewer)."""
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        raise EvalError(f"invalid TOML in {path}: {exc}") from exc
+    approved: dict[str, tuple[tuple[KeyPoint, ...], int]] = {}
+    for case_id, table in raw.items():
+        where = f"{path}: [{case_id}]"
+        if not isinstance(table, dict):
+            raise EvalError(f"{where} must be a table")
+        unknown = table.keys() - {"status", "min_key_points", "point"}
+        if unknown:
+            raise EvalError(f"{where} has unknown keys {sorted(unknown)}")
+        status = table.get("status")
+        if status not in KEY_POINT_STATUSES:
+            raise EvalError(f"{where} status must be one of {list(KEY_POINT_STATUSES)}")
+        points = table.get("point", [])
+        if not isinstance(points, list) or not points or not all(isinstance(x, dict)
+                                                                 for x in points):
+            raise EvalError(f"{where} needs at least one [[{case_id}.point]] table")
+        for point in points:
+            extra = point.keys() - {"text", "any_terms", "source"}
+            if extra:
+                raise EvalError(f"{where} point has unknown keys {sorted(extra)}")
+        parsed = _key_points({"key_points": [{k: v for k, v in x.items() if k != "source"}
+                                             for x in points]}, case_id)  # fmt: skip
+        minimum = _int_field(table, "min_key_points", 0, case_id) or 0
+        if minimum > len(parsed):
+            raise EvalError(f"{where} min_key_points exceeds the number of points")
+        if status == "approved":
+            approved[case_id] = (parsed, minimum)
+    return approved
+
+
+def apply_key_points(
+    cases: list[EvalCase], approved: dict[str, tuple[tuple[KeyPoint, ...], int]]
+) -> list[EvalCase]:
+    """Cases with their approved key points attached (a case may not define them twice)."""
+    out = []
+    for case in cases:
+        if case.id in approved:
+            if case.key_points:
+                raise EvalError(
+                    f"case {case.id!r}: key points are in both the case file and "
+                    f"{KEY_POINTS_FILE}; keep one"
+                )
+            points, minimum = approved[case.id]
+            case = replace(case, key_points=points, min_key_points=minimum)
+        out.append(case)
+    return out

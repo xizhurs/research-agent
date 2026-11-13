@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1592,
+  "items": 1,
+  "output_tokens": 140
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "55373ba3fb7f0c0b583db2ea25aecca1d1e36b61c568305a3c1430f30ba557fd",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Answers the question directly with the record comparison (rank 1, 6.6 °C above mean TXx) and the claims match the question. Caveats are thorough on grid-cell, TXx, and place matching, though repeated and some are not strictly needed; completeness is good but does not mention the context of the 2019 ",
+ "relevance": "direct",
+ "rubric": 2
+}

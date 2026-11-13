@@ -19,6 +19,7 @@ from research_agent.evaluation import (
     check_record,
     flags,
     load_cases,
+    load_conversations,
     load_qrels,
     score_record,
     write_scores,
@@ -26,6 +27,7 @@ from research_agent.evaluation import (
 from research_agent.evaluation.metrics import error_kind, redundant_calls, search_works
 
 BASE = Path(__file__).resolve().parents[1] / "configs" / "base.toml"
+ROOT_EVALS = BASE.parents[1] / "evals"
 SETTINGS = ScoreSettings(redundant_query_jaccard=0.8, low_support_overlap=0.3)
 RAIN = "analyze_rainfall_extremes"
 
@@ -326,3 +328,60 @@ def test_score_writes_the_report_and_flags_metrics(tmp_path):
     cases.write_text(cases.read_text(encoding="utf-8").replace("79.0", "81.5"), encoding="utf-8")
     result = CliRunner().invoke(app, args)
     assert result.exit_code == 1 and "81.5 (±0.05) not found in any tool result" in result.output
+
+
+# --- reviewed key points (evals/key_points.toml) -------------------------------------------------
+
+KP_CASES = '[[case]]\nid = "a"\nquestion = "Q"\n[[case]]\nid = "b"\nquestion = "Q"\n'
+KP_CONV = '[[conversation]]\nid = "c"\n[[conversation.turn]]\nquestion = "Q"\n'
+
+
+def kp_entry(case_id, status, extra=""):
+    return (f'["{case_id}"]\nstatus = "{status}"\n{extra}'
+            f'[["{case_id}".point]]\ntext = "A fact."\nany_terms = ["Fact"]\n'
+            f'source = "R1"\n')  # fmt: skip
+
+
+def test_only_approved_key_points_are_attached(tmp_path):
+    write(tmp_path, kp_entry("a", "approved", "min_key_points = 1\n") + kp_entry("b", "draft")
+          + kp_entry("c#1", "approved"), "key_points.toml")  # fmt: skip
+    a, b = load_cases(write(tmp_path, KP_CASES))
+    assert a.key_points == (KeyPoint("A fact.", ("fact",)),) and a.min_key_points == 1
+    assert b.key_points == ()  # a draft is never used
+    (conv,) = load_conversations(write(tmp_path, KP_CONV, "conv.toml"))
+    assert conv.turns[0].key_points == (KeyPoint("A fact.", ("fact",)),)
+
+
+@pytest.mark.parametrize(
+    "entry, message",
+    [
+        (kp_entry("a", "maybe"), "status must be one of"),
+        (kp_entry("a", "approved", "min_key_points = 3\n"), "min_key_points exceeds"),
+        ('["a"]\nstatus = "approved"\n', "needs at least one"),
+        (kp_entry("a", "approved").replace('source = "R1"', 'note = "x"'), "unknown keys"),
+    ],
+)
+def test_key_point_file_errors(tmp_path, entry, message):
+    write(tmp_path, entry, "key_points.toml")
+    with pytest.raises(EvalError, match=message):
+        load_cases(write(tmp_path, KP_CASES))
+
+
+def test_key_points_may_not_be_defined_twice(tmp_path):
+    write(tmp_path, kp_entry("a", "approved"), "key_points.toml")
+    inline = KP_CASES.replace('id = "a"\nquestion = "Q"\n',
+                              'id = "a"\nquestion = "Q"\n'
+                              'key_points = [{ text = "t", any_terms = ["t"] }]\n')  # fmt: skip
+    with pytest.raises(EvalError, match="in both the case file and key_points.toml"):
+        load_cases(write(tmp_path, inline))
+
+
+def test_shipped_key_point_drafts_are_valid_and_unused():
+    import tomllib
+
+    raw = tomllib.loads((ROOT_EVALS / "key_points.toml").read_text(encoding="utf-8"))
+    assert {v["status"] for v in raw.values()} == {"draft"}  # all await the owner's review
+    cases = load_cases(ROOT_EVALS / "cases.toml")
+    turns = [t for c in load_conversations(ROOT_EVALS / "conversations.toml") for t in c.turns]
+    assert set(raw) <= {c.id for c in cases} | {t.id for t in turns}
+    assert not any(c.key_points for c in [*cases, *turns])

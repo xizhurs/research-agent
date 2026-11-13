@@ -55,6 +55,16 @@ def _judge_totals(scores: list[dict[str, Any]]) -> dict[str, Any] | None:
                 for k in ("claims", "judged", "unjudged", "within", "stretch", "overreach")}
     i_totals["score"] = verdict_score(i_totals, INTERPRETATION_SCORES)
     totals["interpretation"] = i_totals
+    rated = [j["answer"] for j in sections if j.get("answer")]
+    totals["answer"] = {
+        "answers": len(sections),
+        "judged": len(rated),
+        "unjudged": len(sections) - len(rated),
+        "direct": sum(a["relevance"] == "direct" for a in rated),
+        "complete": sum(a["completeness"] == "complete" for a in rated),
+        "adequate": sum(a["caveats"] == "adequate" for a in rated),
+        "score": round(statistics.fmean(a["score"] for a in rated), 3) if rated else None,
+    }
     return totals  # fmt: skip
 
 
@@ -162,6 +172,10 @@ def flags(score: dict[str, Any]) -> str | None:
     judge = score.get("judge")
     if judge and (judge["unsupported"] or judge["partial"]):
         parts.append(f"judge: {judge['unsupported']} unsupported, {judge['partial']} partial")
+    rated = (judge or {}).get("answer")
+    if rated and rated["score"] < 1:
+        parts.append(f"answer quality {rated['score']} ({rated['relevance']}, "
+                     f"{rated['completeness']}, caveats {rated['caveats']})")  # fmt: skip
     interp = (judge or {}).get("interpretation") or {}
     if interp.get("overreach") or interp.get("stretch"):
         parts.append(f"judge: {interp['overreach']} overreaching, {interp['stretch']} "
@@ -194,7 +208,14 @@ def judge_line(totals: dict[str, Any]) -> str:
         + (f", score {_fmt(totals['score'])}" if totals.get("score") is not None else "")
         + (f", {totals['unjudged']} not judged yet" if totals["unjudged"] else "")
         + _interpretation_line(totals.get("interpretation"))
+        + _answer_line(totals.get("answer"))
     )
+
+
+def _answer_line(a: dict[str, Any] | None) -> str:
+    if not a or not a["judged"]:
+        return ""
+    return f"; answer quality {_fmt(a['score'])} over {a['judged']} answer(s)"
 
 
 def _interpretation_line(i: dict[str, Any] | None) -> str:
@@ -268,6 +289,38 @@ def judge_tables(scores: list[dict[str, Any]], agg: dict[str, Any]) -> list[str]
             cells = _judge_cells(j)
             lines.append(f"| {s['case_id']} | {j['claims']} | {cells} | "
                          f"{_key_point_cell(j.get('key_points'))} |")  # fmt: skip
+    return [*lines, "", *_answer_tables(scores, groups)]
+
+
+def _answer_tables(scores: list[dict[str, Any]], groups: list[tuple[str, Any]]) -> list[str]:
+    """Answer quality (reference-free): totals by group, then one row per case."""
+    if not any((s.get("judge") or {}).get("answer") for s in scores):
+        return []
+    lines = [
+        "### Answer quality", "",
+        "Reference-free: the judge sees the question, the claims and the limitations, not the "
+        "sources, so this rates how well the answer serves the question, not whether it is "
+        "true. Each dimension scores 1 / 0.5 / 0 (relevance direct / partial / off; "
+        "completeness complete / gaps / major_gaps; caveats adequate / thin / missing); the "
+        "answer score is their mean.", "",
+        "| group | answers | judged | direct | complete | adequate caveats | not judged | "
+        "answer score |", "|---|---|---|---|---|---|---|---|",
+    ]  # fmt: skip
+    for name, group in groups:
+        a = (group.get("judge") or {}).get("answer")
+        if a:
+            lines.append(f"| {name} | {a['answers']} | {a['judged']} | {a['direct']} | "
+                         f"{a['complete']} | {a['adequate']} | {a['unjudged']} | "
+                         f"{_fmt(a['score'])} |")  # fmt: skip
+    lines += ["", "| case | relevance | completeness | caveats | answer score |",
+              "|---|---|---|---|---|"]  # fmt: skip
+    for s in scores:
+        j = s.get("judge")
+        if j:
+            a = j.get("answer")
+            cells = (f"{a['relevance']} | {a['completeness']} | {a['caveats']} | "
+                     f"{_fmt(a['score'])}" if a else "- | - | - | -")  # fmt: skip
+            lines.append(f"| {s['case_id']} | {cells} |")
     return [*lines, ""]
 
 
@@ -342,6 +395,13 @@ def _case_section(s: dict[str, Any]) -> list[str]:
         )
         items += [f"  - {f['verdict']} {f['sources']}: {f['text']} -- {f['reason']}"
                   for f in judge["flagged"]]  # fmt: skip
+        rated = judge.get("answer")
+        if rated:
+            items.append(
+                f"- answer quality {_fmt(rated['score'])}: relevance {rated['relevance']}, "
+                f"completeness {rated['completeness']}, caveats {rated['caveats']} -- "
+                f"{rated['reason']}"
+            )
         interp = judge.get("interpretation") or {}
         if interp.get("claims"):
             items.append(

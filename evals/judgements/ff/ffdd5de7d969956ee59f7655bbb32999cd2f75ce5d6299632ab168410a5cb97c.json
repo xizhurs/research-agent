@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1695,
+  "items": 1,
+  "output_tokens": 137
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "ffdd5de7d969956ee59f7655bbb32999cd2f75ce5d6299632ab168410a5cb97c",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the warmth question with a comparison to the 1991–2020 baseline and percentile band, and states grid-cell, elevation, and no-trend limitations. Caveats are thorough, though some are repeated; the answer doesn't mention the warm-year ranking's implications beyond rank, which is adequ",
+ "relevance": "direct",
+ "rubric": 2
+}

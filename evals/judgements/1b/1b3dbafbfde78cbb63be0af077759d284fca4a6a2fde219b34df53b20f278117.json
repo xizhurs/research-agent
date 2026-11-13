@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1752,
+  "items": 1,
+  "output_tokens": 105
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "1b3dbafbfde78cbb63be0af077759d284fca4a6a2fde219b34df53b20f278117",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the question with annual totals for the last 10 years, a baseline comparison, and data-source caveats. It lacks seasonal/timing detail, but the limitations acknowledge that scope gap.",
+ "relevance": "direct",
+ "rubric": 2
+}

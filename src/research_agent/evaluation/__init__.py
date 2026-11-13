@@ -38,6 +38,7 @@ from research_agent.evaluation.judge import (
     judge_section,
     load_calibration,
     render_calibration,
+    with_conversation_context,
 )
 from research_agent.evaluation.langfuse_import import (
     LangfuseImportError,
@@ -160,6 +161,7 @@ __all__ = [
     "turn_details",
     "unsupported_numbers",
     "value_found",
+    "with_conversation_context",
     "write_record",
     "write_scores",
     "write_summary",
