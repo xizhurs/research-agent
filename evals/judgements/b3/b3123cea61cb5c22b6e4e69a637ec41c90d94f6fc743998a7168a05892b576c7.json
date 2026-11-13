@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1551,
+  "items": 1,
+  "output_tokens": 100
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "b3123cea61cb5c22b6e4e69a637ec41c90d94f6fc743998a7168a05892b576c7",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the 2023 vs normal rainfall question with total, baseline, ratio and rank; caveats cover reanalysis grid vs gauge, missing days, percentile band, and place matching.",
+ "relevance": "direct",
+ "rubric": 2
+}

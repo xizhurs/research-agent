@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1874,
+  "items": 2,
+  "output_tokens": 164
+ },
+ "claim": "These are ERA5 grid-cell estimates, not rain-gauge measurements. A dry run means consecutive days with under 1 mm of rain; it is not a drought index, and ERA5’s tendency to produce too many light-rain days may make dry runs appear shorter than observed.",
+ "judged_on": "2026-11-13",
+ "key": "6169e84f6fc3ab78c776be5222444febde82a6a03dc83b07569ed0754a2b5b10",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source says values are ERA5 reanalysis not gauge measurements, dry spell is not a drought index, and ERA5 light-rain bias may underestimate dry-spell length; all stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "f76f4881c44f6001eab292f01792f90da9fc862c8942907e6903247cecdc5393"
+  }
+ ],
+ "verdict": "supported"
+}

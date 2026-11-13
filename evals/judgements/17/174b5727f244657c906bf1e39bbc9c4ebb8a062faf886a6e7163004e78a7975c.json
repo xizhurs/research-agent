@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1511,
+  "items": 1,
+  "output_tokens": 121
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "174b5727f244657c906bf1e39bbc9c4ebb8a062faf886a6e7163004e78a7975c",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly lists coldest nights in Moscow since 1950 with dates and temperatures, labelled as ERA5 estimates. Caveats on grid resolution, elevation, and place matching are given, though the list is a specific dataset result and may not cover all station-based records.",
+ "relevance": "direct",
+ "rubric": 2
+}

@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1204,
+  "items": 1,
+  "output_tokens": 95
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "fd329f0f236d43b45d97e3ea9e68012dc2e79db649f322a1a489b952517a3440",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Springfield is genuinely ambiguous with many US candidates; the answer asks which one is meant and lists options, which is the right move. It gives no figures, but the clarification is appropriate.",
+ "relevance": "direct",
+ "rubric": 2
+}

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1509,
+  "items": 1,
+  "output_tokens": 79
+ },
+ "claim": "The coldest nights identified by ERA5 for Moscow since 1950 were: December 31, 1978 (-41.5 °C); January 1, 1979 (-39.0 °C); January 31, 1956 (-38.0 °C); January 10, 1950 (-35.4 °C); and February 13, 2012 (-35.2 °C). These are the lowest daily minimum temperatures of their respective years (TNn).",
+ "judged_on": "2026-11-13",
+ "key": "a7f6d01dfb7bf8e2d82de54a60657a470539bcf5ae361652a0cc454cc9e812cf",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists the same five years, dates and values in the same order as coldest TNn years for Moscow ERA5, 1950-2025, matching the claim.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "729a77584d35896ee5358f3244057902b1a4e920151ba10eb2b3565579d7e054"
+  }
+ ],
+ "verdict": "supported"
+}

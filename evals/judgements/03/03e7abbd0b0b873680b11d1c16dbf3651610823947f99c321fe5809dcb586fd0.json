@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1661,
+  "items": 2,
+  "output_tokens": 160
+ },
+ "claim": "In the ERA5 record for 1950–2025, 2023 was the wettest year (rank 1 of 76). These are grid-cell reanalysis estimates, not rain-gauge measurements.",
+ "judged_on": "2026-11-13",
+ "key": "03e7abbd0b0b873680b11d1c16dbf3651610823947f99c321fe5809dcb586fd0",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists 2023 as rank 1 of 76 wettest years and describes values as ERA5 grid-cell reanalysis, not gauge measurements.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "628f4539468a27ec32ad783a8de9737e7ab165e4921793925745aee685f87d1c"
+  }
+ ],
+ "verdict": "supported"
+}

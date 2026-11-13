@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1603,
+  "items": 2,
+  "output_tokens": 136
+ },
+ "claim": "Madrid’s 2023 annual precipitation was 437.2 mm—1.11 times the 1991–2020 mean of 395.6 mm. It was therefore wetter than the baseline average, though still within the baseline 10th–90th percentile band (284.3–502.9 mm).",
+ "judged_on": "2026-11-13",
+ "key": "5a859f38cff3a47d2c52a76bc1b4d3aea71f565430583f8e9a112b3fcd07b603",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source gives 2023 total 437.2 mm, 1.11x baseline mean 395.6 mm, and within the 284.3–502.9 band; all figures match.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "1b9d3f7a2b221cb5ebc8042dca03b70ad6ea605ecb01b46938f8671dad8936ab"
+  }
+ ],
+ "verdict": "supported"
+}

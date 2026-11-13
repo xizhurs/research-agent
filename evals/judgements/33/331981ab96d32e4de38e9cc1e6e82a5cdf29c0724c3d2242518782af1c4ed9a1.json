@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1815,
+  "items": 2,
+  "output_tokens": 238
+ },
+ "claim": "The longest dry spell in São Paulo, Brazil, in the available record since 1980 ran from 3 June to 15 July 2007: 43 days, with 0.9 mm of precipitation. Next were 9 August–18 September 1991 (41 days, 2.7 mm) and 19 July–27 August 2012 (40 days, 1.0 mm).",
+ "judged_on": "2026-11-13",
+ "key": "331981ab96d32e4de38e9cc1e6e82a5cdf29c0724c3d2242518782af1c4ed9a1",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists 2007-06-03 to 2007-07-15, 43 days, 0.9 mm; 1991-08-09 to 1991-09-18, 41 days, 2.7 mm; 2012-07-19 to 2012-08-27, 40 days, 1.0 mm; all match. 'Since 1980' matches record years 1980-2025.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "4e8be6d367f9067a0bdfcda158912d7baa6f78b93ee2e53886a29726cdb03da2"
+  }
+ ],
+ "verdict": "supported"
+}

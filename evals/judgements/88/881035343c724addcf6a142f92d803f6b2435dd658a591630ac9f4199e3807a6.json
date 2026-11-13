@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1874,
+  "items": 2,
+  "output_tokens": 164
+ },
+ "claim": "Madrid’s 2022 annual precipitation was 460.9 mm, and its longest run of days with less than 1 mm of rain was 67 days. In the 1950–2025 record, 2022 ranked 47th driest out of 76 years; 38.2% of years were wetter.",
+ "judged_on": "2026-11-13",
+ "key": "881035343c724addcf6a142f92d803f6b2435dd658a591630ac9f4199e3807a6",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source states 2022 total 460.9 mm, longest dry run 67 days, rank 47 of 76, and 38.2% of years wetter; all match.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "f76f4881c44f6001eab292f01792f90da9fc862c8942907e6903247cecdc5393"
+  }
+ ],
+ "verdict": "supported"
+}

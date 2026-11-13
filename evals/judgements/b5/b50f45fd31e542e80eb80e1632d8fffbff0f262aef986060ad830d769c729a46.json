@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1163,
+  "items": 4,
+  "output_tokens": 311
+ },
+ "judged_on": "2026-11-13",
+ "key": "b50f45fd31e542e80eb80e1632d8fffbff0f262aef986060ad830d769c729a46",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim states ERA5 daily max 41.4 °C, hottest of 27,759 days in 1950–2025 record, matching the key point.",
+   "text": "ERA5 daily maximum on 25 July 2019 at the Paris grid cell: 41.4 degrees C, the hottest of 27,759 days in 1950-2025."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim states exceedance of 1991–2020 mean annual TXx 34.8 °C by 6.6 °C, matching.",
+   "text": "That is 6.6 degrees C above the 1991-2020 mean annual maximum (TXx 34.8 degrees C)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "The 15.6 °C above the calendar-day typical maximum (25.8 °C) is not mentioned in the claims.",
+   "text": "It is 15.6 degrees C above the typical 1991-2020 daily maximum for that calendar day (25.8 degrees C)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claims say it is a grid-cell estimate, not station data, and mention finer-scale urban heat, but do not give the 42.6 °C Montsouris figure.",
+   "text": "Station measurements were higher (Paris-Montsouris recorded 42.6 degrees C, the city's record); a 25 km reanalysis cell smooths urban extremes."
+  }
+ ],
+ "rubric": 3
+}

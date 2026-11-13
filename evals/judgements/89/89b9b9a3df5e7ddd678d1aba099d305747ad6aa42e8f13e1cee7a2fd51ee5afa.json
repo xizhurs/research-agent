@@ -1,0 +1,38 @@
+{
+ "call": {
+  "input_tokens": 1084,
+  "items": 4,
+  "output_tokens": 313
+ },
+ "judged_on": "2026-11-13",
+ "key": "89b9b9a3df5e7ddd678d1aba099d305747ad6aa42e8f13e1cee7a2fd51ee5afa",
+ "kind": "key_points",
+ "model": "claude-haiku-5-5",
+ "points": [
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim lists December 31, 1978 at -41.5 °C as the coldest night, matching the key point exactly.",
+   "text": "The coldest ERA5 daily minimum since 1950 at the Moscow grid cell was -41.5 degrees C on 31 December 1978."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "partial",
+   "reason": "Claim lists January 1, 1979 at -39.0 °C as second coldest, matching the value and date; the shared cold spell is not explicitly stated.",
+   "text": "The second coldest, -39.0 degrees C on 1 January 1979, belongs to the same cold spell crossing New Year (counted in two calendar years)."
+  },
+  {
+   "consistency": "consistent",
+   "coverage": "covered",
+   "reason": "Claim gives January 31, 1956 (-38.0), January 10, 1950 (-35.4) and February 13, 2012 (-35.2), all matching the key point values and dates.",
+   "text": "Other very cold nights: 31 January 1956 (-38.0), 10 January 1950 (-35.4) and 13 February 2012 (-35.2 degrees C)."
+  },
+  {
+   "consistency": "not_addressed",
+   "coverage": "missing",
+   "reason": "Claims do not mention the 1991-2020 mean annual minimum temperature of -27.5 degrees C.",
+   "text": "The 1991-2020 mean annual minimum (TNn) is -27.5 degrees C."
+  }
+ ],
+ "rubric": 3
+}

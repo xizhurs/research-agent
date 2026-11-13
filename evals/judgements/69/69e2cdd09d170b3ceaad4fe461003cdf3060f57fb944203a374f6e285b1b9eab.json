@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1713,
+  "items": 1,
+  "output_tokens": 129
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "69e2cdd09d170b3ceaad4fe461003cdf3060f57fb944203a374f6e285b1b9eab",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Answers how dry 2022 was in Madrid using annual precipitation and dry-spell rankings against the record, with a clear distinction between the two measures. Caveats on ERA5 and dry-spell definitions are provided, though it doesn't clearly address drought severity beyond these metrics.",
+ "relevance": "direct",
+ "rubric": 2
+}

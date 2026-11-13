@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1255,
+  "items": 1,
+  "output_tokens": 143
+ },
+ "caveats": "adequate",
+ "completeness": "gaps",
+ "judged_on": "2026-11-13",
+ "key": "66705aa15fa3c04c5b42a8d735aa087843a88ee93a6a33d1aeda6ac4a18e580b",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Gives a ranked list of large one-day events but includes 1993, which is outside the 'since 1980' window only in the sense it is within it; it is ERA5-only, offering a narrow answer without station data, and the list is labelled as annual maxima, which fits the question reasonably. Caveats are repeat",
+ "relevance": "partial",
+ "rubric": 2
+}

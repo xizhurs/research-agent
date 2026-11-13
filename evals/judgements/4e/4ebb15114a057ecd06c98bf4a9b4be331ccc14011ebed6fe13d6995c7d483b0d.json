@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2761,
+  "items": 3,
+  "output_tokens": 301
+ },
+ "claim": "The longest unbroken dry spell in the Cape Town ERA5 grid-cell record since 2000 was 69 days, from 14 November 2005 to 21 January 2006, with 2.2 mm of precipitation. The dataset defines a dry spell as consecutive days with less than 1 mm of rain.",
+ "judged_on": "2026-11-13",
+ "key": "4ebb15114a057ecd06c98bf4a9b4be331ccc14011ebed6fe13d6995c7d483b0d",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S1 lists the 69-day spell 2005-11-14 to 2006-01-21 with 2.2 mm as the longest unbroken spell; the <1 mm definition is stated.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "9e41678cc3afb04fa8f9701024e1dce7438a78e72600f2ff8784416f638eb2d5"
+  }
+ ],
+ "verdict": "supported"
+}

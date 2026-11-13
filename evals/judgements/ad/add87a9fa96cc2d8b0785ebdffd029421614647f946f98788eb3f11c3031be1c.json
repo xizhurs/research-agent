@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1815,
+  "items": 2,
+  "output_tokens": 238
+ },
+ "claim": "The next-longest listed spells were 21 July–27 August 2004 (38 days, 0.7 mm) and 26 June–2 August 2008 (38 days, 1.5 mm).",
+ "judged_on": "2026-11-13",
+ "key": "add87a9fa96cc2d8b0785ebdffd029421614647f946f98788eb3f11c3031be1c",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists 2004-07-21 to 2004-08-27, 38 days, 0.7 mm and 2008-06-26 to 2008-08-02, 38 days, 1.5 mm; dates and values match.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "4e8be6d367f9067a0bdfcda158912d7baa6f78b93ee2e53886a29726cdb03da2"
+  }
+ ],
+ "verdict": "supported"
+}

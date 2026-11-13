@@ -1,0 +1,16 @@
+{
+ "call": {
+  "input_tokens": 1594,
+  "items": 1,
+  "output_tokens": 111
+ },
+ "caveats": "adequate",
+ "completeness": "complete",
+ "judged_on": "2026-11-13",
+ "key": "8bc758599ddb198b66b5b9341df81d996ceda258178c540d3d9157bdd6ebfba4",
+ "kind": "answer_quality",
+ "model": "claude-haiku-5-5",
+ "reason": "Directly answers the yes/no question with a specific ranking and comparison years. Limitations about reanalysis grid, elevation, and place matching are well covered, though the claim is a single evidence statement without a stated period caveat beyond the range.",
+ "relevance": "direct",
+ "rubric": 2
+}

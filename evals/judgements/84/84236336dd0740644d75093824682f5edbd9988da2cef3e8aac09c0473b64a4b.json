@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2761,
+  "items": 3,
+  "output_tokens": 301
+ },
+ "claim": "A later attribution study reports that anthropogenic climate change increased the likelihood of dry circulation types during the drought; it found rainfall decreased across most wet circulation types in model comparisons, while rainfall changes associated with dry types had no clear direction.",
+ "judged_on": "2026-11-13",
+ "key": "84236336dd0740644d75093824682f5edbd9988da2cef3e8aac09c0473b64a4b",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S3 says anthropogenic forcing increases dry circulation likelihood and rainfall decreased in wet nodes, with no clear direction for dry nodes; claim matches, though 'model comparisons' is a paraphrase.",
+ "rubric": 2,
+ "sources": [
+  {
+   "id": "W4384207322",
+   "sha256": "db63acad75538c8abae8497a2e88edf1f9d5a95b105b1ea37e1193dce44fceb8"
+  }
+ ],
+ "verdict": "supported"
+}
