@@ -168,6 +168,7 @@ uv run research-agent eval replay evals/runs/<run-id>    # free: the recorded mo
 uv run research-agent eval run --live --mode fixed       # baseline: one search with the question, then one answer
 uv run research-agent eval compare <run-a> <run-b>       # free: case-by-case differences between two runs
 uv run research-agent eval run --live --suite conversations  # multi-turn conversations
+uv run --extra judge research-agent eval judge evals/runs/<run-id> --live  # LLM judge (cached)
 ```
 
 Each case is marked `split = "test"` (held out: run only to measure, with `--split test`) or dev, and has a `category`. A paid run stops before any model call that would exceed the run budget (`[eval]` in `configs/base.toml`: model calls, tokens, and a cost cap once prices are filled in) and writes one JSON record per case to `evals/runs/<run-id>/`, so the results can be scored again without running the agent. Tool responses are kept in `evals/tool_cache/` (no expiry; `--frozen-tools` also disables the network).
@@ -194,6 +195,8 @@ Cases can also state `expect_numbers` (verified values that must appear in a too
 - the same prompt and the same answer checks as the agent, so only the choice of searches differs.
 
 `eval run --suite conversations` asks the conversations in `evals/conversations.toml` turn by turn in one session each, as `chat` does. Each turn is checked like a case and also on the model's relation label (continue, update, compare, new_topic), whether it recalled earlier evidence instead of repeating an analysis, and the places, metrics and pending clarification in the task state the code kept. Score, replay and compare work on these runs too.
+
+`eval judge` (optional, needs `uv sync --extra judge`, `CLAUDE_API_KEY` and `CLAUDE_MODEL` or the `[eval.judge]` model) asks an Anthropic model (Claude Haiku 5.5 by default) to rate each evidence claim against the text it cites: supported, partial or unsupported, with a reason. Verdicts are cached in `evals/judgements/`, so an unchanged claim is never judged twice, and they are reported by `eval score` (never a case failure). `--sample 10` writes a calibration sheet for checking the judge yourself.
 
 `eval compare A B` pairs the cases of two runs and counts, for each measure, how often B did better, the same or worse than A. Measures: pass rate, unsupported numbers, low-support claims, key points, precision and recall, tokens, model calls, time and cost.
 

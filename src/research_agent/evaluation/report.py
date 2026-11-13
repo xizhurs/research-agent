@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import statistics
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +26,29 @@ def score_records(
     limits: Limits,
     settings: ScoreSettings,
     budget: RunBudget | None = None,
+    judge_lookup: Callable[[dict[str, Any], EvalCase | None], dict[str, Any] | None] | None = None,
 ) -> list[dict[str, Any]]:
+    """Metrics per record; ``judge_lookup`` (cached verdicts, no call) adds a judge section."""
     by_id = {c.id: c for c in cases}
-    return [
-        score_record(r, by_id.get(r["case_id"]), qrels.get(r["case_id"]), limits, settings, budget)
-        for r in records
-    ]
+    out = []
+    for r in records:
+        case = by_id.get(r["case_id"])
+        judge = judge_lookup(r, case) if judge_lookup else None
+        out.append(score_record(r, case, qrels.get(r["case_id"]), limits, settings, budget, judge))
+    return out
+
+
+def _judge_totals(scores: list[dict[str, Any]]) -> dict[str, Any] | None:
+    sections = [s["judge"] for s in scores if s.get("judge")]
+    if not sections:
+        return None
+    totals = {k: sum(j[k] for j in sections)
+              for k in ("claims", "judged", "unjudged", "supported", "partial", "unsupported")}
+    totals["supported_share"] = (
+        round(totals["supported"] / totals["judged"], 3) if totals["judged"] else None
+    )
+    totals["model"] = sections[0]["model"]
+    return totals  # fmt: skip
 
 
 def _mean(values: list[float]) -> float | None:
@@ -86,6 +104,7 @@ def _group(scores: list[dict[str, Any]]) -> dict[str, Any]:
             outcome: sum(1 for s in scores if s.get("replay", {}).get("outcome") == outcome)
             for outcome in REPLAY_OUTCOMES
         },
+        "judge": _judge_totals(scores),
     }
 
 
@@ -133,6 +152,9 @@ def flags(score: dict[str, Any]) -> str | None:
             parts.append(f"{count} {label}")
     if score["trajectory"]["stop"] == "forced":
         parts.append(f"forced stop ({score['trajectory']['forced_by']})")
+    judge = score.get("judge")
+    if judge and (judge["unsupported"] or judge["partial"]):
+        parts.append(f"judge: {judge['unsupported']} unsupported, {judge['partial']} partial")
     return ", ".join(parts) or None
 
 
@@ -150,6 +172,15 @@ def metrics_line(agg: dict[str, Any]) -> str:
         f"{a['low_support_claims']} low-support claim(s) | "
         f"key points {_fmt(a['median_key_point_coverage'])} | "
         f"{a['labelled_cases']} labelled case(s), {a['unjudged_works']} unjudged work(s)"
+        + (f" | {judge_line(a['judge'])}" if a["judge"] else "")
+    )
+
+
+def judge_line(totals: dict[str, Any]) -> str:
+    return (
+        f"judge ({totals['model']}): {totals['supported']} supported, {totals['partial']} "
+        f"partial, {totals['unsupported']} unsupported of {totals['judged']} judged claim(s)"
+        + (f", {totals['unjudged']} not judged yet" if totals["unjudged"] else "")
     )
 
 
@@ -215,6 +246,17 @@ def _case_section(s: dict[str, Any]) -> list[str]:
         kp = s["key_points"]
         if kp["total"]:
             items.append(f"- key points covered: {len(kp['covered'])} of {kp['total']}")
+    judge = s.get("judge")
+    if judge:
+        items.append(
+            f"- judge ({judge['model']}): {judge['supported']} supported, {judge['partial']} "
+            f"partial, {judge['unsupported']} unsupported, {judge['unjudged']} not judged"
+        )
+        items += [f"  - {f['verdict']} {f['sources']}: {f['text']} -- {f['reason']}"
+                  for f in judge["flagged"]]  # fmt: skip
+        for point in judge.get("key_points") or []:
+            items.append(f"  - key point ({point['coverage']}, {point['consistency']}): "
+                         f"{point['text']} -- {point['reason']}")  # fmt: skip
     lines += ["", *items] if items else []
     unjudged = s.get("retrieval", {}).get("unjudged", [])
     if unjudged:
@@ -231,6 +273,8 @@ def render_report(scores: list[dict[str, Any]], agg: dict[str, Any]) -> str:
     rows += [(f"category {k}", v) for k, v in agg["by_category"].items()]
     rows += [(f"split {k}", v) for k, v in agg["by_split"].items()]
     lines += _table(rows)
+    if agg["all"]["judge"]:
+        lines += ["", judge_line(agg["all"]["judge"]).capitalize()]
     conv = agg.get("conversations") or {}
     if conv.get("total"):
         lines += ["", f"Conversations: {conv['passed']}/{conv['total']} with every turn passed"]

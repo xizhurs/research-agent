@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1566,
+  "items": 2,
+  "output_tokens": 177
+ },
+ "claim": "ERA5 estimates 79.0 mm of precipitation in Zhengzhou on 20 July 2021. That ranks 31st among 27,759 days in the 1950–2025 record, and would rank 22nd among the 76 annual maximum-rainfall days (72.4th percentile).",
+ "judged_on": "2026-11-13",
+ "key": "ef9b5bbbdf42d318c0cff0bb0ea2a771b4bcdac4ffcba41c1f0c6304e3dfe7ce",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source states 79.0 mm on 2021-07-20, rank 31 of 27,759 days, rank 22 of 76 annual maxima, percentile 72.4.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "d6948813657a74927ac124e9394d004443f058c8864e049f6ac532e3dc3a1137"
+  }
+ ],
+ "verdict": "supported"
+}

@@ -232,7 +232,7 @@ def _retrieval(calls: list[dict], answer: dict, qrels: Qrels | None) -> dict[str
     }
 
 
-def _source_texts(answer: dict) -> dict[str, str]:
+def source_texts(answer: dict) -> dict[str, str]:
     texts = {w["id"]: f"{w['title'] or ''}\n{w['abstract'] or ''}" for w in answer["works"]}
     texts.update({d["id"]: d["text"] for d in answer["data"]})
     return texts
@@ -316,8 +316,10 @@ def score_record(
     limits: Limits,
     settings: ScoreSettings,
     budget: RunBudget | None = None,
+    judge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """All metrics of one record. ``case`` (for key points) may be None for a case no longer in
+    """All metrics of one record. ``judge`` is its cached judge section (``judge.judge_section``),
+    if any. ``case`` (for key points) may be None for a case no longer in
     the case file; ``qrels`` None means the case has no relevance labels."""
     out: dict[str, Any] = {
         "case_id": record["case_id"],
@@ -331,13 +333,15 @@ def score_record(
     for section in ("replay", "conversation"):
         if section in record:
             out[section] = record[section]
+    if judge is not None:
+        out["judge"] = judge
     answer = record["answer"]
     if record["status"] != "ok" or answer is None:
         return out
     claims = answer["claims"]
     cited = {s for c in claims for s in c["sources"]}
     calls = record["tool_calls"]
-    sources = _source_texts(answer)
+    sources = source_texts(answer)
     out.update(
         tools=_tools(calls, cited, settings),
         trajectory=_trajectory(record, calls, cited, limits),

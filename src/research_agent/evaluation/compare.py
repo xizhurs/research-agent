@@ -15,6 +15,14 @@ from typing import Any
 Measure = tuple[str, Callable[[dict[str, Any]], float | None], int]
 
 
+def _judged(s: dict[str, Any], key: str) -> float | None:
+    """A judge figure, only when every claim of the record has a cached verdict."""
+    judge = s.get("judge")
+    if not judge or not judge["judged"] or judge["unjudged"]:
+        return None
+    return float(judge[key])
+
+
 def _tokens(s: dict[str, Any]) -> float:
     return s["efficiency"]["input_tokens"] + s["efficiency"]["output_tokens"]
 
@@ -33,6 +41,8 @@ MEASURES: tuple[Measure, ...] = (
     ("model_calls", lambda s: float(s["efficiency"]["model_calls"]), -1),
     ("wall_seconds", lambda s: s["efficiency"]["wall_seconds"], -1),
     ("cost_usd", lambda s: s["efficiency"]["cost_usd"], -1),
+    ("judge_unsupported", lambda s: _judged(s, "unsupported"), -1),
+    ("judge_supported_share", lambda s: _judged(s, "supported_share"), 1),
 )  # fmt: skip
 
 

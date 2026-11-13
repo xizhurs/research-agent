@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 2205,
+  "items": 3,
+  "output_tokens": 242
+ },
+ "claim": "Other approaches include multilayer perceptrons (MLPs) and CNN variants applied across spectral and temporal dimensions. [W3122949800]",
+ "judged_on": "2026-11-13",
+ "key": "7a8ff5d26867bd4ac4743c3509f796a3e176a62faacc0e23638d7cf186c3b383",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "S2 states MLP and two CNN variants implemented in spectral and temporal dimensions for Sentinel-2 time series land use mapping.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "W3122949800",
+   "sha256": "0aac4312bd5a566cc6a3e55d8930c3a94a68720e881e24cf3b216a6fec7465af"
+  }
+ ],
+ "verdict": "supported"
+}

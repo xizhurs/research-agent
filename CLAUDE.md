@@ -20,7 +20,7 @@ Layout:
 - `src/research_agent/ui/`: optional Gradio interface, installed with `uv sync --extra ui` (see UI facts). `handlers.py` (plain functions, no Gradio import), `plots.py` (plotly figure, imported lazily), `temperature_plots.py` (temperature figures: lines and markers, not bars), `app.py` (layout only, the only module that imports Gradio).
 - `src/research_agent/tracing.py`: optional OpenTelemetry tracing to Langfuse or any OTLP backend (see Tracing).
 - `src/research_agent/conversation/`: follow-up questions (see Conversation facts). `models.py` (`Session`, `TurnRecord`, `TaskState`, `EvidenceItem`), `state.py` (pure `apply_turn`), `context.py` (pure `build_context`), `store.py` (`SessionStore` protocol, `InMemorySessionStore`), `service.py` (`ConversationService`). The agent side is `agent/events.py` (`ToolEvent`, `TurnContext`).
-- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`). `evals/conversations.toml`: multi-turn conversations (draft). `evals/qrels.toml`: relevance labels (owner's, empty so far).
+- `src/research_agent/evaluation/` and `evals/cases.toml`: evaluation framework and the case set (see Evaluation). `cases.py` (case file, `split`, `category`, `select_cases`), `checks.py` (`check_result` / `check_record`: one set of checks for live results and stored records), `recording.py` (`RecordingLLMClient`, `RunBudget`, `request_hash`), `runner.py` (`run_cases`, run records, `rescore`, `record_failures`, `summarize_records`; the old `run_case`/`summarize` are kept), `numbers.py` (number extraction and matching), `metrics.py` (`score_record`: Phase 2 metrics of one record), `report.py` (`score_records`, `aggregate`, `score.json`, `report.md`), `replay.py` (`ReplayLLMClient`, `ReplayDiverged`, `compare_answers`, `replay_section`), `fixed.py` (`FixedSearchLLMClient`, `fixed_query`), `compare.py` (`compare_scores`, `render_comparison`), `conversation.py` (`ConversationDriver`, `turn_details`), `judge.py` (`Judge`, `JudgeCache`, `judge_plan`, `judge_section`, calibration). `evals/conversations.toml`: multi-turn conversations (draft); `evals/judgements/`: the judge cache (committed). The judge's model adapter is `llm/anthropic_client.py` (`AnthropicJsonClient`, `JsonReply`). `evals/qrels.toml`: relevance labels (owner's, empty so far).
 - `configs/base.toml` (adds `[rainfall]` and `limits.max_rainfall_calls`), `tests/` (with `tests/fixtures/openalex_search.json` and `openmeteo_*.json`, trimmed recorded responses).
 
 `memory/`, `projects/`, `scripts/` and `secrets/` are empty. Never read, print or commit anything in `secrets/`.
@@ -188,6 +188,42 @@ Multi-turn conversations (Phase 4b, added 2026-11-13; the conversations are draf
 - Regression test in `test_conversation.py` reproduces the live sequence. It fails on the old code (checked).
 - `eval replay` of the live run then gave 9 same, 9/9 passed, 4/4 conversations, with no new paid call. The state after the last turn feeds no later turn, so no request changed.
 
+LLM judge (Phase 5, added 2026-11-13; the owner chose the judge: Anthropic's Claude Haiku 5.5, `claude-haiku-5-5`, key `CLAUDE_API_KEY`, model also given as `CLAUDE_MODEL`):
+- `eval judge RUN_DIR`:
+  - Without `--live` it is free: it prints the claims, how many are cached and pending, the calls, and a token and cost ceiling.
+  - `--live [--yes] [--only ID] [--max-calls] [--max-tokens] [--max-cost]` judges the uncached claims within the `[eval.judge]` caps.
+  - `--sample N` writes `calibration.md`.
+  - `--calibration evals/judge_calibration.toml` reports agreement.
+  - It exits 1 if the budget stopped it or a call failed.
+- Verdicts are reported only, never a case failure. `eval score`, `run`, `replay` and `compare` read the cache offline (`_judge_lookup`) and never call the model. `report.md` shows per-case counts plus the partial and unsupported claims with reasons, and a totals line. Compare gains `judge_unsupported` (lower is better) and `judge_supported_share` (higher is better), counted only for records whose claims are all judged.
+- Rubric (`judge.py`, `RUBRIC_VERSION` 1):
+  - Each evidence claim is rated supported, partial or unsupported, only against the texts it cites (R analysis text, or W title and abstract), with a short reason.
+  - Up to 10 claims per call (`MAX_CLAIMS_PER_CALL`), with each cited text sent once (S1, S2...).
+  - Claims and sources are HTML-escaped inside `<source>`/`<claim>` elements, and the instructions say they are data.
+  - Key points (covered/partial/missing and consistent/contradicted/not_addressed) are judged only for cases with `key_points` (none yet).
+- Replies:
+  - `output_config.format` asks for a JSON schema; `_parse` checks again that each number appears exactly once, with valid choices and a reason, cut to 300 characters.
+  - An invalid, refused (`stop_reason` "refusal"; Haiku has no server-side fallback) or truncated (`max_tokens`) reply is counted and not cached, so it is retried next time.
+- Cache: `evals/judgements/<key[:2]>/<key>.json`, committed. The key is a sha256 of rubric version, model, claim text and the sha256s of the cited texts. It uses texts, not IDs, because the same analysis can be R1 in one run and R7 in another, and a replay of a run hits the same entries. An entry holds the verdict, reason, claim, source IDs and text hashes (not the abstracts), the call's tokens and the date. One judge sample per claim: the verdict stays fixed until the text changes.
+- Adapter: `llm/anthropic_client.py` (`AnthropicJsonClient`), separate from the agent's `LLMClient`.
+  - It uses the official `anthropic` SDK, 2.8.0 at the time of writing, in the optional extra `uv sync --extra judge` (CI does not install it, and the SDK is imported only when a client is built from credentials).
+  - One `messages.create` with `system`, one user message, and `output_config={"effort", "format": {"type": "json_schema", "schema"}}`. No `temperature` and no prefill: Haiku 5.5 rejects both, and SDK 2.8 has no sampling parameters.
+  - Adaptive thinking stays on (the model's default) and counts toward `max_output_tokens` (4000). Text is read by block type, because a reply can start with `thinking` blocks.
+  - SDK errors map to `LLMAuthError` (no server text), `LLMRateLimitError`, `LLMConnectionError` and `LLMApiError`.
+  - The SDK surface (`output_config`, exceptions, `Usage`) was checked in the installed package, and a live call worked.
+- Config `[eval.judge]`:
+  - `model` ("claude-haiku-5-5"; `CLAUDE_MODEL` from the environment or `.env` overrides it), `effort` ("low"), `timeout_seconds`, `max_retries`, `max_output_tokens`, `max_calls` (100), `max_tokens` (200k), `max_cost_usd`, and `cache_dir`.
+  - Prices 0.10 / 0.50 USD per million tokens are Claude Haiku 5.5's first-party rates for prompts up to 100K tokens, from Anthropic's model table cached 2026-11-03. They are not re-verified; update them if the model changes.
+  - `CLAUDE_API_KEY` is loaded, validated and redacted like the other keys, and `check-credentials` shows it.
+- First live use (2026-11-13), on the two live runs, 11 records:
+  - 22 evidence claims in 10 calls, 19,290 input and 2,773 output tokens, about $0.0033. No reply failed validation.
+  - Verdicts: 19 supported, 2 partial, 1 unsupported.
+  - The unsupported one is a real agent error the lexical checks could not catch. "Compare the two" (conv-amsterdam-rotterdam#3) said the largest annual difference between the cities was 2021 (26.5 mm). From the cited R2/R3 texts it was 2017 (819.2 vs 777.5 mm, 41.7 mm). Every number in the claim was present, so the Phase 2 number check passed it. This was checked by recomputing from the stored texts.
+  - The two partials are judgement calls ("notably wet"; "other reported approaches" broader than the cited abstracts).
+  - Reasons sometimes exceed the requested 25 words; they are cut to 300 characters.
+  - Re-judging the replay folder of the same run used no calls (17 cached).
+- Not done yet: the owner's calibration (about 10 claims via `--sample 10`). Known limit: one sample per claim, and the judge is a different model family from the agent (deliberate), so its verdicts are not ground truth.
+
 Evaluation phases (the approved plan; token figures use the measured ~6.5k tokens per single-turn case and the 20k worst case per case under the current limits; dollar amounts need prices in `[eval]`):
 
 | Phase | Status | Builds | Paid use |
@@ -196,7 +232,7 @@ Evaluation phases (the approved plan; token figures use the measured ~6.5k token
 | 2 Deterministic metrics | built 2026-11-13 (`expect_numbers` on 5 cases; key points and qrels still empty, for the owner) | Scorers on stored records: tool use (argument validity, error mix, redundant calls, uncited tool results, `max_tool_calls`); trajectory (turns, voluntary vs forced stop, new works per follow-up search); number faithfulness (every number in an evidence claim citing an R ID must appear in that record's text, within its rounding; `expect_numbers` verified values); retrieval (`evals/qrels.toml`: relevant / not-relevant W IDs labelled by the owner, precision, recall, unjudged count); `key_points` coverage (verified facts with `any_terms`, curated once, never generated per run); lexical citation-support proxy; efficiency (latency, tokens, cost, tokens per cited item); `report.md`. Owner time: about 1-2 h of labelling and approving key points | none |
 | 3 Replay | built 2026-11-13; the 2-case live run replayed as same | `eval replay RUN`: `ReplayLLMClient` returns the recorded replies and tools answer from the frozen cache, so code changes after the model's decisions (parsing, citation validation, limitations, formatting) are tested free; a request whose hash differs from the recorded one stops the case as "diverged" and is never sent | none |
 | 4 Multi-turn and fixed vs agentic | 4a (fixed vs agentic, `eval compare`) built 2026-11-13, not run live; 4b (conversations) built 2026-11-13; first live run 2026-11-13 (9 turns, 8/9, then 9/9 after a state fix) | `evals/conversations.toml` (about 4 conversations: Amsterdam, Rotterdam, compare; ambiguous Springfield, clarification; rain then temperature at one place; new topic) with per-turn expectations (tool, relation label, recall instead of a repeated analysis, place/period/metric kept); `--mode fixed` (one search with the case's `fixed_query`, then one model call with tools off, same prompt and answer parsing; literature cases); `eval compare A B` (paired per-case differences in quality, tokens, latency, cost) | conversations ~85k tokens; fixed mode ~50k (12 cases x ~4k) |
-| 5 LLM judge (optional) | planned | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
+| 5 LLM judge (optional) | built 2026-11-13 with Claude Haiku 5.5 (owner's choice); the two live runs judged | `eval judge RUN --live`: a cheaper OpenAI model named in `[eval.judge]` (owner's choice; no name assumed) rates per-claim support against the cited text and completeness/correctness against `key_points`; own call/token caps; cached in `evals/judgements/` by a hash of rubric version, judge model, question, claims, cited texts and key points, so an unchanged answer is never judged twice; the owner checks about 10 judgements once for calibration | ~100k judge tokens once, then only changed answers |
 | 6 Langfuse import | planned | `eval import-langfuse [--since] [--tag eval] [--limit]`: past Langfuse traces converted into run records for offline scoring (no agent run, no LLM call; needs the network and the Langfuse keys). The API endpoints and response shapes are to be checked against Langfuse's docs before building, not assumed | none |
 
 What offline scoring (phases 1-3) can and cannot judge: it can judge tool choice, arguments and errors as recorded, trajectories, retrieval against labels, key-point coverage, citation and number faithfulness, and the recorded tokens, latency and cost, plus (replay) whether changed code still gives the same answer from the same model replies. It cannot judge what the model would do with a changed prompt, tool description, model or budget, run-to-run variance, current latency or fresh OpenAlex results: those need `eval run --live`. Planned directories: `evals/baselines/<name>/` (promoted, committed records), `evals/judgements/` (committed judge cache), `evals/qrels.toml`, `evals/conversations.toml`.
@@ -364,6 +400,7 @@ Ask the user before the milestone that needs each one. Do not assume.
 - `load_credentials` never mutates `os.environ`. Keys are held in `Secret`, whose `repr`/`str`/format are redacted; call `.reveal()` only at the point of use. Errors name the variable, never the value.
 - Never read, print or commit `.env`. To check configuration use `uv run research-agent check-credentials` (offline: presence and format only; it cannot tell if a provider accepts the key).
 - `OPENAI_API_KEY` is used by `OpenAIClient.from_credentials`, which raises `CredentialError` if it is missing.
+- `CLAUDE_API_KEY` (optional) is used only by the evaluation judge (`AnthropicJsonClient.from_credentials`); `CLAUDE_MODEL` (not a secret) names the judge model.
 
 ## Architecture
 
@@ -461,6 +498,7 @@ uv run research-agent eval replay evals/runs/<run-id>   # free: recorded replies
 uv run research-agent eval run --mode fixed            # plan for the fixed-search baseline (literature)
 uv run research-agent eval compare <run-a> <run-b>     # free: paired per-case differences
 uv run research-agent eval run --suite conversations   # plan for the multi-turn conversations
+uv run --extra judge research-agent eval judge <run>   # plan; --live judges claims (Claude Haiku 5.5)
 uv run pytest -m live                                   # opt-in: real OpenAlex search + OpenAI tool-calling round trip
 ```
 

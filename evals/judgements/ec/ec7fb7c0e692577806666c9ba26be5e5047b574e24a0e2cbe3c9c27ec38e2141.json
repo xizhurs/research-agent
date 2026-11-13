@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1566,
+  "items": 2,
+  "output_tokens": 177
+ },
+ "claim": "The event was 1.2 times the 1991–2020 average annual maximum daily rainfall (66.8 mm), so it was above that baseline but not among the most extreme daily totals in the record. The record’s largest annual maximum was 213.9 mm on 22 June 1955.",
+ "judged_on": "2026-11-13",
+ "key": "ec7fb7c0e692577806666c9ba26be5e5047b574e24a0e2cbe3c9c27ec38e2141",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source gives 1.2x baseline mean of 66.8 mm and largest annual maximum 213.9 mm on 1955-06-22; the 'not among most extreme' framing follows from the rank of 22 of 76.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "d6948813657a74927ac124e9394d004443f058c8864e049f6ac532e3dc3a1137"
+  }
+ ],
+ "verdict": "supported"
+}

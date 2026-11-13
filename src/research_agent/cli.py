@@ -21,6 +21,8 @@ from research_agent.agent.tools import format_enso, format_rainfall, format_temp
 from research_agent.config import Config, ConfigError, load_config
 from research_agent.conversation import ConversationService, InMemorySessionStore
 from research_agent.credentials import (
+    CLAUDE_MODEL_VAR,
+    CLAUDE_VAR,
     DEFAULT_ENV_FILE,
     ENV_FILE_ENV_VAR,
     OPENAI_VAR,
@@ -34,23 +36,32 @@ from research_agent.enso import EnsoAnalysis, EnsoClient, EnsoError
 from research_agent.evaluation import (
     Conversation,
     ConversationDriver,
+    EvalBudgetExceeded,
     EvalCase,
     EvalError,
     FixedSearchLLMClient,
+    Judge,
+    JudgeCache,
     Qrels,
     RecordingLLMClient,
     ReplayLLMClient,
     RunBudget,
     ScoreSettings,
     aggregate,
+    agreement,
+    calibration_sample,
     compare_scores,
     fixed_query,
     flags,
+    judge_plan,
+    judge_section,
+    load_calibration,
     load_cases,
     load_conversations,
     load_qrels,
     metrics_line,
     read_records,
+    render_calibration,
     render_comparison,
     replay_date,
     replay_section,
@@ -66,6 +77,7 @@ from research_agent.evaluation import (
 )
 from research_agent.evaluation.runner import fingerprint, git_commit
 from research_agent.llm import LLMAuthError, LLMClient, LLMError, OpenAIClient
+from research_agent.llm.anthropic_client import AnthropicJsonClient
 from research_agent.logging_setup import REDACTOR, configure_logging
 from research_agent.rainfall import RainfallClient, RainfallError
 from research_agent.retrieval import AuthError, OpenAlexClient, RetrievalError
@@ -424,6 +436,10 @@ def check_credentials(
         + ("set" if creds.openalex_api_key else "not set (optional; small anonymous budget)")
     )
     typer.echo(f"{OPENAI_VAR}: " + ("set" if creds.openai_api_key else "not set (needed for ask)"))
+    typer.echo(
+        f"{CLAUDE_VAR}: "
+        + ("set" if creds.claude_api_key else "not set (optional; only for eval judge --live)")
+    )
     if require_openai and creds.openai_api_key is None:
         typer.echo(f"error: {OPENAI_VAR} is required but not set", err=True)
         raise typer.Exit(code=1)
@@ -716,6 +732,20 @@ def _qrels_or_exit(path: Path, cases: list[EvalCase]) -> dict[str, Qrels]:
     return qrels
 
 
+def _judge_model(cfg: Config, env_file: Path = DEFAULT_ENV_FILE) -> str:
+    """CLAUDE_MODEL (environment or .env) if set, else [eval.judge] model ("" = none)."""
+    return (read_env(env_file).get(CLAUDE_MODEL_VAR) or cfg.eval.judge.model or "").strip()
+
+
+def _judge_lookup(cfg: Config, env_file: Path = DEFAULT_ENV_FILE):
+    """Cached judge verdicts per record (reads files only; never calls the model)."""
+    model = _judge_model(cfg, env_file)
+    if not model:
+        return None
+    cache = JudgeCache(cfg.eval.judge.cache_dir)
+    return lambda record, case: judge_section(record, case, model, cache)
+
+
 def _score_and_report(
     cfg: Config,
     run_dir: Path,
@@ -726,7 +756,9 @@ def _score_and_report(
 ) -> tuple[list[dict], dict]:
     """Metrics of the records (reported, never failures), written to score.json and report.md."""
     settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
-    scores = score_records(records, cases, qrels, cfg.limits, settings, budget)
+    scores = score_records(
+        records, cases, qrels, cfg.limits, settings, budget, _judge_lookup(cfg)
+    )
     agg = aggregate(scores)
     write_scores(run_dir, scores, agg)
     return scores, agg
@@ -1284,12 +1316,14 @@ def eval_compare(
     qrels = _qrels_or_exit(qrels_file, case_list)
     settings = ScoreSettings(cfg.eval.redundant_query_jaccard, cfg.eval.low_support_overlap)
     budget = _budget(cfg, None, None, None)
+    lookup = _judge_lookup(cfg)
     scores = {
         run: score_records(
-            rescore(recs, case_list, cfg.limits), case_list, qrels, cfg.limits, settings, budget
+            rescore(recs, case_list, cfg.limits), case_list, qrels, cfg.limits, settings, budget,
+            lookup,
         )
         for run, recs in records.items()
-    }
+    }  # fmt: skip
 
     def label(run: Path) -> str:
         modes = sorted({r.get("mode", "agentic") for r in records[run]})
@@ -1304,4 +1338,161 @@ def eval_compare(
         typer.echo(f"Written: {out}")
     if not result["paired_cases"]:
         typer.echo("error: no case completed in both runs", err=True)
+        raise typer.Exit(code=1)
+
+
+DEFAULT_CALIBRATION = Path("evals/judge_calibration.toml")
+
+
+def _judge_client(cfg: Config, model: str, creds: Credentials):
+    """The real judge model client. Patched out in CLI tests."""
+    return AnthropicJsonClient.from_credentials(cfg.eval.judge, model, creds)
+
+
+@eval_app.command("judge")
+def eval_judge(
+    run_dir: Path = typer.Argument(..., help="A run folder written by eval run (or replay)."),
+    live: bool = typer.Option(
+        False, "--live", help="Really judge: calls the judge model (costs tokens). Else: plan."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Do not ask for confirmation (scripts)."),
+    only: list[str] = ONLY_OPTION,
+    max_calls: int | None = typer.Option(None, "--max-calls", min=1, help="Judge-call cap."),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", min=1, help="Judge token cap."),
+    max_cost: float | None = typer.Option(None, "--max-cost", min=0.0, help="Judge USD cap."),
+    sample: int = typer.Option(
+        0, "--sample", min=0, help="Write calibration.md with this many judged claims (free)."
+    ),
+    calibration: Path = typer.Option(
+        DEFAULT_CALIBRATION, "--calibration", help="Your verdicts, to measure agreement."
+    ),
+    cases: Path = CASES_OPTION,
+    conversations: Path = CONVERSATIONS_OPTION,
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c", help="Path to the TOML config."),
+    env_file: Path = typer.Option(
+        DEFAULT_ENV_FILE, "--env-file", envvar=ENV_FILE_ENV_VAR, help=ENV_FILE_HELP
+    ),
+) -> None:
+    """Rate each evidence claim against its cited text with the judge model, cached.
+
+    Without --live: the plan (claims, how many are cached, calls and tokens) and, if
+    --calibration exists, your agreement with the judge; nothing is called. With --live the
+    uncached claims are judged within [eval.judge] caps and written to its cache_dir; eval
+    score then shows the verdicts offline. Verdicts are reported only, never a case failure.
+    """
+    cfg = _load_or_exit(config)
+    jc = cfg.eval.judge
+    try:
+        records = read_records(run_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if only:
+        records = [r for r in records
+                   if r["case_id"] in only or (r.get("conversation") or {}).get("id") in only]
+    cases_by_id = {c.id: c for c in _all_cases_or_exit(cases, conversations)}
+    model = _judge_model(cfg, env_file)
+    if not model:
+        typer.echo("error: no judge model: set [eval.judge] model or CLAUDE_MODEL", err=True)
+        raise typer.Exit(code=1)
+    cache = JudgeCache(jc.cache_dir)
+
+    plan = judge_plan(records, cases_by_id, model, cache, jc.max_output_tokens)
+    typer.echo(
+        f"Judge {model}: {plan['claims']} evidence claim(s) in {len(records)} record(s); "
+        f"{plan['cached']} cached, {plan['pending']} to judge"
+        + (f"; key-point sets {plan['key_point_sets_pending']}/{plan['key_point_sets']} to judge"
+           if plan["key_point_sets"] else "")
+        + f". {plan['calls']} call(s), about {plan['estimated_tokens']:,} tokens at most."
+    )  # fmt: skip
+    price = RunBudget(1, 1, price_input_per_mtok=jc.price_input_per_mtok,
+                      price_output_per_mtok=jc.price_output_per_mtok)  # fmt: skip
+    if price.priced:
+        typer.echo(f"At most ~${price.cost(plan['estimated_tokens'], 0):.4f} at the configured "
+                   "prices (input rate on all tokens; output is usually far less).")  # fmt: skip
+    try:
+        checks = load_calibration(calibration)
+    except EvalError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if checks:
+        agree = agreement(checks, cache)
+        if agree["compared"]:
+            typer.echo(
+                f"Calibration: you and the judge agree on {agree['exact']}/{agree['compared']} "
+                f"verdicts exactly, {agree['binary']}/{agree['compared']} on supported vs not."
+            )
+    if sample:
+        picked = calibration_sample(records, model, cache, sample)
+        path = run_dir / "calibration.md"
+        path.write_text(render_calibration(picked, model), encoding="utf-8")
+        typer.echo(f"Calibration sample of {len(picked)} judged claim(s): {path}")
+    if not live:
+        if plan["calls"]:
+            typer.echo("Plan only: nothing was judged. Add --live to judge (calls the model).")
+        return
+    if not plan["calls"]:
+        typer.echo("Nothing to judge: every claim is cached.")
+        return
+
+    creds = _credentials_or_exit(env_file)
+    try:
+        creds.require_claude_key()
+    except CredentialError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    budget = RunBudget(
+        max_calls=max_calls or jc.max_calls,
+        max_tokens=max_tokens or jc.max_tokens,
+        max_cost_usd=jc.max_cost_usd if max_cost is None else max_cost,
+        price_input_per_mtok=jc.price_input_per_mtok,
+        price_output_per_mtok=jc.price_output_per_mtok,
+    )
+    if budget.max_cost_usd > 0 and not budget.priced:
+        typer.echo("error: a cost cap needs prices in [eval.judge]", err=True)
+        raise typer.Exit(code=1)
+    if not yes and not typer.confirm(f"Judge {plan['pending']} claim(s) with {model}?"):
+        typer.echo("cancelled: nothing was judged", err=True)
+        raise typer.Exit(code=1)
+    try:
+        client = _judge_client(cfg, model, creds)
+    except LLMError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    judge = Judge(client, model, cache, budget, jc.max_output_tokens)
+    stopped = None
+    for record in records:
+        try:
+            judge.judge_record(record, cases_by_id.get(record["case_id"]))
+        except EvalBudgetExceeded as exc:
+            stopped = str(exc)
+            break
+        except LLMAuthError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except LLMError as exc:  # one record's call failed; the rest can still be judged
+            judge.stats.errors.append(f"{record['case_id']}: {exc}")
+    st = judge.stats
+    cost = f", ~${budget.cost():.4f}" if budget.priced else ""
+    typer.echo(
+        f"Judged {st.judged} claim(s) ({st.cached} were cached) in {st.calls} call(s): "
+        f"{budget.input_tokens:,} in / {budget.output_tokens:,} out tokens{cost}."
+        + (f" Key-point sets: {st.key_point_sets}." if st.key_point_sets else "")
+    )
+    for label, count in (("reply failed validation", st.unparsed), ("refused", st.refused),
+                         ("hit the output cap", st.truncated)):  # fmt: skip
+        if count:
+            typer.echo(f"warning: {count} call(s) {label}; those claims stay unjudged")
+    for error in st.errors:
+        typer.echo(f"warning: {error}")
+    if stopped:
+        typer.echo(f"Stopped by the judge budget: {stopped}")
+    sections = [judge_section(r, cases_by_id.get(r["case_id"]), model, cache) for r in records]
+    sections = [x for x in sections if x]
+    counts = {v: sum(x[v] for x in sections) for v in ("supported", "partial", "unsupported")}
+    typer.echo(
+        f"Verdicts: {counts['supported']} supported, {counts['partial']} partial, "
+        f"{counts['unsupported']} unsupported. Run eval score {run_dir} for the report."
+    )
+    if stopped or st.errors:
         raise typer.Exit(code=1)

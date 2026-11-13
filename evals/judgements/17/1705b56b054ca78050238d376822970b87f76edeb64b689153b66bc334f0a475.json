@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1233,
+  "items": 1,
+  "output_tokens": 93
+ },
+ "claim": "For Springfield, Illinois, ERA5’s largest daily precipitation total in the available record (1950–2025) was 87.9 mm on August 17, 1997. That is 1.7 times the 1991–2020 mean annual maximum daily rainfall of 51.3 mm.",
+ "judged_on": "2026-11-13",
+ "key": "1705b56b054ca78050238d376822970b87f76edeb64b689153b66bc334f0a475",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source lists 1997-08-17 at 87.9 mm as the largest annual maximum (1950-2025), 1.7x the 1991-2020 baseline mean of 51.3 mm.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "29f848ee0ddef92e0aa176fcd2783ae472dcf18836ed3b7a9cfa43af27502a47"
+  }
+ ],
+ "verdict": "supported"
+}

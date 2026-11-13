@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1893,
+  "items": 3,
+  "output_tokens": 311
+ },
+ "claim": "These are ERA5 grid-cell estimates, not rain-gauge measurements; the result notes that grid-cell daily totals can understate extremes recorded at a single station.",
+ "judged_on": "2026-11-13",
+ "key": "7981ef0d0ce912cfa733f8e86581796f34c99ee4bf3971130b0dac450c070e4f",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source states values are ERA5 reanalysis grid estimates, not gauge measurements, and that grid-cell totals usually understate station-recorded extremes.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "189470b2a653787530f68ddfc2a1c6d77b3b9da4397c282a621749b956f9ec09"
+  }
+ ],
+ "verdict": "supported"
+}

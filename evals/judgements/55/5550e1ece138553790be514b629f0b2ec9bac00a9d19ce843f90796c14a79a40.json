@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1788,
+  "items": 2,
+  "output_tokens": 160
+ },
+ "claim": "The wettest years were 2023 (1078.3 mm) and 2024 (1059.3 mm); 2025 was the driest year in the period at 626.9 mm.",
+ "judged_on": "2026-11-13",
+ "key": "5550e1ece138553790be514b629f0b2ec9bac00a9d19ce843f90796c14a79a40",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Wettest years listed as 2023 (1078.3 mm) and 2024 (1059.3 mm); driest is 2025 at 626.9 mm.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R3",
+   "sha256": "6cb75a6a1d3e9707dfaed60caee00b097ac5f52b2abb656a19a5f84c7c310aca"
+  }
+ ],
+ "verdict": "supported"
+}

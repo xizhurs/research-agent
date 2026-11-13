@@ -254,6 +254,68 @@ class ConversationConfig:
                 )
 
 
+JUDGE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+@dataclass(frozen=True)
+class JudgeConfig:
+    """The optional LLM judge (``[eval.judge]``): an Anthropic model that rates claim support.
+
+    ``model`` may be empty when ``CLAUDE_MODEL`` (environment or .env) names it; the key is
+    ``CLAUDE_API_KEY``. Prices are USD per million tokens for that model; 0 = unknown.
+    """
+
+    model: str
+    effort: str  # output_config.effort; adaptive thinking stays on (the model's default)
+    timeout_seconds: float
+    max_retries: int
+    max_output_tokens: int  # per judge call, thinking included
+    max_calls: int  # per `eval judge --live`
+    max_tokens: int  # per `eval judge --live`
+    max_cost_usd: float  # 0 = no cost cap
+    price_input_per_mtok: float
+    price_output_per_mtok: float
+    cache_dir: Path  # judgements, one JSON file per judged claim (committed)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.model, str):
+            raise ConfigError(f"eval.judge.model must be a string, got {self.model!r}")
+        if self.effort not in JUDGE_EFFORTS:
+            raise ConfigError(f"eval.judge.effort must be one of {list(JUDGE_EFFORTS)}")
+        if not isinstance(self.cache_dir, Path):
+            object.__setattr__(self, "cache_dir", Path(self.cache_dir))
+        for name in ("max_retries",):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ConfigError(f"eval.judge.{name} must be an integer >= 0, got {value!r}")
+        for name in ("max_output_tokens", "max_calls", "max_tokens"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError(f"eval.judge.{name} must be a positive integer, got {value!r}")
+        if not _is_number(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise ConfigError(
+                f"eval.judge.timeout_seconds must be > 0, got {self.timeout_seconds!r}"
+            )
+        for name in ("max_cost_usd", "price_input_per_mtok", "price_output_per_mtok"):
+            value = getattr(self, name)
+            if not _is_number(value) or value < 0:
+                raise ConfigError(f"eval.judge.{name} must be a number >= 0, got {value!r}")
+
+
+def _judge_config(raw: Any) -> JudgeConfig:
+    if isinstance(raw, JudgeConfig):
+        return raw
+    if not isinstance(raw, dict):
+        raise ConfigError("missing [eval.judge] table")
+    expected = {f.name for f in fields(JudgeConfig)}
+    missing, unknown = expected - raw.keys(), raw.keys() - expected
+    if missing:
+        raise ConfigError(f"missing eval.judge keys: {sorted(missing)}")
+    if unknown:
+        raise ConfigError(f"unknown eval.judge keys: {sorted(unknown)}")
+    return JudgeConfig(**raw)
+
+
 @dataclass(frozen=True)
 class EvalConfig:
     """Evaluation runs: where records go, the frozen tool cache, and the paid-run budget.
@@ -270,8 +332,10 @@ class EvalConfig:
     price_output_per_mtok: float
     redundant_query_jaccard: float  # two searches this similar (word sets) count as redundant
     low_support_overlap: float  # claims sharing fewer of their words with the cited text: flagged
+    judge: JudgeConfig  # the [eval.judge] table
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "judge", _judge_config(self.judge))
         for name in ("redundant_query_jaccard", "low_support_overlap"):
             value = getattr(self, name)
             if not _is_number(value) or not 0 < value <= 1:

@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1893,
+  "items": 3,
+  "output_tokens": 311
+ },
+ "claim": "2023 and 2024 were notably wet relative to that baseline, with 1100.7 mm (1.42× the mean) and 1042.6 mm (1.34×), respectively. The other eight years were at or below 882.2 mm.",
+ "judged_on": "2026-11-13",
+ "key": "194eb8e2b26e1409d8dcf5dcaeadb588c75661e1f18f9c00293e997cf644155b",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source gives 1100.7 mm (1.42x) and 1042.6 mm (1.34x), but the other eight years are not all at or below 882.2 mm; 2021 is 882.2 mm, and the rest are lower, so 'at or below' is accurate. However, 'notably wet' is a judgment; the source only says these are above baseline, and the ratio supports it. Mo",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R2",
+   "sha256": "189470b2a653787530f68ddfc2a1c6d77b3b9da4397c282a621749b956f9ec09"
+  }
+ ],
+ "verdict": "partial"
+}

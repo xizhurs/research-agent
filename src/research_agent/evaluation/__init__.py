@@ -27,6 +27,18 @@ from research_agent.evaluation.checks import check_record, check_result, check_t
 from research_agent.evaluation.compare import compare_scores, render_comparison
 from research_agent.evaluation.conversation import ConversationDriver, state_dict, turn_details
 from research_agent.evaluation.fixed import FIXED_CALL_ID, FixedSearchLLMClient, fixed_query
+from research_agent.evaluation.judge import (
+    Judge,
+    JudgeCache,
+    JudgeStats,
+    agreement,
+    calibration_sample,
+    claim_items,
+    judge_plan,
+    judge_section,
+    load_calibration,
+    render_calibration,
+)
 from research_agent.evaluation.metrics import ScoreSettings, score_record
 from research_agent.evaluation.numbers import extract_numbers, unsupported_numbers, value_found
 from research_agent.evaluation.recording import (
@@ -82,6 +94,9 @@ __all__ = [
     "EvalSummary",
     "ExpectedNumber",
     "FixedSearchLLMClient",
+    "Judge",
+    "JudgeCache",
+    "JudgeStats",
     "KeyPoint",
     "Qrels",
     "RecordingLLMClient",
@@ -91,21 +106,28 @@ __all__ = [
     "ScoreSettings",
     "TurnExpect",
     "aggregate",
+    "agreement",
+    "calibration_sample",
     "check_record",
     "check_result",
     "check_turn",
+    "claim_items",
     "compare_answers",
     "compare_scores",
     "extract_numbers",
     "fingerprint",
     "fixed_query",
     "flags",
+    "judge_plan",
+    "judge_section",
+    "load_calibration",
     "load_cases",
     "load_conversations",
     "load_qrels",
     "metrics_line",
     "read_records",
     "record_failures",
+    "render_calibration",
     "render_comparison",
     "replay_date",
     "replay_section",

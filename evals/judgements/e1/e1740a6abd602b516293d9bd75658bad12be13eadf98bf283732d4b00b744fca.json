@@ -1,0 +1,21 @@
+{
+ "call": {
+  "input_tokens": 1593,
+  "items": 2,
+  "output_tokens": 154
+ },
+ "claim": "ERA5 is grid-cell reanalysis rather than a station measurement, so these figures describe the modelled grid cell for Madrid.",
+ "judged_on": "2026-11-13",
+ "key": "e1740a6abd602b516293d9bd75658bad12be13eadf98bf283732d4b00b744fca",
+ "kind": "claim_support",
+ "model": "claude-haiku-5-5",
+ "reason": "Source says values are ERA5 reanalysis grid-cell output, not gauge measurements, describing the grid cell around Madrid.",
+ "rubric": 1,
+ "sources": [
+  {
+   "id": "R1",
+   "sha256": "602d9f414b7685e7702205a675a3e8f3a76afc1a64fc9ccc5d4591c2cd43e9eb"
+  }
+ ],
+ "verdict": "supported"
+}

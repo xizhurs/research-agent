@@ -92,6 +92,19 @@ price_input_per_mtok = 0
 price_output_per_mtok = 0
 redundant_query_jaccard = 0.8
 low_support_overlap = 0.3
+
+[eval.judge]
+model = ""
+effort = "low"
+timeout_seconds = 60
+max_retries = 2
+max_output_tokens = 4000
+max_calls = 100
+max_tokens = 200000
+max_cost_usd = 5
+price_input_per_mtok = 1.5
+price_output_per_mtok = 2.5
+cache_dir = "evals/judgements"
 """
 
 
@@ -342,6 +355,10 @@ def test_base_config_eval_section():
     assert cfg.eval.tool_cache_dir == Path("evals/tool_cache")
     assert (cfg.eval.max_model_calls, cfg.eval.max_total_tokens) == (200, 300000)
     assert cfg.eval.price_input_per_mtok == 0  # unknown until the owner fills it in
+    judge = cfg.eval.judge
+    assert (judge.model, judge.effort, judge.cache_dir) == (
+        "claude-haiku-5-5", "low", Path("evals/judgements")
+    )
 
 
 @pytest.mark.parametrize(
@@ -353,6 +370,9 @@ def test_base_config_eval_section():
         ("price_input_per_mtok = 0", 'price_input_per_mtok = "x"', "price_input_per_mtok"),
         ("redundant_query_jaccard = 0.8", "redundant_query_jaccard = 0", "redundant_query_jaccard"),
         ("low_support_overlap = 0.3", "low_support_overlap = 1.5", "low_support_overlap"),
+        ('effort = "low"', 'effort = "extreme"', "judge.effort"),
+        ("max_calls = 100", "max_calls = 0", "judge.max_calls"),
+        ('cache_dir = "evals/judgements"', 'cache_dir = "evals/judgements"\nbogus = 1', "judge"),
     ],
 )
 def test_invalid_eval_values_rejected(tmp_path, old, new, name):

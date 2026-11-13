@@ -21,6 +21,8 @@ ENV_FILE_ENV_VAR = "RESEARCH_AGENT_ENV_FILE"
 
 OPENALEX_VAR = "OPENALEX_API_KEY"
 OPENAI_VAR = "OPENAI_API_KEY"
+CLAUDE_VAR = "CLAUDE_API_KEY"  # the evaluation judge (Anthropic); optional
+CLAUDE_MODEL_VAR = "CLAUDE_MODEL"  # not a secret: overrides [eval.judge] model
 
 MIN_KEY_LENGTH = 8
 # Values copied from .env.example (or similar) that were never replaced.
@@ -55,6 +57,7 @@ class Secret:
 class Credentials:
     openalex_api_key: Secret | None
     openai_api_key: Secret | None
+    claude_api_key: Secret | None = None
 
     def require_openai_key(self) -> Secret:
         if self.openai_api_key is None:
@@ -62,6 +65,13 @@ class Credentials:
                 f"{OPENAI_VAR} is not set. Add it to your .env file or the environment."
             )
         return self.openai_api_key
+
+    def require_claude_key(self) -> Secret:
+        if self.claude_api_key is None:
+            raise CredentialError(
+                f"{CLAUDE_VAR} is not set. Add it to your .env file or the environment."
+            )
+        return self.claude_api_key
 
 
 def validate_secret(name: str, raw: str | None) -> Secret | None:
@@ -101,4 +111,5 @@ def load_credentials(
     return Credentials(
         openalex_api_key=validate_secret(OPENALEX_VAR, merged.get(OPENALEX_VAR)),
         openai_api_key=validate_secret(OPENAI_VAR, merged.get(OPENAI_VAR)),
+        claude_api_key=validate_secret(CLAUDE_VAR, merged.get(CLAUDE_VAR)),
     )
