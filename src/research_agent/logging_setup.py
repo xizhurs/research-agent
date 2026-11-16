@@ -93,7 +93,9 @@ def configure_logging(verbosity: int = 0) -> None:
         logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
     )
     handler.addFilter(REDACTOR)
-    root.addHandler(handler)
+    # First in line: the filter redacts the record in place, so root handlers added earlier by
+    # other libraries (e.g. the OpenAI SDK's basicConfig under OPENAI_LOG) never see a key.
+    root.handlers.insert(0, handler)
     logging.getLogger("research_agent").setLevel(level_for(verbosity))
     for name in _THIRD_PARTY:
         logging.getLogger(name).setLevel(logging.WARNING)

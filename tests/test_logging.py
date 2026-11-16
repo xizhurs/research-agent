@@ -122,6 +122,28 @@ def test_secrets_are_redacted_from_tracebacks(capsys):
     assert "Traceback" in err  # the traceback itself is still there
 
 
+def test_root_handlers_added_by_other_libraries_never_see_a_key():
+    import io
+
+    other = io.StringIO()  # e.g. the OpenAI SDK's basicConfig handler, installed before ours
+    foreign = logging.StreamHandler(other)
+    root = logging.getLogger()
+    root.addHandler(foreign)
+    try:
+        configure_logging(1)
+        REDACTOR.add(KEY)
+        emit("research_agent.x", logging.INFO, "key is %s", KEY)
+        try:
+            raise RuntimeError(f"boom with {KEY}")
+        except RuntimeError:
+            logging.getLogger("research_agent.x").error("failed", exc_info=True)
+    finally:
+        root.removeHandler(foreign)
+    text = other.getvalue()
+    assert KEY not in text
+    assert f"key is {REDACTED}" in text and f"boom with {REDACTED}" in text
+
+
 def test_add_credentials_registers_both_keys(capsys):
     configure_logging(1)
     REDACTOR.add_credentials(Credentials(Secret(OTHER), Secret(KEY)))
