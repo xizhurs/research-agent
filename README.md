@@ -2,9 +2,9 @@
 
 A command-line research agent that answers questions about GeoAI and remote-sensing literature. It searches [OpenAlex](https://openalex.org), reads the titles and abstracts it finds, and writes a short answer in which every statement is either **evidence** (cited to a work it actually retrieved) or **interpretation** (its own synthesis), followed by references and an explicit list of limitations.
 
-It can also quantify **historical extreme rainfall and extreme dry spells in a city** (Rx1day, consecutive dry days and driest years, from ERA5 reanalysis), compare an event or a year with the record, and explain it with the literature. It can also **find El Niño and La Niña events** from NOAA's official ENSO index (RONI). The model decides, per question, whether the literature, a computed analysis or both is the right source.
+It can also quantify **historical extreme rainfall and extreme dry spells in a city** (Rx1day, consecutive dry days and driest years, from ERA5 reanalysis), compare an event or a year with the record, and explain it with the literature. It can also **analyse air temperature** (hot and cold extremes, and yearly or monthly means against the 1991-2020 baseline, from ERA5) and **find El Niño and La Niña events** from NOAA's official ENSO index (RONI). The model decides, per question, whether the literature, a computed analysis or both is the right source, and it can handle follow-up questions in a chat session.
 
-It is deliberately small and cheap to run: one LLM agent with two tools, hard caps on searches, turns and tokens, and no full-text PDFs, vector databases or agent frameworks.
+It is deliberately small and cheap to run: one LLM agent with four tools (literature search, rainfall, temperature and ENSO analysis), hard caps on searches, turns and tokens, and no full-text PDFs, vector databases or agent frameworks.
 
 ## What you get
 
@@ -70,9 +70,11 @@ Run all commands from the repository root: the default config path is `configs/b
 |---|---|
 | `uv run research-agent ask "<question>"` | Answer a question from the literature and/or the rainfall analysis (uses the LLM, OpenAlex and Open-Meteo) |
 | `uv run research-agent search "<query>" [--year-from 2022] [-n 5] [--abstracts]` | Search OpenAlex only, with no LLM, and print the results |
+| `uv run research-agent chat` | Ask questions with follow-ups ("what about Rotterdam?"); the code keeps the places, metrics and pending clarifications between turns. An empty line or `exit` ends it |
 | `uv run research-agent rainfall "<city>" [--country-code CN] [--region Henan] [--event-date 2021-07-20] [--start-year 1950] [--end-year 2025] [--metric dry] [--event-year 2022]` | Rainfall-extremes analysis only, with no LLM. Default (wet): Rx1day per year, baseline, largest events, how extreme one day was. `--metric dry`: dry spells, driest years, how dry a year or dry spell was |
+| `uv run research-agent temperature "<city>" [--country-code ES] [--region ...] [--start-year 1950] [--end-year 2025] [--scale daily\|monthly\|yearly] [--metric hot\|cold] [--event-date 2022-07-14] [--event-year 2022] [--event-month 7]` | Air-temperature analysis only, with no LLM. Daily: hottest (TXx) or coldest (TNn) day per year and how extreme one day was. Monthly and yearly: means against the 1991-2020 baseline and its 10th-90th percentile band |
 | `uv run research-agent enso [--phase el_nino\|la_nina\|both] [--start-year 1990] [--end-year 2020] [--year 2010]` | El Niño / La Niña events from NOAA CPC's RONI only, with no LLM: first and last season, length, peak, strength; `--year` also shows that year's seasonal values and overlapping events |
-| `uv run research-agent ui [--host 127.0.0.1] [--port 7860]` | Web interface with Ask, Search and Rainfall tabs; each says whether the LLM is used, and Rainfall plots one year either as daily values against a smoothed day-of-year mean or as monthly totals against the baseline 10th-90th percentile band (a toggle). Needs `uv sync --extra ui`; local use only, it has no login |
+| `uv run research-agent ui [--host 127.0.0.1] [--port 7860]` | Web interface with Ask, Search, Rainfall and Temperature tabs; each says whether the LLM is used, and Rainfall plots one year either as daily values against a smoothed day-of-year mean or as monthly totals against the baseline 10th-90th percentile band (a toggle). Needs `uv sync --extra ui`; local use only, it has no login |
 | `uv run research-agent eval run --live [--only <case-id>]` | Run the evaluation cases in `evals/cases.toml` within a run budget (costs tokens; without `--live` it only prints the plan) |
 | `uv run research-agent check-credentials [--require-openai]` | Check that keys are present and well formed |
 | `uv run research-agent show-config` | Validate `configs/base.toml` and print the resource limits |
@@ -90,12 +92,13 @@ uv run research-agent -v ask "How are vision transformers used for land cover cl
 ```
 CLI -> agent loop -> LLM (OpenAI)   <-->  search_literature tool        -> OpenAlex (+ disk cache)
                 |                           <-->  analyze_rainfall_extremes tool -> Open-Meteo geocoding + ERA5 archive (+ disk cache)
+                |                           <-->  analyze_temperature tool       -> Open-Meteo geocoding + ERA5 archive (+ disk cache)
                 |                           <-->  analyze_enso_events tool       -> NOAA CPC RONI text file (+ disk cache)
                 |
                 +-> structured answer: claims (evidence / interpretation), references, limitations
 ```
 
-1. The model decides which tool to use, if any, and with what arguments: `search_literature` for methods and explanations, `analyze_rainfall_extremes` for numbers about past heavy rain (`metric=wet`) or dry spells (`metric=dry`) in a city, `analyze_enso_events` for which years or events were El Niño or La Niña, or a combination.
+1. The model decides which tool to use, if any, and with what arguments: `search_literature` for methods and explanations, `analyze_rainfall_extremes` for numbers about past heavy rain (`metric=wet`) or dry spells (`metric=dry`) in a city, `analyze_temperature` for numbers about past heat, cold or yearly and monthly temperature in a city, `analyze_enso_events` for which years or events were El Niño or La Niña, or a combination.
 2. Results are formatted deterministically and sent back to the model. Retrieval and all rainfall arithmetic are plain Python, with no AI. Literature results carry work IDs (`W123`); rainfall results carry analysis IDs (`R1`).
 3. The model replies with JSON: claims, each tagged as evidence or interpretation with the IDs (works or rainfall analyses) it relies on.
 4. The code, not the model, then enforces the contract:
@@ -117,6 +120,13 @@ With `metric=dry` the same data gives, again in Python: the longest run of conse
 - **Short or gappy records withhold ranks.** Years with under 90% of days, and the current year, are excluded and reported; fewer than 20 valid years means no ranks or baseline comparison.
 - **Open-Meteo terms:** the free tier is for non-commercial use, with attribution (CC BY 4.0) and a daily call cap. Commercial use needs a paid Open-Meteo plan.
 - **ERA5 smooths extremes.** A grid-cell daily total usually understates what a single station records. For example, ERA5 puts 20 July 2021 in Zhengzhou, an event widely described as exceptional, at roughly 80 mm and only about 22nd among 76 yearly maxima; a different grid cell or reanalysis product gives quite different values (an unpinned Open-Meteo request returned about 150 mm for the same day, which is why the model is pinned). Read rankings as "within this reanalysis at this grid cell", not as the severity people experienced.
+
+### Temperature
+
+`analyze_temperature` uses the same geocoding and the same ERA5 archive request as the rainfall tool (daily 2 m maximum, minimum and mean temperature in °C, model pinned to `era5`). It is offered only together with the rainfall tool. In Python it computes, by scale: `daily` hot (the highest daily maximum, TXx, of each year) or cold (the lowest daily minimum, TNn), with the largest events, a 1991-2020 baseline and, for an `event_date`, its rank among all days; `monthly` and `yearly` means against the same calendar month or year in the period (rank) and in the baseline (mean, median, 10th-90th percentile band). The same rules apply as for rainfall: ambiguous place names are never guessed, and short or gappy records withhold ranks.
+
+- **ERA5 is not a station.** The value is 2 m air temperature of a grid cell of about 0.25 degrees, with no urban heat island. The cell's elevation is reported; temperature falls about 6.5 °C per 1,000 m and no correction is applied.
+- **One hot day is not a heatwave**, and TNn is usually a night. The model is told not to call a single day a heatwave.
 
 ### El Niño and La Niña events
 
@@ -143,9 +153,9 @@ All limits are in `configs/base.toml` and enforced in code, not just in the prom
 | Output tokens per model call | 800 |
 | Total tokens per question | about 20,000 |
 | Question length | 2,000 characters |
-| Rainfall and ENSO analyses per question (one shared limit) | 3 |
+| Rainfall, temperature and ENSO analyses per question (one shared limit) | 3 |
 
-Rainfall and ENSO results count against the same retrieved-text limit as literature. When every tool budget is spent, the model's next turn has tools disabled so it must answer with the evidence it already has, and the answer's limitations say which limit was hit. A typical question uses about 5,000 to 11,000 tokens.
+Rainfall, temperature and ENSO results count against the same retrieved-text limit as literature. When every tool budget is spent, the model's next turn has tools disabled so it must answer with the evidence it already has, and the answer's limitations say which limit was hit. A typical question uses about 5,000 to 11,000 tokens.
 
 ### Credentials
 
@@ -156,7 +166,7 @@ Rainfall and ENSO results count against the same retrieved-text limit as literat
 
 ## Evaluation
 
-`evals/cases.toml` holds 26 cases (the 5 ENSO cases are listed after this paragraph): 10 on-topic literature questions, one off-topic question, one prompt-injection attempt, 5 extreme-rainfall cases (event ranking, largest events, rainfall plus literature, an ambiguous city, years before the archive starts) and 4 dry-spell cases (longest spells, how dry a year was, dry spell plus literature, wet and dry together). Cases can state `expect_metric`, which checks the model's choice of `wet` or `dry` on the tool trace, and `expect_tool` / `forbid_tool`, which check which tool it requested. The 5 ENSO cases: events since 1990, was 2010 El Niño or La Niña, a literature-only question that must not call the ENSO tool, strongest La Niña events plus their impacts in the literature, and current conditions (time-dependent: it describes the record as of 2026-11-02). Answers vary between runs, so each case states expected **properties** (it searched, cited enough works, mentions a topic keyword, did not leak the system prompt) and not exact text. Every case is also checked against invariants: structured answer, limitations present, every citation resolves to a reference, budgets respected.
+`evals/cases.toml` holds 34 cases (the 5 ENSO cases are listed after this paragraph): 10 on-topic literature questions, one off-topic question, one prompt-injection attempt, 5 extreme-rainfall cases (event ranking, largest events, rainfall plus literature, an ambiguous city, years before the archive starts), 4 dry-spell cases (longest spells, how dry a year was, dry spell plus literature, wet and dry together), 4 time-scale cases (the model must pick yearly, monthly or daily rainfall) and 4 temperature cases (hot day, yearly mean, cold extreme, and a rain question that must not call the temperature tool). Cases can state `expect_metric`, which checks the model's choice of metric or scale (`wet`, `dry`, `yearly`, `monthly`, `hot`, `cold`) on the tool trace, and `expect_tool` / `forbid_tool`, which check which tool it requested. The 5 ENSO cases: events since 1990, was 2010 El Niño or La Niña, a literature-only question that must not call the ENSO tool, strongest La Niña events plus their impacts in the literature, and current conditions (time-dependent: it describes the record as of 2026-11-02). Answers vary between runs, so each case states expected **properties** (it searched, cited enough works, mentions a topic keyword, did not leak the system prompt) and not exact text. Every case is also checked against invariants: structured answer, limitations present, every citation resolves to a reference, budgets respected.
 
 ```bash
 uv run research-agent eval list                          # free: cases with their split and category
